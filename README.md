@@ -37,6 +37,10 @@ The image installs the same OpenCode version as `@opencode-ai/sdk`, then checks
 out this repository over SSH into `/opt/repos/opencode-cloud`. Additional
 repositories can be placed alongside it under `/opt/repos`.
 
+The image also installs `gh` and Wrangler globally. Both commands are already
+authenticated using the committed CLI credentials under `docker/auth`, so they
+can access GitHub and Cloudflare without an interactive login.
+
 ## GitHub SSH access
 
 The image includes a dedicated Ed25519 key at `/root/.ssh/id_ed25519` for Git
@@ -49,6 +53,11 @@ The private key is intentionally committed to this private repository and
 embedded in the image. Anyone who can read the repository or pull the image can
 use it, so keep its GitHub permissions narrow and rotate it if either artifact
 is exposed.
+
+The same warning applies to the GitHub and Cloudflare credentials under
+`docker/auth`. The Wrangler credential includes a refresh token so its OAuth
+session can be renewed inside the container. Re-copy the local credentials and
+rebuild the image whenever either login is rotated or revoked.
 
 When upgrading Cloudflare Sandbox, update `@cloudflare/sandbox` and the base
 image tag and digest together. OpenCode and `@opencode-ai/sdk` should likewise
