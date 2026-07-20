@@ -27,7 +27,7 @@ export { ContainerProxy };
 export class Sandbox extends BaseSandbox<Env> {}
 
 const SANDBOX_ID = 'opencode';
-const WORKSPACE_DIRECTORY = '/home/user/agents';
+const WORKSPACE_DIRECTORY = '/opt/repos/opencode-cloud';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

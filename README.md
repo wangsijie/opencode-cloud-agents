@@ -34,9 +34,21 @@ Open <http://localhost:8787> for the full OpenCode web UI. The first run builds
 the container image and can take several minutes.
 
 The image installs the same OpenCode version as `@opencode-ai/sdk`, then checks
-out Cloudflare's public `cloudflare/agents` repository into `/home/user/agents`.
-It deliberately does not copy this private repository or its proxy
-configuration into the sandbox.
+out this repository over SSH into `/opt/repos/opencode-cloud`. Additional
+repositories can be placed alongside it under `/opt/repos`.
+
+## GitHub SSH access
+
+The image includes a dedicated Ed25519 key at `/root/.ssh/id_ed25519` for Git
+operations over SSH. Add `docker/ssh/id_ed25519.pub` to GitHub as a deploy key
+on the target repository; enable write access if the sandbox needs to push.
+Alternatively, add it as an account SSH key when the sandbox needs access to
+multiple repositories.
+
+The private key is intentionally committed to this private repository and
+embedded in the image. Anyone who can read the repository or pull the image can
+use it, so keep its GitHub permissions narrow and rotate it if either artifact
+is exposed.
 
 When upgrading Cloudflare Sandbox, update `@cloudflare/sandbox` and the base
 image tag and digest together. OpenCode and `@opencode-ai/sdk` should likewise
@@ -68,7 +80,7 @@ first.
 ## Deploy
 
 ```bash
-pnpm deploy
+pnpm run deploy
 ```
 
 Wrangler builds and pushes the container image, deploys the Worker, and applies
