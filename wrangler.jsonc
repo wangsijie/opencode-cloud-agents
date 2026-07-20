@@ -7,9 +7,6 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "VWNPC_API_KEY": ""
-  },
   "containers": [
     {
       "class_name": "Sandbox",

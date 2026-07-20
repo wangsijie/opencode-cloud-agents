@@ -3,4 +3,3 @@ node_modules/
 worker-configuration.d.ts
 
 .dev.vars*
-!.dev.vars.example

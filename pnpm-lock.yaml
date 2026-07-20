@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: ^1.1.40
+        specifier: 1.18.3
         version: 1.18.3
     devDependencies:
       '@cloudflare/sandbox':

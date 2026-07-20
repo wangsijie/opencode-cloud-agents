@@ -14,80 +14,20 @@ import {
   createOpencodeServer,
   proxyToOpencode
 } from '@cloudflare/sandbox/opencode';
-import type { Config, Part } from '@opencode-ai/sdk/v2';
+import type { Part } from '@opencode-ai/sdk/v2';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import {
+  DEFAULT_MODEL_ID,
+  DEFAULT_PROVIDER_ID,
+  OPENCODE_CONFIG
+} from './opencode-config';
 
 export { ContainerProxy };
 
-export class Sandbox extends BaseSandbox<Env> {
-  interceptHttps = true;
-}
+export class Sandbox extends BaseSandbox<Env> {}
 
 const SANDBOX_ID = 'opencode';
 const WORKSPACE_DIRECTORY = '/home/user/agents';
-const PROXY_INJECTED_API_KEY = 'proxy-injected';
-const PROVIDER_ID = 'vwnpc';
-const MODEL_ID = 'grok-4.5';
-const MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
-const VWNPC_ORIGIN = 'https://ai.vwnpc.com';
-const VWNPC_PROXY_BASE_URL = `${VWNPC_ORIGIN}/v1`;
-
-function getRequestBody(request: Request): ReadableStream | null | undefined {
-  if (request.method === 'GET' || request.method === 'HEAD') {
-    return undefined;
-  }
-
-  return request.body;
-}
-
-function buildTargetUrl(request: Request, origin: string): string {
-  const url = new URL(request.url);
-  return `${origin}${url.pathname}${url.search}`;
-}
-
-Sandbox.outboundByHost = {
-  'ai.vwnpc.com': async (request: Request, env: Env) => {
-    if (!env.VWNPC_API_KEY) {
-      return new Response('VWNPC_API_KEY is not configured', {
-        status: 500
-      });
-    }
-
-    const headers = new Headers(request.headers);
-    headers.set('x-api-key', env.VWNPC_API_KEY);
-    headers.delete('authorization');
-
-    return fetch(buildTargetUrl(request, VWNPC_ORIGIN), {
-      method: request.method,
-      headers,
-      body: getRequestBody(request)
-    });
-  }
-};
-
-const getConfig = (): Config => ({
-  model: MODEL,
-  small_model: MODEL,
-  provider: {
-    [PROVIDER_ID]: {
-      npm: '@ai-sdk/anthropic',
-      name: 'VW NPC (Grok)',
-      options: {
-        apiKey: PROXY_INJECTED_API_KEY,
-        baseURL: VWNPC_PROXY_BASE_URL
-      },
-      models: {
-        [MODEL_ID]: {
-          name: 'Grok 4.5',
-          limit: {
-            context: 500000,
-            output: 65536
-          }
-        }
-      }
-    }
-  }
-});
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -100,7 +40,7 @@ export default {
 
     const server = await createOpencodeServer(sandbox, {
       directory: WORKSPACE_DIRECTORY,
-      config: getConfig()
+      config: OPENCODE_CONFIG
     });
 
     return proxyToOpencode(request, sandbox, server);
@@ -113,7 +53,7 @@ async function handleSdkTest(
   try {
     const { client } = await createOpencode<OpencodeClient>(sandbox, {
       directory: WORKSPACE_DIRECTORY,
-      config: getConfig()
+      config: OPENCODE_CONFIG
     });
 
     const session = await client.session.create({
@@ -129,8 +69,8 @@ async function handleSdkTest(
       sessionID: session.data.id,
       directory: WORKSPACE_DIRECTORY,
       model: {
-        providerID: PROVIDER_ID,
-        modelID: MODEL_ID
+        providerID: DEFAULT_PROVIDER_ID,
+        modelID: DEFAULT_MODEL_ID
       },
       parts: [
         {
