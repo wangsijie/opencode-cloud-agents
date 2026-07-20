@@ -39,6 +39,13 @@ COPY --chmod=0644 docker/ssh/id_ed25519.pub /root/.ssh/id_ed25519.pub
 COPY --chmod=0644 docker/ssh/config /root/.ssh/config
 COPY --chmod=0644 docker/ssh/known_hosts /root/.ssh/known_hosts
 
+# Sign every commit made in the sandbox with its bundled SSH key.
+RUN git config --global user.name wangsijie \
+    && git config --global user.email sijiewg@gmail.com \
+    && git config --global gpg.format ssh \
+    && git config --global user.signingkey /root/.ssh/id_ed25519 \
+    && git config --global commit.gpgsign true
+
 # These credentials are intentionally bundled for this private image. Wrangler
 # needs the refresh token and expiry metadata as well as its current OAuth token.
 RUN install -d -m 0700 /root/.config/gh /root/.config/.wrangler/config

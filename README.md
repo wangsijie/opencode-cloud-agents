@@ -54,6 +54,11 @@ embedded in the image. Anyone who can read the repository or pull the image can
 use it, so keep its GitHub permissions narrow and rotate it if either artifact
 is exposed.
 
+Git is globally configured in the image with the identity `wangsijie
+<sijiewg@gmail.com>`. Commit signing is enabled by default using the SSH key at
+`/root/.ssh/id_ed25519`. Add `docker/ssh/id_ed25519.pub` to the matching GitHub
+account as a signing key if commits should display as Verified on GitHub.
+
 The same warning applies to the GitHub and Cloudflare credentials under
 `docker/auth`. The Wrangler credential includes a refresh token so its OAuth
 session can be renewed inside the container. Re-copy the local credentials and
