@@ -6,8 +6,8 @@
   "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "start": "wrangler dev",
+    "dev": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "start": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "types": "wrangler types --strict-vars=false",
     "typecheck": "pnpm types && tsc --noEmit"
   },

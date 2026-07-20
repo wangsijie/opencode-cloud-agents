@@ -52,12 +52,13 @@ RUN install -d -m 0700 /root/.config/gh /root/.config/.wrangler/config
 COPY --chmod=0600 docker/auth/gh/hosts.yml /root/.config/gh/hosts.yml
 COPY --chmod=0600 docker/auth/wrangler/default.toml /root/.config/.wrangler/config/default.toml
 
-# Keep repositories under one parent directory so more can be added later.
-RUN mkdir -p /opt/repos \
+# /workspace is supported by the Sandbox backup/restore API. The image provides
+# the initial checkout; later container starts overlay the latest R2 snapshot.
+RUN mkdir -p /workspace \
     && git clone --depth 1 git@github.com:wangsijie/opencode-cloud.git \
-        /opt/repos/opencode-cloud
+        /workspace/opencode-cloud
 
-WORKDIR /opt/repos/opencode-cloud
+WORKDIR /workspace/opencode-cloud
 
 # OpenCode server port.
 EXPOSE 4096

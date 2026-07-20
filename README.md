@@ -34,8 +34,9 @@ Open <http://localhost:8787> for the full OpenCode web UI. The first run builds
 the container image and can take several minutes.
 
 The image installs the same OpenCode version as `@opencode-ai/sdk`, then checks
-out this repository over SSH into `/opt/repos/opencode-cloud`. Additional
-repositories can be placed alongside it under `/opt/repos`.
+out this repository over SSH into `/workspace/opencode-cloud`. `/workspace` is
+snapshotted to R2 before the sandbox sleeps and restored automatically when a
+fresh container starts.
 
 The image also installs `gh` and Wrangler globally. Both commands are already
 authenticated using the committed CLI credentials under `docker/auth`, so they
@@ -78,6 +79,56 @@ curl -X POST http://localhost:8787/api/test
 
 This creates an OpenCode session and asks it to summarize the sample
 repository's `README.md`.
+
+## Workspace persistence
+
+The sandbox filesystem is ephemeral after a container sleeps. This project
+stores the latest `/workspace` snapshot in R2 and keeps its backup handle in the
+Sandbox Durable Object:
+
+- A fresh container restores the latest snapshot before OpenCode starts.
+- The normal 10-minute idle stop creates a checkpoint before the container is
+  allowed to stop.
+- Only the latest snapshot is retained; a successful checkpoint deletes the
+  previous R2 archive.
+- OpenCode's XDG data, state, and cache directories live under
+  `/workspace/.opencode-state`, so sessions are included in the snapshot.
+
+Local development uses Wrangler's local R2 storage automatically. These
+endpoints are available in both local development and production:
+
+```bash
+# Inspect the current backup handle and the last persistence error, if any.
+curl http://localhost:8787/api/persistence/status
+
+# Create a checkpoint without stopping the sandbox.
+curl -X POST http://localhost:8787/api/persistence/checkpoint
+
+# Checkpoint and stop now. The next request starts and restores a fresh container.
+curl -X POST http://localhost:8787/api/persistence/stop
+```
+
+Before the first production deployment, create the remote bucket named in
+`wrangler.jsonc`:
+
+```bash
+pnpm wrangler r2 bucket create opencode-cloud-backups
+```
+
+Production backup uploads use presigned R2 URLs. Create an R2 API token with
+Object Read & Write access to this bucket, then configure its credentials and
+the Cloudflare account ID as Worker secrets:
+
+```bash
+pnpm wrangler secret put CLOUDFLARE_R2_ACCOUNT_ID
+pnpm wrangler secret put R2_ACCESS_KEY_ID
+pnpm wrangler secret put R2_SECRET_ACCESS_KEY
+```
+
+Backups use a one-year restore TTL. The TTL is checked at restore time; it does
+not delete R2 objects. The rolling latest-backup behavior prevents normal
+checkpoints from accumulating archives, but an R2 lifecycle rule is still
+recommended to clean up orphaned objects after failed or interrupted writes.
 
 ## OpenCode configuration
 

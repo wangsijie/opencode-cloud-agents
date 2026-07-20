@@ -7,6 +7,16 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "BACKUP_BUCKET_NAME": "opencode-cloud-backups",
+    "PERSISTENCE_LOCAL_BUCKET": "false"
+  },
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "opencode-cloud-backups"
+    }
+  ],
   "containers": [
     {
       "class_name": "Sandbox",
