@@ -1,0 +1,24 @@
+{
+  "name": "opencode-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "types": "wrangler types --strict-vars=false",
+    "typecheck": "pnpm types && tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.1.40"
+  },
+  "devDependencies": {
+    "@cloudflare/sandbox": "0.12.3",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.102.0"
+  },
+  "packageManager": "pnpm@9.15.2"
+}
