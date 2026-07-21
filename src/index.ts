@@ -12,14 +12,20 @@ import {
   type DirectoryBackup
 } from '@cloudflare/sandbox';
 import {
-  createOpencode,
   createOpencodeServer
 } from '@cloudflare/sandbox/opencode';
 import type { Part } from '@opencode-ai/sdk/v2';
-import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import {
+  createOpencodeClient,
+  type OpencodeClient
+} from '@opencode-ai/sdk/v2/client';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Hub } from './hub';
 import { renderHubHtml } from './hub-ui';
+import {
+  LifecycleCoordinator,
+  type LifecycleStatus
+} from './lifecycle';
 import {
   CURRENT_IMAGE_KEY,
   HUB_DURABLE_OBJECT_ID,
@@ -36,8 +42,17 @@ import {
   DEFAULT_PROVIDER_ID,
   OPENCODE_CONFIG
 } from './opencode-config';
+import {
+  extractOpenCodeLocation,
+  GLOBAL_SESSION_LIST_PATH,
+  openCodeLocationsFromGlobalSessions,
+  openCodeRouteRequiresWorkLease,
+  openCodeLocationKey,
+  queryOpenCodeActivity,
+  type OpenCodeLocation
+} from './opencode-activity';
 
-export { ContainerProxy, Hub };
+export { ContainerProxy, Hub, LifecycleCoordinator };
 
 const WORKSPACE_ROOT = '/workspace';
 const WORKSPACE_DIRECTORY = WORKSPACE_ROOT;
@@ -50,10 +65,18 @@ const RESTORE_STORAGE_KEY = 'persistence:last-restore';
 const ERROR_STORAGE_KEY = 'persistence:last-error';
 const PURGE_STORAGE_KEY = 'instance:purge-requested';
 const IDENTITY_STORAGE_KEY = 'instance:identity';
+const RUNTIME_GATE_STORAGE_KEY = 'runtime:gate';
+const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
 const UI_INSTANCE_PARAM = '_hub';
-const UI_COMPAT_VERSION = '3';
+const UI_RUNTIME_PARAM = '_runtime';
+const UI_COMPAT_VERSION = '4';
 const UI_ASSET_VERSION_SEGMENT = `__hub-v${UI_COMPAT_VERSION}`;
 const OPENCODE_PORT = 4096;
+const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
+const QUIESCE_SETTLE_MS = 1_500;
+const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
+const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
+const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
 const ACCESS_JWKS = new Map<
   string,
   ReturnType<typeof createRemoteJWKSet>
@@ -98,6 +121,62 @@ interface InstanceIdentity {
   initializedAt: string;
 }
 
+type RuntimeGatePhase =
+  | 'waking'
+  | 'running'
+  | 'quiescing'
+  | 'checkpointing'
+  | 'stopping'
+  | 'sleeping';
+
+interface RuntimeGate {
+  phase: RuntimeGatePhase;
+  runtimeEpoch?: string;
+  revision: number;
+  operationId?: string;
+  updatedAt: string;
+}
+
+export interface ExecutionSnapshot {
+  state: 'running' | 'not_running' | 'unknown';
+  observedAt: string;
+  active: boolean;
+  activeSessionCount: number;
+  retrySessionCount: number;
+  locations: string[];
+  error?: string;
+}
+
+export interface LifecycleWakeInput {
+  instanceId: string;
+  imageKey: ImageKey;
+  runtimeEpoch: string;
+}
+
+export interface LifecycleStopInput {
+  runtimeEpoch: string;
+  revision: number;
+  operationId: string;
+}
+
+export type LifecycleStopResult =
+  | {
+      outcome: 'stopped' | 'busy' | 'not_running' | 'termination_pending';
+      snapshot?: ExecutionSnapshot;
+    }
+  | {
+      outcome: 'failed_running';
+      error: string;
+    };
+
+export type LifecycleForceStopResult =
+  | { outcome: 'stopped' | 'termination_pending' }
+  | { outcome: 'failed_running'; error: string };
+
+export type PurgeInstanceResult = {
+  outcome: 'purged' | 'termination_pending';
+};
+
 interface AccessEnv {
   ACCESS_POLICY_AUD?: string;
   ACCESS_TEAM_DOMAIN?: string;
@@ -117,30 +196,53 @@ export class Sandbox extends BaseSandbox<Env> {
   private readonly lifecycleReady: Promise<void>;
   private restoreInProgress: Promise<void> | undefined;
   private checkpointInProgress: Promise<StoredBackup> | undefined;
-  private purgeInProgress: Promise<void> | undefined;
+  private purgeInProgress: Promise<PurgeInstanceResult> | undefined;
   private purgeRequested = false;
   private instanceIdentity: InstanceIdentity | undefined;
+  private runtimeGate: RuntimeGate | undefined;
+  private controlPlaneOperations = 0;
+  private locationsNeedDiscovery = false;
+  private knownLocations = new Map<string, OpenCodeLocation>([
+    [
+      openCodeLocationKey({ directory: WORKSPACE_DIRECTORY }),
+      { directory: WORKSPACE_DIRECTORY }
+    ]
+  ]);
   private instanceActive = false;
   private activeOperations = 0;
   private operationDrainWaiters = new Set<() => void>();
+  private lifecycleOperations = 0;
+  private lifecycleDrainWaiters = new Set<() => void>();
+  private lifecycleMutationTail: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.persistenceState = ctx;
     this.persistenceEnv = env;
     this.lifecycleReady = ctx.blockConcurrencyWhile(async () => {
-      const [purgeRequested, identity] = await Promise.all([
+      const [purgeRequested, identity, runtimeGate, knownLocations] = await Promise.all([
         ctx.storage.get<boolean>(PURGE_STORAGE_KEY),
-        ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY)
+        ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY),
+        ctx.storage.get<RuntimeGate>(RUNTIME_GATE_STORAGE_KEY),
+        ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY)
       ]);
       this.purgeRequested = Boolean(purgeRequested);
       this.instanceIdentity = identity;
+      this.runtimeGate = runtimeGate;
+      this.locationsNeedDiscovery =
+        identity?.state === 'active' && knownLocations === undefined;
+      for (const location of knownLocations ?? []) {
+        if (isWorkspaceLocation(location.directory)) {
+          this.knownLocations.set(openCodeLocationKey(location), location);
+        }
+      }
       this.instanceActive = identity?.state === 'active' && !purgeRequested;
     });
   }
 
   async initializeInstance(id: string, imageKey: ImageKey): Promise<void> {
     await this.lifecycleReady;
+    await this.setKeepAlive(true);
     if (this.purgeRequested) {
       throw new Error('A deleting instance cannot be initialized');
     }
@@ -155,6 +257,9 @@ export class Sandbox extends BaseSandbox<Env> {
         throw new Error('A deleted instance cannot be reactivated');
       }
       this.instanceActive = true;
+      if (!this.runtimeGate && this.persistenceState.container?.running !== true) {
+        await this.setRuntimeGate({ phase: 'sleeping', revision: 0 });
+      }
       return;
     }
 
@@ -164,9 +269,14 @@ export class Sandbox extends BaseSandbox<Env> {
       state: 'active',
       initializedAt: new Date().toISOString()
     };
-    await this.persistenceState.storage.put(IDENTITY_STORAGE_KEY, identity);
+    await this.persistenceState.storage.put({
+      [IDENTITY_STORAGE_KEY]: identity,
+      [KNOWN_LOCATIONS_STORAGE_KEY]: [...this.knownLocations.values()]
+    });
     this.instanceIdentity = identity;
+    this.locationsNeedDiscovery = false;
     this.instanceActive = true;
+    await this.setRuntimeGate({ phase: 'sleeping', revision: 0 });
   }
 
   async ensureWorkspaceRestored(): Promise<void> {
@@ -174,7 +284,9 @@ export class Sandbox extends BaseSandbox<Env> {
     this.assertInstanceActive();
 
     if (!this.restoreInProgress) {
-      this.restoreInProgress = this.restoreWorkspace().finally(() => {
+      this.restoreInProgress = this.withControlPlaneAccess(() =>
+        this.restoreWorkspace()
+      ).finally(() => {
         this.restoreInProgress = undefined;
       });
     }
@@ -182,10 +294,352 @@ export class Sandbox extends BaseSandbox<Env> {
     return this.restoreInProgress;
   }
 
-  async checkpointWorkspace(): Promise<PersistenceStatus> {
+  /** The only path allowed to start or restore an OpenCode runtime. */
+  async wakeForLifecycle(input: LifecycleWakeInput): Promise<ExecutionSnapshot> {
+    await this.lifecycleReady;
+    return this.withLifecycleMutation(() =>
+      this.performWakeForLifecycle(input)
+    );
+  }
+
+  private async performWakeForLifecycle(
+    input: LifecycleWakeInput
+  ): Promise<ExecutionSnapshot> {
+    this.assertInstanceActive();
+    if (
+      this.instanceIdentity?.id !== input.instanceId ||
+      this.instanceIdentity.imageKey !== input.imageKey
+    ) {
+      throw new Error('Lifecycle wake identity does not match this Sandbox');
+    }
+    if (!isSafeRuntimeEpoch(input.runtimeEpoch)) {
+      throw new Error('Invalid runtime epoch');
+    }
+
+    if (
+      this.runtimeGate?.phase === 'running' &&
+      this.runtimeGate.runtimeEpoch === input.runtimeEpoch &&
+      this.persistenceState.container?.running === true
+    ) {
+      return this.inspectExecutionIfRunning();
+    }
+
+    const revision = (this.runtimeGate?.revision ?? 0) + 1;
+    await this.setRuntimeGate({
+      phase: 'waking',
+      runtimeEpoch: input.runtimeEpoch,
+      revision
+    });
+
+    try {
+      await this.ensureWorkspaceRestored();
+      await this.withControlPlaneAccess(() =>
+        createOpencodeServer(this, {
+          port: OPENCODE_PORT,
+          directory: WORKSPACE_DIRECTORY,
+          config: OPENCODE_CONFIG,
+          env: OPENCODE_ENV
+        })
+      );
+      await this.setRuntimeGate({
+        phase: 'running',
+        runtimeEpoch: input.runtimeEpoch,
+        revision
+      });
+      return await this.inspectExecutionIfRunning();
+    } catch (error) {
+      await this.setRuntimeGate({ phase: 'sleeping', revision });
+      throw error;
+    }
+  }
+
+  /**
+   * Attach a semantic runtime epoch to a container which predates the
+   * LifecycleCoordinator deployment. This never starts a stopped container.
+   */
+  async adoptRunningForLifecycle(
+    input: LifecycleWakeInput
+  ): Promise<ExecutionSnapshot> {
+    await this.lifecycleReady;
+    return this.withLifecycleMutation(() =>
+      this.performAdoptRunningForLifecycle(input)
+    );
+  }
+
+  private async performAdoptRunningForLifecycle(
+    input: LifecycleWakeInput
+  ): Promise<ExecutionSnapshot> {
+    this.assertInstanceActive();
+    if (
+      this.instanceIdentity?.id !== input.instanceId ||
+      this.instanceIdentity.imageKey !== input.imageKey
+    ) {
+      throw new Error('Lifecycle adoption identity does not match this Sandbox');
+    }
+    if (!isSafeRuntimeEpoch(input.runtimeEpoch)) {
+      throw new Error('Invalid runtime epoch');
+    }
+    if (this.persistenceState.container?.running !== true) {
+      return notRunningExecutionSnapshot();
+    }
+
+    const revision = (this.runtimeGate?.revision ?? 0) + 1;
+    await this.setRuntimeGate({
+      phase: 'waking',
+      runtimeEpoch: input.runtimeEpoch,
+      revision
+    });
+    try {
+      // The running check above is the migration safety barrier. These calls
+      // may repair the server process, but cannot wake a stopped container.
+      await this.ensureWorkspaceRestored();
+      await this.withControlPlaneAccess(() =>
+        createOpencodeServer(this, {
+          port: OPENCODE_PORT,
+          directory: WORKSPACE_DIRECTORY,
+          config: OPENCODE_CONFIG,
+          env: OPENCODE_ENV
+        })
+      );
+      await this.setRuntimeGate({
+        phase: 'running',
+        runtimeEpoch: input.runtimeEpoch,
+        revision
+      });
+      return this.inspectExecutionIfRunning();
+    } catch (error) {
+      // Keep admission closed. The coordinator's retry alarm can complete the
+      // same adoption through wakeForLifecycle without changing the epoch.
+      await this.setRuntimeGate({
+        phase: 'waking',
+        runtimeEpoch: input.runtimeEpoch,
+        revision
+      });
+      throw error;
+    }
+  }
+
+  async getExecutionSnapshotIfRunning(
+    runtimeEpoch: string
+  ): Promise<ExecutionSnapshot> {
+    await this.lifecycleReady;
+    return this.withLifecycleRead(async () => {
+      if (
+        this.runtimeGate?.phase !== 'running' ||
+        this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+        this.persistenceState.container?.running !== true
+      ) {
+        return notRunningExecutionSnapshot();
+      }
+      return this.inspectExecutionIfRunning();
+    });
+  }
+
+  async quiesceAndStopIfIdle(
+    input: LifecycleStopInput
+  ): Promise<LifecycleStopResult> {
+    await this.lifecycleReady;
+    return this.withLifecycleMutation(() =>
+      this.performQuiesceAndStopIfIdle(input)
+    );
+  }
+
+  private async performQuiesceAndStopIfIdle(
+    input: LifecycleStopInput
+  ): Promise<LifecycleStopResult> {
+    if (this.persistenceState.container?.running !== true) {
+      await this.setRuntimeGate({
+        phase: 'sleeping',
+        revision: Math.max(input.revision, this.runtimeGate?.revision ?? 0)
+      });
+      return { outcome: 'not_running' };
+    }
+
+    const recovering =
+      this.runtimeGate?.operationId === input.operationId &&
+      isStopGatePhase(this.runtimeGate.phase);
+    if (!recovering) {
+      if (
+        this.runtimeGate?.phase !== 'running' ||
+        this.runtimeGate.runtimeEpoch !== input.runtimeEpoch
+      ) {
+        throw new Error('Runtime gate changed before idle stop');
+      }
+      await this.setRuntimeGate({
+        phase: 'quiescing',
+        runtimeEpoch: input.runtimeEpoch,
+        revision: input.revision,
+        operationId: input.operationId
+      });
+    }
+
+    const revision = Math.max(
+      input.revision,
+      this.runtimeGate?.revision ?? input.revision
+    );
+    let snapshot: ExecutionSnapshot | undefined;
+    try {
+      if (this.runtimeGate?.phase === 'quiescing') {
+        // Let already-admitted WebSocket handshakes finish before stopping.
+        // The parent proxy can start a runtime while opening a socket, so none
+        // may remain suspended across this boundary.
+        await this.waitForOperationDrain();
+        await scheduler.wait(QUIESCE_SETTLE_MS);
+
+        snapshot = await this.inspectExecutionIfRunning();
+        if (snapshot.state !== 'running' || snapshot.active) {
+          await this.setRuntimeGate({
+            phase: 'running',
+            runtimeEpoch: input.runtimeEpoch,
+            revision
+          });
+          return { outcome: 'busy', snapshot };
+        }
+        await this.setRuntimeGate({
+          phase: 'checkpointing',
+          runtimeEpoch: input.runtimeEpoch,
+          revision,
+          operationId: input.operationId
+        });
+      }
+
+      if (this.runtimeGate?.phase === 'checkpointing') {
+        await this.createCheckpoint('idle-stop');
+        await this.setRuntimeGate({
+          phase: 'stopping',
+          revision,
+          operationId: input.operationId
+        });
+      }
+      if (this.persistenceState.container?.running === true) {
+        const terminated = await this.terminateContainerBounded();
+        if (!terminated) {
+          return { outcome: 'termination_pending', snapshot };
+        }
+      }
+      await this.setRuntimeGate({
+        phase: 'sleeping',
+        revision
+      });
+      return { outcome: 'stopped', snapshot };
+    } catch (error) {
+      if (this.persistenceState.container?.running === true) {
+        await this.setRuntimeGate({
+          phase: 'running',
+          runtimeEpoch: input.runtimeEpoch,
+          revision
+        });
+        return {
+          outcome: 'failed_running',
+          error: error instanceof Error ? error.message : String(error)
+        };
+      } else {
+        await this.setRuntimeGate({ phase: 'sleeping', revision });
+        return { outcome: 'stopped', snapshot };
+      }
+    }
+  }
+
+  async forceStopForLifecycle(input: {
+    runtimeEpoch?: string;
+    operationId: string;
+  }): Promise<LifecycleForceStopResult> {
+    await this.lifecycleReady;
+    return this.withLifecycleMutation(() =>
+      this.performForceStopForLifecycle(input)
+    );
+  }
+
+  private async performForceStopForLifecycle(input: {
+    runtimeEpoch?: string;
+    operationId: string;
+  }): Promise<LifecycleForceStopResult> {
+    if (this.persistenceState.container?.running !== true) {
+      await this.setRuntimeGate({
+        phase: 'sleeping',
+        revision: (this.runtimeGate?.revision ?? 0) + 1
+      });
+      return { outcome: 'stopped' };
+    }
+    const recovering =
+      this.runtimeGate?.operationId === input.operationId &&
+      isStopGatePhase(this.runtimeGate.phase);
+    if (
+      !recovering &&
+      input.runtimeEpoch &&
+      this.runtimeGate?.runtimeEpoch &&
+      input.runtimeEpoch !== this.runtimeGate.runtimeEpoch
+    ) {
+      throw new Error('Runtime epoch changed before manual stop');
+    }
+
+    const previousEpoch = this.runtimeGate?.runtimeEpoch ?? input.runtimeEpoch;
+    const revision = recovering
+      ? this.runtimeGate!.revision
+      : (this.runtimeGate?.revision ?? 0) + 1;
+    if (!recovering) {
+      await this.setRuntimeGate({
+        phase: 'quiescing',
+        runtimeEpoch: previousEpoch,
+        revision,
+        operationId: input.operationId
+      });
+    }
+    try {
+      if (this.runtimeGate?.phase === 'quiescing') {
+        await this.waitForOperationDrain();
+        await this.setRuntimeGate({
+          phase: 'checkpointing',
+          runtimeEpoch: previousEpoch,
+          revision,
+          operationId: input.operationId
+        });
+      }
+      if (this.runtimeGate?.phase === 'checkpointing') {
+        await this.createCheckpoint('idle-stop');
+        await this.setRuntimeGate({
+          phase: 'stopping',
+          revision,
+          operationId: input.operationId
+        });
+      }
+      if (this.persistenceState.container?.running === true) {
+        const terminated = await this.terminateContainerBounded();
+        if (!terminated) {
+          return { outcome: 'termination_pending' };
+        }
+      }
+      await this.setRuntimeGate({ phase: 'sleeping', revision });
+      return { outcome: 'stopped' };
+    } catch (error) {
+      if (this.persistenceState.container?.running === true) {
+        await this.setRuntimeGate({
+          phase: 'running',
+          runtimeEpoch: previousEpoch,
+          revision
+        });
+        return {
+          outcome: 'failed_running',
+          error: error instanceof Error ? error.message : String(error)
+        };
+      } else {
+        await this.setRuntimeGate({ phase: 'sleeping', revision });
+        return { outcome: 'stopped' };
+      }
+    }
+  }
+
+  async checkpointWorkspace(runtimeEpoch: string): Promise<PersistenceStatus> {
     await this.lifecycleReady;
     this.beginActiveOperation();
     try {
+      if (
+        this.runtimeGate?.phase !== 'running' ||
+        this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+        this.persistenceState.container?.running !== true
+      ) {
+        throw new Error('Manual checkpoint requires the current running epoch');
+      }
       await this.createCheckpoint('manual');
       return this.getPersistenceStatus();
     } finally {
@@ -239,31 +693,14 @@ export class Sandbox extends BaseSandbox<Env> {
         : {}),
       deleting: this.purgeRequested,
       platformRunning: this.persistenceState.container?.running === true,
+      lifecycle: this.purgeRequested
+        ? 'stopping'
+        : runtimeLifecycleFromGate(
+            this.runtimeGate,
+            this.persistenceState.container?.running === true
+          ),
       persistence
     };
-  }
-
-  /** Restore the workspace and make sure this instance's server is listening. */
-  async prepareOpencodeRequest(): Promise<void> {
-    await this.lifecycleReady;
-    if (!this.instanceActive || this.purgeRequested) {
-      throw new Error('Instance is not active');
-    }
-
-    this.beginActiveOperation();
-    try {
-      await this.ensureWorkspaceRestored();
-      this.assertInstanceActive();
-      await createOpencodeServer(this, {
-        port: OPENCODE_PORT,
-        directory: WORKSPACE_DIRECTORY,
-        config: OPENCODE_CONFIG,
-        env: OPENCODE_ENV
-      });
-      this.assertInstanceActive();
-    } finally {
-      this.finishActiveOperation();
-    }
   }
 
   override async containerFetch(
@@ -272,25 +709,66 @@ export class Sandbox extends BaseSandbox<Env> {
     portParam?: number
   ): Promise<Response> {
     await this.lifecycleReady;
+    const { request, port } = parseContainerFetchRequest(
+      requestOrUrl,
+      portOrInit,
+      portParam,
+      this.defaultPort
+    );
+    if (port === 3000) {
+      if (this.controlPlaneOperations === 0) {
+        throw new Error('Sandbox control plane is not admitted');
+      }
+      return super.containerFetch(request, port);
+    }
+    const runtimeEpoch = request.headers.get(RUNTIME_EPOCH_HEADER);
+    if (
+      !runtimeEpoch ||
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
+    }
+
+    await this.rememberRequestLocation(request);
+    if (
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
+    }
     this.beginActiveOperation();
     try {
-      return await super.containerFetch(requestOrUrl, portOrInit, portParam);
+      // Use the already-running port directly. BaseSandbox.containerFetch()
+      // automatically starts stopped containers, which is forbidden for
+      // passive UI/SSE retries.
+      return await this.persistenceState.container.getTcpPort(port).fetch(request);
     } finally {
       this.finishActiveOperation();
     }
   }
 
-  async runSdkTest(): Promise<Response> {
+  async runSdkTest(runtimeEpoch: string): Promise<Response> {
     await this.lifecycleReady;
     this.beginActiveOperation();
 
     try {
-      await this.ensureWorkspaceRestored();
-      const { client } = await createOpencode<OpencodeClient>(this, {
-        port: OPENCODE_PORT,
-        directory: WORKSPACE_DIRECTORY,
-        config: OPENCODE_CONFIG,
-        env: OPENCODE_ENV
+      if (
+        this.runtimeGate?.phase !== 'running' ||
+        this.runtimeGate.runtimeEpoch !== runtimeEpoch
+      ) {
+        throw new Error('SDK test requires the current runtime epoch');
+      }
+      const client: OpencodeClient = createOpencodeClient({
+        baseUrl: `http://localhost:${OPENCODE_PORT}`,
+        fetch: (input, init) => {
+          const request = new Request(input, init);
+          const headers = new Headers(request.headers);
+          headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
+          return this.containerFetch(new Request(request, { headers }), OPENCODE_PORT);
+        }
       });
 
       const session = await client.session.create({
@@ -333,7 +811,7 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
-  async purgeInstance(): Promise<void> {
+  async purgeInstance(): Promise<PurgeInstanceResult> {
     await this.lifecycleReady;
     if (!this.purgeInProgress) {
       this.purgeInProgress = this.doPurgeInstance().finally(() => {
@@ -349,16 +827,25 @@ export class Sandbox extends BaseSandbox<Env> {
     }
 
     await this.lifecycleReady;
+    const runtimeEpoch = request.headers.get(RUNTIME_EPOCH_HEADER);
+    if (
+      !runtimeEpoch ||
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
+    }
+    await this.rememberRequestLocation(request);
+    if (
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
+    }
     this.beginActiveOperation();
     try {
-      await this.ensureWorkspaceRestored();
-      await createOpencodeServer(this, {
-        port: OPENCODE_PORT,
-        directory: WORKSPACE_DIRECTORY,
-        config: OPENCODE_CONFIG,
-        env: OPENCODE_ENV
-      });
-      this.assertInstanceActive();
       // WebSockets must cross the Durable Object fetch boundary. The Worker
       // reaches this method via getSandbox(...).wsConnect(), not JSRPC.
       return await super.fetch(request);
@@ -372,31 +859,23 @@ export class Sandbox extends BaseSandbox<Env> {
     if (!this.instanceActive || this.purgeRequested) {
       return;
     }
-    this.beginActiveOperation();
-    try {
-      await super.alarm(alarmInfo);
-    } finally {
-      this.finishActiveOperation();
-    }
+    // This is only the Sandbox SDK's transport-activity timer. keepAlive is
+    // enabled, so it cannot stop or start a container and must not delay the
+    // semantic lifecycle's request-drain barrier.
+    await super.alarm(alarmInfo);
   }
 
   override async stop(
     signal?: Parameters<BaseSandbox<Env>['stop']>[0]
   ): Promise<void> {
-    // The base Container calls stop() when sleepAfter expires. Snapshot before
-    // allowing the ephemeral disk to disappear. A failed checkpoint aborts the
-    // stop so data is not knowingly discarded.
-    await this.lifecycleReady;
-    this.beginActiveOperation();
-    try {
-      await this.createCheckpoint('idle-stop');
-      await super.stop(signal);
-    } finally {
-      this.finishActiveOperation();
-    }
+    void signal;
+    await this.forceStopForLifecycle({
+      runtimeEpoch: this.runtimeGate?.runtimeEpoch,
+      operationId: crypto.randomUUID()
+    });
   }
 
-  private async doPurgeInstance(): Promise<void> {
+  private async doPurgeInstance(): Promise<PurgeInstanceResult> {
     this.purgeRequested = true;
     this.instanceActive = false;
     const deletingIdentity = this.instanceIdentity
@@ -409,7 +888,10 @@ export class Sandbox extends BaseSandbox<Env> {
         : {})
     });
     this.instanceIdentity = deletingIdentity;
-    await this.waitForOperationDrain();
+    await Promise.all([
+      this.waitForOperationDrain(),
+      this.waitForLifecycleDrain()
+    ]);
 
     const [latest, tracked] = await Promise.all([
       this.persistenceState.storage.get<StoredBackup>(BACKUP_STORAGE_KEY),
@@ -422,12 +904,19 @@ export class Sandbox extends BaseSandbox<Env> {
       ...owned
     );
 
-    // destroy() is intentionally used instead of stop(): deletion must not
-    // create one final backup after the purge barrier has been raised.
-    await this.destroy();
+    // Deletion must not create one final backup after the purge barrier has
+    // been raised. Avoid the SDK's unbounded destroy() for the same reason as
+    // normal lifecycle stops: a control-plane outage must remain retryable.
+    if (this.persistenceState.container?.running === true) {
+      const terminated = await this.terminateContainerBounded();
+      if (!terminated) {
+        return { outcome: 'termination_pending' };
+      }
+    }
     await this.waitForContainerMonitorToSettle();
     await this.deleteBackupObjects(backups);
     await this.persistenceState.storage.deleteAll();
+    return { outcome: 'purged' };
   }
 
   private async waitForContainerMonitorToSettle(): Promise<void> {
@@ -443,7 +932,41 @@ export class Sandbox extends BaseSandbox<Env> {
       }
       await scheduler.wait(100);
     }
-    throw new Error('Container monitor did not settle after destroy');
+    throw new Error('Container monitor did not settle after termination');
+  }
+
+  private async terminateContainerBounded(): Promise<boolean> {
+    // Lifecycle callers have already checkpointed; purge callers have raised
+    // an irreversible deletion barrier. A graceful SIGTERM can wait for
+    // OpenCode's long-lived server for minutes while admission is closed. Send
+    // SIGKILL directly, then bound the read-only monitor wait. We do not call
+    // the SDK's unbounded destroy(): its late completion could kill a newly
+    // woken generation after admission reopened.
+    const container = this.persistenceState.container;
+    if (!container) {
+      return true;
+    }
+    const monitor = container.monitor();
+    container.signal(9);
+    try {
+      const stopped = await Promise.race([
+        monitor.then(() => true),
+        scheduler
+          .wait(CONTAINER_TERMINATION_TIMEOUT_MS)
+          .then(() => false)
+      ]);
+      return stopped && this.persistenceState.container?.running !== true;
+    } catch (error) {
+      // SIGKILL is reported by the local monitor as an exit-code 137 rejection.
+      // That is still a successful termination once the physical state agrees.
+      if (container.running !== true) {
+        return true;
+      }
+      console.warn('Container termination monitor failed', error);
+      // The signal was already accepted. Keep admission closed and let the
+      // coordinator alarm reconcile physical state before taking another step.
+      return false;
+    }
   }
 
   private async waitForOperationDrain(): Promise<void> {
@@ -467,6 +990,59 @@ export class Sandbox extends BaseSandbox<Env> {
         resolve();
       }
       this.operationDrainWaiters.clear();
+    }
+  }
+
+  private async waitForLifecycleDrain(): Promise<void> {
+    if (this.lifecycleOperations === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) =>
+      this.lifecycleDrainWaiters.add(resolve)
+    );
+  }
+
+  private beginLifecycleOperation(): void {
+    this.assertInstanceActive();
+    this.lifecycleOperations += 1;
+  }
+
+  private finishLifecycleOperation(): void {
+    this.lifecycleOperations -= 1;
+    if (this.lifecycleOperations === 0) {
+      for (const resolve of this.lifecycleDrainWaiters) {
+        resolve();
+      }
+      this.lifecycleDrainWaiters.clear();
+    }
+  }
+
+  private async withLifecycleRead<T>(operation: () => Promise<T>): Promise<T> {
+    this.beginLifecycleOperation();
+    try {
+      return await operation();
+    } finally {
+      this.finishLifecycleOperation();
+    }
+  }
+
+  private async withLifecycleMutation<T>(
+    operation: () => Promise<T>
+  ): Promise<T> {
+    this.beginLifecycleOperation();
+    const previous = this.lifecycleMutationTail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.lifecycleMutationTail = previous.then(() => current);
+    await previous;
+    try {
+      this.assertInstanceActive();
+      return await operation();
+    } finally {
+      release();
+      this.finishLifecycleOperation();
     }
   }
 
@@ -514,7 +1090,9 @@ export class Sandbox extends BaseSandbox<Env> {
     this.assertInstanceActive();
 
     if (!this.checkpointInProgress) {
-      this.checkpointInProgress = this.doCreateCheckpoint(reason).finally(() => {
+      this.checkpointInProgress = this.withControlPlaneAccess(() =>
+        this.doCreateCheckpoint(reason)
+      ).finally(() => {
         this.checkpointInProgress = undefined;
       });
     }
@@ -719,6 +1297,152 @@ export class Sandbox extends BaseSandbox<Env> {
     return discovered;
   }
 
+  private async setRuntimeGate(
+    gate: Omit<RuntimeGate, 'updatedAt'>
+  ): Promise<void> {
+    const stored: RuntimeGate = {
+      phase: gate.phase,
+      revision: gate.revision,
+      updatedAt: new Date().toISOString(),
+      ...(gate.runtimeEpoch ? { runtimeEpoch: gate.runtimeEpoch } : {}),
+      ...(gate.operationId ? { operationId: gate.operationId } : {})
+    };
+    await this.persistenceState.storage.put(RUNTIME_GATE_STORAGE_KEY, stored);
+    this.runtimeGate = stored;
+  }
+
+  private async withControlPlaneAccess<T>(operation: () => Promise<T>): Promise<T> {
+    this.controlPlaneOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      this.controlPlaneOperations -= 1;
+    }
+  }
+
+  private async rememberRequestLocation(request: Request): Promise<void> {
+    const location = extractOpenCodeLocation(request, WORKSPACE_DIRECTORY);
+    if (!location || !isWorkspaceLocation(location.directory)) {
+      return;
+    }
+    if (!this.addKnownLocation(location)) {
+      return;
+    }
+    await this.persistenceState.storage.put(
+      KNOWN_LOCATIONS_STORAGE_KEY,
+      [...this.knownLocations.values()]
+    );
+  }
+
+  private addKnownLocation(location: OpenCodeLocation): boolean {
+    const key = openCodeLocationKey(location);
+    if (this.knownLocations.has(key)) {
+      return false;
+    }
+    if (this.knownLocations.size >= MAX_KNOWN_OPENCODE_LOCATIONS) {
+      const rootKey = openCodeLocationKey({ directory: WORKSPACE_DIRECTORY });
+      const oldest = [...this.knownLocations.keys()].find(
+        (value) => value !== rootKey
+      );
+      if (oldest) {
+        this.knownLocations.delete(oldest);
+      }
+    }
+    this.knownLocations.set(key, location);
+    return true;
+  }
+
+  private async discoverKnownLocationsIfNeeded(): Promise<string | undefined> {
+    if (!this.locationsNeedDiscovery) {
+      return undefined;
+    }
+    const container = this.persistenceState.container;
+    if (container?.running !== true) {
+      return 'Cannot discover OpenCode locations while the container is stopped';
+    }
+
+    try {
+      const url = new URL(
+        GLOBAL_SESSION_LIST_PATH,
+        `http://localhost:${OPENCODE_PORT}`
+      );
+      url.searchParams.set('roots', 'true');
+      url.searchParams.set('limit', '1000');
+      const response = await container.getTcpPort(OPENCODE_PORT).fetch(
+        new Request(url, {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS)
+        })
+      );
+      if (!response.ok) {
+        return `${GLOBAL_SESSION_LIST_PATH} returned HTTP ${response.status}`;
+      }
+      const locations = openCodeLocationsFromGlobalSessions(
+        await response.json()
+      );
+      if (!locations) {
+        return `${GLOBAL_SESSION_LIST_PATH} returned an invalid response`;
+      }
+      for (const location of locations) {
+        if (isWorkspaceLocation(location.directory)) {
+          this.addKnownLocation(location);
+        }
+      }
+      await this.persistenceState.storage.put(
+        KNOWN_LOCATIONS_STORAGE_KEY,
+        [...this.knownLocations.values()]
+      );
+      this.locationsNeedDiscovery = false;
+      return undefined;
+    } catch (error) {
+      return `${GLOBAL_SESSION_LIST_PATH} failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private async inspectExecutionIfRunning(): Promise<ExecutionSnapshot> {
+    const observedAt = new Date().toISOString();
+    const container = this.persistenceState.container;
+    if (container?.running !== true) {
+      return notRunningExecutionSnapshot(observedAt);
+    }
+
+    const discoveryError = await this.discoverKnownLocationsIfNeeded();
+    if (discoveryError) {
+      return {
+        state: 'unknown',
+        observedAt,
+        active: true,
+        activeSessionCount: 0,
+        retrySessionCount: 0,
+        locations: [...this.knownLocations.values()].map(openCodeLocationKey),
+        error: discoveryError
+      };
+    }
+
+    const activity = await queryOpenCodeActivity({
+      baseUrl: `http://localhost:${OPENCODE_PORT}`,
+      locations: this.knownLocations.values(),
+      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+      fetcher: async (request) => {
+        if (container.running !== true) {
+          throw new Error('Container stopped during activity probe');
+        }
+        return container.getTcpPort(OPENCODE_PORT).fetch(request);
+      }
+    });
+    return {
+      state: activity.state === 'unknown' ? 'unknown' : 'running',
+      observedAt: new Date(activity.observedAt).toISOString(),
+      active: activity.state !== 'idle',
+      activeSessionCount: activity.activeSessionIds.length,
+      // This remains a conservative diagnostic count; both busy and retry
+      // already block shutdown through `active`.
+      retrySessionCount: 0,
+      locations: [...this.knownLocations.values()].map(openCodeLocationKey),
+      ...(activity.reason ? { error: activity.reason } : {})
+    };
+  }
+
   private async recordPersistenceError(
     operation: PersistenceError['operation'],
     error: unknown
@@ -773,18 +1497,25 @@ export default {
         if (request.method !== 'GET') {
           return methodNotAllowed('GET');
         }
-        const instance = await requireReadyInstance(
+        await requireReadyInstance(
           env,
           decodeRouteSegment(openMatch[1])
         );
-        const target = new URL('/', url);
-        target.searchParams.set(UI_INSTANCE_PARAM, instance.id);
-        return Response.redirect(target.toString(), 302);
+        return Response.redirect(new URL('/', url).toString(), 302);
       }
 
       const uiInstanceId = url.searchParams.get(UI_INSTANCE_PARAM);
+      const uiRuntimeEpoch = url.searchParams.get(UI_RUNTIME_PARAM);
       if (uiInstanceId && request.method === 'GET' && acceptsHtml(request)) {
-        return await serveOpencodeUi(request, env, uiInstanceId);
+        if (!uiRuntimeEpoch || !isSafeRuntimeEpoch(uiRuntimeEpoch)) {
+          return runtimeEntryRequiredResponse();
+        }
+        return await serveOpencodeUi(
+          request,
+          env,
+          uiInstanceId,
+          uiRuntimeEpoch
+        );
       }
 
       if (url.pathname === '/' && request.method === 'GET') {
@@ -932,14 +1663,47 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
   }
   const record = await requireReadyInstance(env, id);
   const sandbox = resolveSandbox(env, record);
+  const lifecycle = resolveLifecycle(env, record.id);
   switch (action) {
-    case 'checkpoint':
-      return json(await sandbox.checkpointWorkspace());
+    case 'wake': {
+      const wake = await wakeInstance(env, record, sandbox, lifecycle);
+      return json({
+        launchUrl: `/?${UI_INSTANCE_PARAM}=${encodeURIComponent(record.id)}&${UI_RUNTIME_PARAM}=${encodeURIComponent(wake.runtimeEpoch)}`,
+        runtime: await getMergedRuntimeStatus(sandbox, wake.status)
+      });
+    }
+    case 'checkpoint': {
+      const runtime = await getInitializedLifecycleStatus(
+        record,
+        sandbox,
+        lifecycle
+      );
+      // A sleeping instance was already checkpointed before it stopped. Do
+      // not start it merely to create an identical manual checkpoint.
+      if (!runtime.admissionOpen) {
+        return json(await sandbox.getPersistenceStatus());
+      }
+      if (!runtime.runtimeEpoch) {
+        throw new HttpError(409, 'Running lifecycle has no runtime epoch');
+      }
+      return json(await sandbox.checkpointWorkspace(runtime.runtimeEpoch));
+    }
     case 'stop':
-      await sandbox.stop();
-      return json(await sandbox.getInstanceRuntimeStatus());
-    case 'test':
-      return sandbox.runSdkTest();
+      await getInitializedLifecycleStatus(record, sandbox, lifecycle);
+      await lifecycle.forceStop();
+      return json(await getInstanceView(env, record));
+    case 'test': {
+      const wake = await wakeInstance(env, record, sandbox, lifecycle);
+      const lease = await lifecycle.beginWork(wake.runtimeEpoch);
+      if (!lease.admitted) {
+        return lifecycleUnavailableResponse(lease.reason, lease.phase);
+      }
+      try {
+        return await sandbox.runSdkTest(wake.runtimeEpoch);
+      } finally {
+        await lifecycle.endWork(wake.runtimeEpoch, lease.leaseId);
+      }
+    }
     default:
       throw new HttpError(404, 'Instance action not found');
   }
@@ -956,9 +1720,16 @@ async function getInstanceView(
     };
   }
   try {
+    const sandbox = resolveSandbox(env, record);
+    const lifecycle = resolveLifecycle(env, record.id);
+    const lifecycleStatus = await getInitializedLifecycleStatus(
+      record,
+      sandbox,
+      lifecycle
+    );
     return {
       ...record,
-      runtime: await resolveSandbox(env, record).getInstanceRuntimeStatus()
+      runtime: await getMergedRuntimeStatus(sandbox, lifecycleStatus)
     };
   } catch (error) {
     console.warn(`Failed to read instance ${record.id} status`, error);
@@ -974,40 +1745,74 @@ async function proxyGatewayRequest(
   env: Env
 ): Promise<Response> {
   const url = new URL(request.url);
-  const match = /^\/gateway\/([^/]+)(\/.*)?$/.exec(url.pathname);
+  const match = /^\/gateway\/([^/]+)\/([^/]+)(\/.*)?$/.exec(url.pathname);
   if (!match) {
     throw new HttpError(404, 'Gateway route not found');
   }
 
   const id = decodeRouteSegment(match[1]);
+  const runtimeEpoch = decodeRouteSegment(match[2]);
+  if (!isSafeRuntimeEpoch(runtimeEpoch)) {
+    throw new HttpError(410, 'Runtime epoch is stale');
+  }
   const instance = await requireReadyInstance(env, id);
-  url.pathname = match[2] || '/';
-  const rewritten = createContainerRequest(url, request);
+  const lifecycle = resolveLifecycle(env, instance.id);
+  const admission = await lifecycle.admit(runtimeEpoch);
+  if (!admission.admitted) {
+    return lifecycleUnavailableResponse(admission.reason, admission.phase);
+  }
+  url.pathname = match[3] || '/';
+  const rewritten = createContainerRequest(url, request, runtimeEpoch);
   const sandbox = resolveSandbox(env, instance);
   if (isWebSocketUpgrade(request)) {
     return sandbox.wsConnect(rewritten, OPENCODE_PORT);
   }
-  const upstream = await proxyPreparedContainerRequest(sandbox, rewritten);
-  return rewriteGatewayResponse(
-    upstream,
-    `/gateway/${encodeURIComponent(instance.id)}`,
-    new URL(request.url).origin
-  );
+  const requiresLease = openCodeRouteRequiresWorkLease({
+    method: rewritten.method,
+    url: rewritten.url
+  });
+  const lease = requiresLease
+    ? await lifecycle.beginWork(runtimeEpoch)
+    : undefined;
+  if (lease && !lease.admitted) {
+    return lifecycleUnavailableResponse(lease.reason, lease.phase);
+  }
+  try {
+    const upstream = await proxyRunningContainerRequest(sandbox, rewritten);
+    return rewriteGatewayResponse(
+      upstream,
+      gatewayPrefix(instance.id, runtimeEpoch),
+      new URL(request.url).origin
+    );
+  } finally {
+    if (lease?.admitted) {
+      await lifecycle.endWork(runtimeEpoch, lease.leaseId);
+    }
+  }
 }
 
 async function serveOpencodeUi(
   request: Request,
   env: Env,
-  id: string
+  id: string,
+  runtimeEpoch: string
 ): Promise<Response> {
   const instance = await requireReadyInstance(env, id);
+  const denied = await rejectUnlessRuntimeAdmitted(
+    env,
+    instance.id,
+    runtimeEpoch
+  );
+  if (denied) {
+    return denied;
+  }
   const upstreamUrl = new URL(request.url);
   upstreamUrl.pathname = '/';
   upstreamUrl.search = '';
   upstreamUrl.hash = '';
-  const upstream = await proxyPreparedContainerRequest(
+  const upstream = await proxyRunningContainerRequest(
     resolveSandbox(env, instance),
-    createContainerRequest(upstreamUrl, request)
+    createContainerRequest(upstreamUrl, request, runtimeEpoch)
   );
 
   if (!upstream.ok) {
@@ -1018,8 +1823,8 @@ async function serveOpencodeUi(
     return upstream;
   }
 
-  const scope = scopedUiPrefix(instance.id);
-  const bootstrap = `/hub/bootstrap.js?${UI_INSTANCE_PARAM}=${encodeURIComponent(instance.id)}&v=${UI_COMPAT_VERSION}`;
+  const scope = scopedUiPrefix(instance.id, runtimeEpoch);
+  const bootstrap = `/hub/bootstrap.js?${UI_INSTANCE_PARAM}=${encodeURIComponent(instance.id)}&${UI_RUNTIME_PARAM}=${encodeURIComponent(runtimeEpoch)}&v=${UI_COMPAT_VERSION}`;
   let html = await upstream.text();
   html = html
     .replaceAll('src="/', `src="${scope}/`)
@@ -1047,7 +1852,7 @@ async function proxyScopedUiAsset(
   env: Env
 ): Promise<Response> {
   const url = new URL(request.url);
-  const match = /^\/ui\/([^/]+)(\/.*)?$/.exec(url.pathname);
+  const match = /^\/ui\/([^/]+)\/([^/]+)(\/.*)?$/.exec(url.pathname);
   if (!match) {
     throw new HttpError(404, 'UI asset route not found');
   }
@@ -1055,7 +1860,19 @@ async function proxyScopedUiAsset(
     env,
     decodeRouteSegment(match[1])
   );
-  const scopedPath = match[2] || '/';
+  const runtimeEpoch = decodeRouteSegment(match[2]);
+  if (!isSafeRuntimeEpoch(runtimeEpoch)) {
+    throw new HttpError(410, 'Runtime epoch is stale');
+  }
+  const denied = await rejectUnlessRuntimeAdmitted(
+    env,
+    instance.id,
+    runtimeEpoch
+  );
+  if (denied) {
+    return denied;
+  }
+  const scopedPath = match[3] || '/';
   const versionRoot = `/${UI_ASSET_VERSION_SEGMENT}`;
   url.pathname =
     scopedPath === versionRoot
@@ -1068,8 +1885,8 @@ async function proxyScopedUiAsset(
   // so framework contexts were duplicated. Version the entire asset path
   // instead, keeping every relative ESM import in one module graph.
   url.searchParams.delete('hub-ui');
-  const rewritten = createContainerRequest(url, request);
-  const upstream = await proxyPreparedContainerRequest(
+  const rewritten = createContainerRequest(url, request, runtimeEpoch);
+  const upstream = await proxyRunningContainerRequest(
     resolveSandbox(env, instance),
     rewritten
   );
@@ -1119,12 +1936,12 @@ async function proxyScopedUiAsset(
     upstream.ok &&
     (upstream.headers.get('content-type') ?? '').includes('application/manifest')
   ) {
-    const scope = scopedUiPrefix(instance.id);
+    const scope = scopedUiPrefix(instance.id, runtimeEpoch);
     const manifest = (await upstream.text())
       .replace('"id": "/"', `"id": "/instances/${encodeURIComponent(instance.id)}"`)
       .replace(
         '"start_url": "/"',
-        `"start_url": "/?${UI_INSTANCE_PARAM}=${encodeURIComponent(instance.id)}"`
+        `"start_url": "/?${UI_INSTANCE_PARAM}=${encodeURIComponent(instance.id)}&${UI_RUNTIME_PARAM}=${encodeURIComponent(runtimeEpoch)}"`
       )
       .replaceAll('"src": "/', `"src": "${scope}/`);
     const headers = new Headers(upstream.headers);
@@ -1139,14 +1956,22 @@ async function proxyGlobalUiAsset(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const id = instanceIdFromReferrer(request.headers.get('referer'));
-  if (!id) {
+  const context = instanceContextFromReferrer(request.headers.get('referer'));
+  if (!context) {
     throw new HttpError(404, 'UI asset has no instance context');
   }
-  const instance = await requireReadyInstance(env, id);
-  const response = await proxyPreparedContainerRequest(
+  const instance = await requireReadyInstance(env, context.id);
+  const denied = await rejectUnlessRuntimeAdmitted(
+    env,
+    instance.id,
+    context.runtimeEpoch
+  );
+  if (denied) {
+    return denied;
+  }
+  const response = await proxyRunningContainerRequest(
     resolveSandbox(env, instance),
-    createContainerRequest(new URL(request.url), request)
+    createContainerRequest(new URL(request.url), request, context.runtimeEpoch)
   );
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'private, no-store');
@@ -1160,16 +1985,26 @@ async function proxyGlobalUiAsset(
 
 function serveUiBootstrap(url: URL): Response {
   const id = url.searchParams.get(UI_INSTANCE_PARAM);
-  if (!id || !isSafeInstanceId(id)) {
+  const runtimeEpoch = url.searchParams.get(UI_RUNTIME_PARAM);
+  if (
+    !id ||
+    !isSafeInstanceId(id) ||
+    !runtimeEpoch ||
+    !isSafeRuntimeEpoch(runtimeEpoch)
+  ) {
     return new Response('Invalid instance id', { status: 400 });
   }
 
   const encodedId = JSON.stringify(id);
   const encodedParam = JSON.stringify(UI_INSTANCE_PARAM);
+  const encodedRuntimeEpoch = JSON.stringify(runtimeEpoch);
+  const encodedRuntimeParam = JSON.stringify(UI_RUNTIME_PARAM);
   const source = String.raw`(() => {
   const instanceId = ${encodedId};
   const instanceParam = ${encodedParam};
-  const gateway = location.origin + "/gateway/" + encodeURIComponent(instanceId);
+  const runtimeEpoch = ${encodedRuntimeEpoch};
+  const runtimeParam = ${encodedRuntimeParam};
+  const gateway = location.origin + "/gateway/" + encodeURIComponent(instanceId) + "/" + encodeURIComponent(runtimeEpoch);
   const defaultServerKey = "opencode.settings.dat:defaultServerUrl";
   const serverStoreKey = "opencode.global.dat:server";
   const physicalDefaultServerKey = "opencode.hub.dat:" + instanceId + ":default-server";
@@ -1246,6 +2081,7 @@ function serveUiBootstrap(url: URL): Response {
       const next = new URL(String(value), location.href);
       if (next.origin !== location.origin) return value;
       next.searchParams.set(instanceParam, instanceId);
+      next.searchParams.set(runtimeParam, runtimeEpoch);
       return next.pathname + next.search + next.hash;
     } catch { return value; }
   };
@@ -1260,10 +2096,50 @@ function serveUiBootstrap(url: URL): Response {
   };
 
   const current = new URL(location.href);
-  if (current.searchParams.get(instanceParam) !== instanceId) {
+  if (
+    current.searchParams.get(instanceParam) !== instanceId ||
+    current.searchParams.get(runtimeParam) !== runtimeEpoch
+  ) {
     current.searchParams.set(instanceParam, instanceId);
+    current.searchParams.set(runtimeParam, runtimeEpoch);
     replaceState.call(history, history.state, "", current.pathname + current.search + current.hash);
   }
+
+  let sleeping = false;
+  const showSleeping = () => {
+    if (sleeping) return;
+    if (!document.body) {
+      addEventListener("DOMContentLoaded", showSleeping, { once: true });
+      return;
+    }
+    sleeping = true;
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:2147483646;display:grid;place-items:center;background:#090b0ee8;color:#e7eaf0;font:14px ui-monospace,monospace";
+    const panel = document.createElement("div");
+    panel.style.cssText = "max-width:440px;padding:28px;border:1px solid #343a45;border-radius:12px;background:#15191f;text-align:center;box-shadow:0 20px 70px #000b";
+    const title = document.createElement("strong");
+    title.textContent = "实例已休眠";
+    title.style.cssText = "display:block;margin-bottom:12px;font-size:18px";
+    const detail = document.createElement("div");
+    detail.textContent = "任务完成超过 10 分钟，工作区已经备份。请返回 Hub 重新进入以唤醒容器。";
+    detail.style.cssText = "color:#aab1bd;line-height:1.6";
+    const link = document.createElement("a");
+    link.href = "/";
+    link.textContent = "返回 Hub";
+    link.style.cssText = "display:inline-block;margin-top:20px;border-radius:7px;background:#d6ff53;color:#101408;padding:8px 13px;text-decoration:none;font-weight:700";
+    panel.append(title, detail, link);
+    overlay.append(panel);
+    document.body.append(overlay);
+  };
+
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status === 410 && response.headers.get("X-OpenCode-Hub-State")) {
+      showSleeping();
+    }
+    return response;
+  };
 
   addEventListener("DOMContentLoaded", () => {
     const back = document.createElement("button");
@@ -1277,6 +2153,18 @@ function serveUiBootstrap(url: URL): Response {
       location.assign("/");
     });
     document.body.append(back);
+
+    const checkRuntime = async () => {
+      try {
+        const response = await nativeFetch("/api/instances/" + encodeURIComponent(instanceId), { cache: "no-store" });
+        if (!response.ok) return;
+        const instance = await response.json();
+        if (instance?.runtime?.lifecycle === "sleeping" || instance?.runtime?.lifecycle === "stopping") {
+          showSleeping();
+        }
+      } catch {}
+    };
+    setInterval(checkRuntime, 15000);
   });
 })();`;
 
@@ -1289,7 +2177,20 @@ function serveUiBootstrap(url: URL): Response {
   });
 }
 
-function createContainerRequest(target: URL, request: Request): Request {
+function createContainerRequest(
+  target: URL,
+  request: Request,
+  runtimeEpoch?: string
+): Request {
+  // The public Worker request is HTTPS in production, but a container TCP
+  // port only accepts plain HTTP on Cloudflare's already-secure internal
+  // transport. Preserve the route/query while replacing the external origin.
+  const containerTarget = new URL(target);
+  containerTarget.protocol = 'http:';
+  containerTarget.hostname = 'localhost';
+  containerTarget.port = String(OPENCODE_PORT);
+  containerTarget.username = '';
+  containerTarget.password = '';
   const headers = new Headers(request.headers);
   for (const name of [...headers.keys()]) {
     if (
@@ -1298,6 +2199,9 @@ function createContainerRequest(target: URL, request: Request): Request {
     ) {
       headers.delete(name);
     }
+  }
+  if (runtimeEpoch) {
+    headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
   }
 
   const cookie = headers.get('cookie');
@@ -1316,7 +2220,7 @@ function createContainerRequest(target: URL, request: Request): Request {
     }
   }
 
-  return new Request(target.toString(), {
+  return new Request(containerTarget.toString(), {
     method: request.method,
     headers,
     body: request.body,
@@ -1325,26 +2229,135 @@ function createContainerRequest(target: URL, request: Request): Request {
   });
 }
 
-async function proxyPreparedContainerRequest(
+async function proxyRunningContainerRequest(
   sandbox: Sandbox,
   request: Request
 ): Promise<Response> {
   // Keep streaming Response bodies on the built-in Sandbox RPC path. Returning
   // them through a custom Durable Object RPC method can pin that method for the
   // lifetime of SSE responses and eventually stall unrelated requests.
-  await sandbox.prepareOpencodeRequest();
   return await sandbox.containerFetch(request, OPENCODE_PORT);
 }
 
 function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
   switch (instance.imageKey) {
     case CURRENT_IMAGE_KEY:
-      return getSandbox(env.Sandbox, instance.id, { normalizeId: true });
+      return getSandbox(env.Sandbox, instance.id, {
+        normalizeId: true,
+        keepAlive: true
+      });
     case LOGTO_IMAGE_KEY:
-      return getSandbox(env.LogtoSandbox, instance.id, { normalizeId: true });
+      return getSandbox(env.LogtoSandbox, instance.id, {
+        normalizeId: true,
+        keepAlive: true
+      });
     default:
       throw new HttpError(501, `Unsupported image: ${String(instance.imageKey)}`);
   }
+}
+
+function resolveLifecycle(env: Env, instanceId: string) {
+  return env.LifecycleCoordinator.getByName(instanceId);
+}
+
+async function getInitializedLifecycleStatus(
+  record: InstanceRecord,
+  sandbox: Sandbox,
+  lifecycle: ReturnType<typeof resolveLifecycle>
+): Promise<LifecycleStatus> {
+  let status = await lifecycle.getLifecycleStatus();
+  if (status.phase !== 'uninitialized') {
+    return status;
+  }
+
+  const runtime = await sandbox.getInstanceRuntimeStatus();
+  status = await lifecycle.initializeInstance({
+    instanceId: record.id,
+    imageKey: record.imageKey,
+    containerRunning: runtime.platformRunning
+  });
+  return status;
+}
+
+async function wakeInstance(
+  env: Env,
+  record: InstanceRecord,
+  sandbox = resolveSandbox(env, record),
+  lifecycle = resolveLifecycle(env, record.id)
+): Promise<{
+  runtimeEpoch: string;
+  status: LifecycleStatus;
+}> {
+  await getInitializedLifecycleStatus(record, sandbox, lifecycle);
+  let result = await lifecycle.wake();
+
+  // A wake racing with the final idle-stop barrier is queued by the
+  // coordinator. Keep this explicit Hub request attached briefly so the user
+  // normally lands in the newly-created runtime epoch in one click.
+  for (let attempt = 0; result.pending && attempt < 60; attempt += 1) {
+    await scheduler.wait(500);
+    result = await lifecycle.wake();
+  }
+  if (!result.ready || !result.runtimeEpoch) {
+    throw new HttpError(503, 'Instance wake is still pending; retry shortly');
+  }
+  return {
+    runtimeEpoch: result.runtimeEpoch,
+    status: result.status
+  };
+}
+
+async function getMergedRuntimeStatus(
+  sandbox: Sandbox,
+  lifecycle: LifecycleStatus
+): Promise<InstanceRuntimeStatus> {
+  const platform = await sandbox.getInstanceRuntimeStatus();
+  return {
+    ...platform,
+    lifecycle: lifecycle.lifecycle,
+    ...(lifecycle.idleSince ? { idleSince: lifecycle.idleSince } : {}),
+    ...(lifecycle.idleDeadlineAt
+      ? { idleDeadlineAt: lifecycle.idleDeadlineAt }
+      : {}),
+    ...(lifecycle.activeSessionCount !== undefined
+      ? { activeSessionCount: lifecycle.activeSessionCount }
+      : {}),
+    ...(lifecycle.lastActivityProbeAt
+      ? { lastActivityProbeAt: lifecycle.lastActivityProbeAt }
+      : {}),
+    ...(lifecycle.lifecycleError
+      ? { lifecycleError: lifecycle.lifecycleError }
+      : {})
+  };
+}
+
+async function rejectUnlessRuntimeAdmitted(
+  env: Env,
+  instanceId: string,
+  runtimeEpoch: string
+): Promise<Response | undefined> {
+  const admission = await resolveLifecycle(env, instanceId).admit(runtimeEpoch);
+  return admission.admitted
+    ? undefined
+    : lifecycleUnavailableResponse(admission.reason, admission.phase);
+}
+
+function lifecycleUnavailableResponse(reason: string, phase: string): Response {
+  return Response.json(
+    {
+      error: 'INSTANCE_SLEEPING',
+      message: 'This runtime generation no longer accepts passive requests',
+      reason,
+      phase
+    },
+    {
+      status: 410,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-OpenCode-Hub-State': phase
+      }
+    }
+  );
 }
 
 async function readCreateInstanceImageKey(request: Request): Promise<ImageKey> {
@@ -1423,12 +2436,123 @@ function unknownRuntimeStatus(deleting: boolean): InstanceRuntimeStatus {
   return {
     container: 'unknown',
     deleting,
+    lifecycle: deleting ? 'stopping' : 'error',
     persistence: {
       hasBackup: false,
       trackedBackupCount: 0
     },
     platformRunning: false
   };
+}
+
+function notRunningExecutionSnapshot(
+  observedAt = new Date().toISOString()
+): ExecutionSnapshot {
+  return {
+    state: 'not_running',
+    observedAt,
+    active: false,
+    activeSessionCount: 0,
+    retrySessionCount: 0,
+    locations: []
+  };
+}
+
+function runtimeUnavailableResponse(phase: RuntimeGatePhase): Response {
+  return Response.json(
+    {
+      error: 'INSTANCE_SLEEPING',
+      message: 'This OpenCode runtime is not accepting passive requests',
+      phase
+    },
+    {
+      status: 410,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-OpenCode-Hub-State': phase
+      }
+    }
+  );
+}
+
+function runtimeEntryRequiredResponse(): Response {
+  return new Response(
+    '<!doctype html><meta charset="utf-8"><title>OpenCode 已休眠</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d10;color:#e7eaf0;font:14px ui-monospace,monospace}.panel{max-width:430px;padding:28px;border:1px solid #343a45;border-radius:12px;background:#15191f;text-align:center}a{display:inline-block;margin-top:18px;border-radius:7px;background:#d6ff53;color:#101408;padding:8px 13px;text-decoration:none;font-weight:700}</style><div class="panel"><h1>请从 Hub 进入</h1><p>这个地址没有有效的运行代际，普通页面刷新不会自动唤醒容器。</p><a href="/">返回 Hub</a></div>',
+    {
+      status: 410,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'text/html; charset=utf-8'
+      }
+    }
+  );
+}
+
+function parseContainerFetchRequest(
+  requestOrUrl: Request | string | URL,
+  portOrInit: number | RequestInit | undefined,
+  portParam: number | undefined,
+  defaultPort: number
+): { request: Request; port: number } {
+  const request =
+    requestOrUrl instanceof Request
+      ? requestOrUrl
+      : new Request(
+          typeof requestOrUrl === 'string'
+            ? requestOrUrl
+            : requestOrUrl.toString(),
+          typeof portOrInit === 'number' ? undefined : portOrInit
+        );
+  const port =
+    typeof portOrInit === 'number'
+      ? portOrInit
+      : typeof portParam === 'number'
+        ? portParam
+        : defaultPort;
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`Invalid container port: ${String(port)}`);
+  }
+  return { request, port };
+}
+
+function isWorkspaceLocation(value: string): boolean {
+  return value === WORKSPACE_ROOT || value.startsWith(`${WORKSPACE_ROOT}/`);
+}
+
+function isSafeRuntimeEpoch(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
+function runtimeLifecycleFromGate(
+  gate: RuntimeGate | undefined,
+  platformRunning: boolean
+): InstanceRuntimeStatus['lifecycle'] {
+  if (!platformRunning || gate?.phase === 'sleeping') {
+    return 'sleeping';
+  }
+  switch (gate?.phase) {
+    case 'waking':
+      return 'waking';
+    case 'quiescing':
+      return 'quiescing';
+    case 'checkpointing':
+      return 'checkpointing';
+    case 'stopping':
+      return 'stopping';
+    case 'running':
+    default:
+      return 'idle';
+  }
+}
+
+function isStopGatePhase(phase: RuntimeGatePhase): boolean {
+  return (
+    phase === 'quiescing' ||
+    phase === 'checkpointing' ||
+    phase === 'stopping'
+  );
 }
 
 function isWebSocketUpgrade(request: Request): boolean {
@@ -1493,20 +2617,31 @@ function prefixUpstreamLocation(
   return value;
 }
 
-function instanceIdFromReferrer(referrer: string | null): string | undefined {
+function instanceContextFromReferrer(
+  referrer: string | null
+): { id: string; runtimeEpoch: string } | undefined {
   if (!referrer) {
     return undefined;
   }
   try {
     const url = new URL(referrer);
     const fromQuery = url.searchParams.get(UI_INSTANCE_PARAM);
-    if (fromQuery && isSafeInstanceId(fromQuery)) {
-      return fromQuery;
+    const runtimeFromQuery = url.searchParams.get(UI_RUNTIME_PARAM);
+    if (
+      fromQuery &&
+      isSafeInstanceId(fromQuery) &&
+      runtimeFromQuery &&
+      isSafeRuntimeEpoch(runtimeFromQuery)
+    ) {
+      return { id: fromQuery, runtimeEpoch: runtimeFromQuery };
     }
-    const scoped = /^\/ui\/([^/]+)/.exec(url.pathname);
+    const scoped = /^\/ui\/([^/]+)\/([^/]+)/.exec(url.pathname);
     if (scoped) {
       const id = decodeRouteSegment(scoped[1]);
-      return isSafeInstanceId(id) ? id : undefined;
+      const runtimeEpoch = decodeRouteSegment(scoped[2]);
+      return isSafeInstanceId(id) && isSafeRuntimeEpoch(runtimeEpoch)
+        ? { id, runtimeEpoch }
+        : undefined;
     }
   } catch {
     return undefined;
@@ -1514,8 +2649,12 @@ function instanceIdFromReferrer(referrer: string | null): string | undefined {
   return undefined;
 }
 
-function scopedUiPrefix(instanceId: string): string {
-  return `/ui/${encodeURIComponent(instanceId)}/${UI_ASSET_VERSION_SEGMENT}`;
+function scopedUiPrefix(instanceId: string, runtimeEpoch: string): string {
+  return `/ui/${encodeURIComponent(instanceId)}/${encodeURIComponent(runtimeEpoch)}/${UI_ASSET_VERSION_SEGMENT}`;
+}
+
+function gatewayPrefix(instanceId: string, runtimeEpoch: string): string {
+  return `/gateway/${encodeURIComponent(instanceId)}/${encodeURIComponent(runtimeEpoch)}`;
 }
 
 function isKnownRootUiAsset(pathname: string): boolean {

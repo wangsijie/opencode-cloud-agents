@@ -89,8 +89,9 @@ const HUB_HTML = String.raw`<!doctype html>
       .instance-id { margin-top: 7px; color: #737c89; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
       .status { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
       .dot { width: 7px; height: 7px; border-radius: 50%; background: #667080; box-shadow: 0 0 0 3px rgba(102,112,128,.12); }
-      .dot.running { background: var(--ok); box-shadow: 0 0 0 3px rgba(102,214,146,.12); }
-      .dot.stopping, .dot.deleting { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,184,61,.12); }
+      .dot.running, .dot.busy { background: var(--ok); box-shadow: 0 0 0 3px rgba(102,214,146,.12); }
+      .dot.idle { background: var(--accent); box-shadow: 0 0 0 3px rgba(214,255,83,.12); }
+      .dot.waking, .dot.quiescing, .dot.checkpointing, .dot.stopping, .dot.deleting { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,184,61,.12); }
       .dot.error { background: var(--danger); box-shadow: 0 0 0 3px rgba(255,107,115,.12); }
       .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 25px 0 20px; }
       .meta-label { color: #697280; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
@@ -236,6 +237,18 @@ const HUB_HTML = String.raw`<!doctype html>
       let instances = []
       let deleting = null
       let busy = false
+      let launching = null
+
+      const lifecycleStatuses = {
+        sleeping: { label: '已休眠', css: 'sleeping' },
+        waking: { label: '正在唤醒', css: 'waking' },
+        busy: { label: '任务执行中', css: 'busy' },
+        idle: { label: '空闲', css: 'idle' },
+        quiescing: { label: '正在等待静默', css: 'quiescing' },
+        checkpointing: { label: '正在备份', css: 'checkpointing' },
+        stopping: { label: '正在停止', css: 'stopping' },
+        error: { label: '运行异常', css: 'error' }
+      }
 
       function node(tag, className, text) {
         const element = document.createElement(tag)
@@ -249,14 +262,49 @@ const HUB_HTML = String.raw`<!doctype html>
         return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
       }
 
+      function lifecycleFor(instance) {
+        const runtime = instance.runtime || {}
+        const value = runtime.lifecycle
+        if (typeof value === 'string' && lifecycleStatuses[value]) return value
+
+        const container = runtime.container
+        if (container === 'running' || container === 'healthy') return 'idle'
+        if (container === 'stopping') return 'stopping'
+        if (container === 'unknown') return 'error'
+        return 'sleeping'
+      }
+
+      function idleDeadlineFor(instance) {
+        const runtime = instance.runtime || {}
+        return runtime.idleDeadlineAt || null
+      }
+
+      function formatIdleDeadline(instance) {
+        const phase = lifecycleFor(instance)
+        const value = idleDeadlineFor(instance)
+        if (!value) {
+          if (phase === 'busy') return '任务结束后开始计时'
+          if (phase === 'sleeping') return '已关闭'
+          if (phase === 'waking') return '唤醒后开始计时'
+          if (phase === 'quiescing' || phase === 'checkpointing' || phase === 'stopping') return '正在关闭'
+          return '—'
+        }
+
+        const deadline = new Date(value)
+        if (Number.isNaN(deadline.getTime())) return '—'
+        const remainingMs = deadline.getTime() - Date.now()
+        const relative = remainingMs <= 0
+          ? '即将关闭'
+          : remainingMs < 60 * 1000
+            ? '不到 1 分钟后'
+            : Math.ceil(remainingMs / (60 * 1000)) + ' 分钟后'
+        return relative + ' · ' + formatTime(value)
+      }
+
       function statusFor(instance) {
         if (instance.lifecycle === 'delete_failed') return { label: '删除失败', css: 'error' }
         if (instance.lifecycle === 'deleting') return { label: '正在删除', css: 'deleting' }
-        const value = instance.runtime.container
-        if (value === 'running' || value === 'healthy') return { label: '运行中', css: 'running' }
-        if (value === 'stopping') return { label: '正在停止', css: 'stopping' }
-        if (value === 'unknown') return { label: '状态未知', css: 'error' }
-        return { label: '已停止', css: 'stopped' }
+        return lifecycleStatuses[lifecycleFor(instance)]
       }
 
       function action(label, action, kind = '') {
@@ -295,13 +343,14 @@ const HUB_HTML = String.raw`<!doctype html>
             ? '已备份 · ' + formatTime(instance.runtime.persistence.lastCheckpointAt)
             : '尚无快照'
           backup.append(node('div', 'meta-label', 'Persistence'), node('div', 'meta-value', backupText))
-          meta.append(image, backup)
+          const idleDeadline = node('div')
+          idleDeadline.append(node('div', 'meta-label', 'Idle shutdown'), node('div', 'meta-value', formatIdleDeadline(instance)))
+          meta.append(image, backup, idleDeadline)
 
           const actions = node('div', 'actions')
           const available = instance.lifecycle === 'ready'
-          const enter = node('a', 'button small primary', '进入 OpenCode ↗')
-          enter.href = available ? '/instances/' + encodeURIComponent(instance.id) : '#'
-          if (!available) { enter.setAttribute('aria-disabled', 'true'); enter.style.opacity = '.45'; enter.addEventListener('click', (event) => event.preventDefault()) }
+          const enter = action(launching === instance.id ? '正在进入…' : '进入 OpenCode ↗', () => wake(instance), 'primary')
+          enter.disabled = busy || !available
           actions.append(enter)
           if (available && ['running', 'healthy'].includes(instance.runtime.container)) {
             actions.append(action('保存快照', () => command(instance.id, 'checkpoint')), action('停止', () => command(instance.id, 'stop')))
@@ -365,6 +414,28 @@ const HUB_HTML = String.raw`<!doctype html>
 
       async function command(id, commandName) {
         await mutate(() => api('/api/instances/' + encodeURIComponent(id) + '/' + commandName, { method: 'POST' }))
+      }
+
+      async function wake(instance) {
+        if (busy || instance.lifecycle !== 'ready') return
+        busy = true
+        launching = instance.id
+        syncBusyState()
+        render()
+        try {
+          const result = await api('/api/instances/' + encodeURIComponent(instance.id) + '/wake', { method: 'POST' })
+          if (!result || typeof result.launchUrl !== 'string' || !result.launchUrl) {
+            throw new Error('唤醒成功，但服务器未返回访问地址')
+          }
+          location.assign(result.launchUrl)
+        } catch (error) {
+          showError(error)
+          await refresh(true)
+          launching = null
+          busy = false
+          syncBusyState()
+          render()
+        }
       }
 
       function askDelete(instance) {

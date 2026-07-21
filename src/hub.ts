@@ -8,6 +8,7 @@ import {
   type ImageKey,
   type InstanceRecord
 } from './instances';
+import type { LifecycleCoordinator } from './lifecycle';
 
 const INITIALIZED_KEY = 'hub:initialized';
 const SCHEMA_VERSION_KEY = 'hub:schema-version';
@@ -92,9 +93,7 @@ export class Hub extends DurableObject<Env> {
                 createdAt: now,
                 updatedAt: now
               };
-          const sandbox = getSandbox(env.Sandbox, legacy.id, {
-            normalizeId: true
-          });
+          const sandbox = resolveSandbox(env, legacy.id, legacy.imageKey);
           await sandbox.initializeInstance(legacy.id, legacy.imageKey);
           await ctx.storage.put(instanceStorageKey(legacy.id), legacy);
         }
@@ -149,11 +148,17 @@ export class Hub extends DurableObject<Env> {
     };
 
     const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
+    const lifecycle = resolveLifecycle(this.env, record.id);
     await sandbox.initializeInstance(record.id, record.imageKey);
     try {
+      await lifecycle.initializeInstance({
+        instanceId: record.id,
+        imageKey: record.imageKey
+      });
       await this.ctx.storage.put(instanceStorageKey(record.id), record);
     } catch (error) {
       await sandbox.purgeInstance().catch(() => undefined);
+      await lifecycle.markDeleted().catch(() => undefined);
       throw error;
     }
     return record;
@@ -161,7 +166,7 @@ export class Hub extends DurableObject<Env> {
 
   async beginDelete(id: string): Promise<InstanceRecord | undefined> {
     await this.initialized;
-    return this.ctx.storage.transaction(async (transaction) => {
+    const deleting = await this.ctx.storage.transaction(async (transaction) => {
       const record = await transaction.get<InstanceRecord>(
         instanceStorageKey(id)
       );
@@ -185,6 +190,10 @@ export class Hub extends DurableObject<Env> {
       await transaction.setAlarm(Date.now());
       return deleting;
     });
+    if (deleting) {
+      await resolveLifecycle(this.env, deleting.id).beginDelete();
+    }
+    return deleting;
   }
 
   override async alarm(): Promise<void> {
@@ -197,12 +206,24 @@ export class Hub extends DurableObject<Env> {
       const operationId = record.deleteOperationId!;
       try {
         const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
-        await withTimeout(
+        const lifecycle = resolveLifecycle(this.env, record.id);
+        await lifecycle.beginDelete();
+        const purgeResult = await withTimeout(
           sandbox.purgeInstance(),
           DELETE_ATTEMPT_TIMEOUT_MS,
           `Timed out deleting instance ${record.id}`
         );
-        await this.finishDelete(record.id, operationId);
+        if (purgeResult.outcome === 'termination_pending') {
+          console.warn(`Container termination pending for ${record.id}`);
+          await this.deferDelete(
+            record.id,
+            operationId,
+            'Container termination is still pending'
+          );
+        } else {
+          await lifecycle.markDeleted();
+          await this.finishDelete(record.id, operationId);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (error instanceof DeleteAttemptTimeoutError) {
@@ -290,12 +311,25 @@ function isPendingDeletion(record: InstanceRecord): boolean {
 function resolveSandbox(env: Env, id: string, imageKey: ImageKey) {
   switch (imageKey) {
     case CURRENT_IMAGE_KEY:
-      return getSandbox(env.Sandbox, id, { normalizeId: true });
+      return getSandbox(env.Sandbox, id, {
+        normalizeId: true,
+        keepAlive: true
+      });
     case LOGTO_IMAGE_KEY:
-      return getSandbox(env.LogtoSandbox, id, { normalizeId: true });
+      return getSandbox(env.LogtoSandbox, id, {
+        normalizeId: true,
+        keepAlive: true
+      });
     default:
       throw new Error(`Unsupported image: ${String(imageKey)}`);
   }
+}
+
+function resolveLifecycle(env: Env, id: string) {
+  const lifecycleEnv = env as Env & {
+    LifecycleCoordinator: DurableObjectNamespace<LifecycleCoordinator>;
+  };
+  return lifecycleEnv.LifecycleCoordinator.getByName(id);
 }
 
 function randomInstanceName(): string {

@@ -5,11 +5,12 @@
   "type": "module",
   "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
   "scripts": {
-    "deploy": "wrangler deploy",
+    "deploy": "WRANGLER_WRITE_LOGS=false wrangler deploy",
     "dev": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "start": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
-    "types": "wrangler types --strict-vars=false",
-    "typecheck": "pnpm types && tsc --noEmit"
+    "test": "node --test test/*.test.mjs",
+    "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false",
+    "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.3",

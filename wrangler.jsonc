@@ -48,6 +48,10 @@
       {
         "class_name": "Hub",
         "name": "Hub"
+      },
+      {
+        "class_name": "LifecycleCoordinator",
+        "name": "LifecycleCoordinator"
       }
     ]
   },
@@ -63,6 +67,10 @@
     {
       "new_sqlite_classes": ["LogtoSandbox"],
       "tag": "v3"
+    },
+    {
+      "new_sqlite_classes": ["LifecycleCoordinator"],
+      "tag": "v4"
     }
   ]
 }

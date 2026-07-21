@@ -14,6 +14,9 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 - `/` is the Hub dashboard. It lists instance/container state and backup state,
   and supports create, enter, checkpoint, stop, and delete.
 - The `Hub` Durable Object is the strongly consistent instance registry.
+- Every instance also has a `LifecycleCoordinator` Durable Object. Its alarm
+  polls OpenCode execution state and owns the semantic 10-minute idle deadline;
+  browser HTTP, SSE, and WebSocket traffic never renews that deadline.
 - Every immutable instance ID maps to a different template-specific Sandbox
   Durable Object and therefore a different container. Display names such as
   `amber-otter-4f2a` are generated randomly.
@@ -31,12 +34,15 @@ The stock OpenCode SPA cannot be mounted transparently below
 `location.origin` as its default server. The Hub therefore separates UI and
 server routing:
 
-- `/?_hub=<id>` loads that instance's OpenCode UI shell.
-- `/ui/<id>/__hub-v<version>/*` serves a versioned UI asset graph from the
+- `POST /api/instances/<id>/wake` is the only external operation that may
+  start a stopped runtime. It returns a launch URL containing a fresh runtime
+  epoch.
+- `/?_hub=<id>&_runtime=<epoch>` loads that instance's OpenCode UI shell.
+- `/ui/<id>/<epoch>/__hub-v<version>/*` serves a versioned UI asset graph from the
   selected instance. Versioning the path, rather than only the entry module's
   query string, keeps lazy ESM chunks and their shared context providers in one
   browser module graph.
-- `/gateway/<id>/*` is the OpenCode server base URL. The Worker strips the
+- `/gateway/<id>/<epoch>/*` is the OpenCode server base URL. The Worker strips the
   prefix and streams HTTP, SSE, and terminal WebSocket traffic to that
   instance's port 4096.
 
@@ -44,6 +50,10 @@ The small bootstrap loaded with the UI selects the path-based gateway as
 OpenCode's default server and keeps the instance marker on SPA history URLs.
 This avoids cookies, so separate tabs do not use a cookie to decide which
 instance receives API traffic.
+
+The Worker and Sandbox both validate the runtime epoch before forwarding. Once
+the coordinator begins shutdown, old tabs receive HTTP 410; reconnecting an
+event stream or keeping the UI open cannot restart the container.
 
 Wildcard subdomains would be simpler if they become available: the Worker
 could route `<instance>.example.com` directly and stock OpenCode could use that
@@ -133,10 +143,13 @@ curl -X POST http://localhost:8787/api/instances \
 # Inspect one instance.
 curl http://localhost:8787/api/instances/<instance-id>
 
+# Explicitly wake it and receive the epoch-bearing UI launch URL.
+curl -X POST http://localhost:8787/api/instances/<instance-id>/wake
+
 # Create a snapshot without stopping.
 curl -X POST http://localhost:8787/api/instances/<instance-id>/checkpoint
 
-# Snapshot and stop. The next request starts and restores a fresh container.
+# Snapshot and stop. Only a later explicit wake starts and restores it.
 curl -X POST http://localhost:8787/api/instances/<instance-id>/stop
 
 # Queue container destruction and permanent R2 cleanup (returns HTTP 202).
@@ -152,7 +165,16 @@ The container filesystem is ephemeral after sleep. Each Sandbox Durable Object
 stores its own latest `/workspace` backup handle and restores it once per fresh
 runtime.
 
-- The normal 10-minute idle stop checkpoints before stopping.
+- The normal 10-minute idle stop begins only after all known legacy locations'
+  `/session/status` responses and the process-wide v2 `/api/session/active`
+  response agree that no session is executing. Probe failure is treated as
+  unknown and fails safe by keeping the container running.
+- Work-starting gateway calls carry a short durable lease so a fast task that
+  starts and finishes between probes still resets the idle window.
+- At the deadline, admission closes first; Sandbox waits for admitted request
+  handshakes to drain, confirms OpenCode is still idle, checkpoints, and stops.
+- Open browser tabs, SSE streams, WebSockets, and status polling do not count as
+  execution and therefore do not keep the runtime alive.
 - Only the latest successful snapshot is retained during normal operation.
 - A backup ledger retains every handle whose R2 deletion has not yet been
   confirmed, so failed stale-backup cleanup remains retryable.
@@ -222,6 +244,6 @@ pnpm run typecheck
 pnpm run deploy
 ```
 
-The `v2` Durable Object migration creates the Hub registry, while `v3` adds the
-`LogtoSandbox` class. Wrangler builds and pushes both configured template images
-during deployment.
+The `v2` Durable Object migration creates the Hub registry, `v3` adds the
+`LogtoSandbox` class, and `v4` adds the per-instance lifecycle coordinator.
+Wrangler builds and pushes both configured template images during deployment.

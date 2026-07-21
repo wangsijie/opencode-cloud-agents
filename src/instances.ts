@@ -7,6 +7,15 @@ export const IMAGE_KEYS = [CURRENT_IMAGE_KEY, LOGTO_IMAGE_KEY] as const;
 
 export type ImageKey = (typeof IMAGE_KEYS)[number];
 export type InstanceLifecycle = 'ready' | 'deleting' | 'delete_failed';
+export type RuntimeLifecycle =
+  | 'sleeping'
+  | 'waking'
+  | 'busy'
+  | 'idle'
+  | 'quiescing'
+  | 'checkpointing'
+  | 'stopping'
+  | 'error';
 
 export function isImageKey(value: unknown): value is ImageKey {
   return IMAGE_KEYS.some((imageKey) => imageKey === value);
@@ -29,6 +38,12 @@ export interface InstanceRuntimeStatus {
   exitCode?: number;
   platformRunning: boolean;
   deleting: boolean;
+  lifecycle: RuntimeLifecycle;
+  idleSince?: string;
+  idleDeadlineAt?: string;
+  activeSessionCount?: number;
+  lastActivityProbeAt?: string;
+  lifecycleError?: string;
   persistence: {
     hasBackup: boolean;
     backupId?: string;
