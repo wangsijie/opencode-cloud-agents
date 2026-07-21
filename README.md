@@ -14,12 +14,12 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 - `/` is the Hub dashboard. It lists instance/container state and backup state,
   and supports create, enter, checkpoint, stop, and delete.
 - The `Hub` Durable Object is the strongly consistent instance registry.
-- Every immutable instance ID maps to a different `Sandbox` Durable Object and
-  therefore a different container. Display names such as
+- Every immutable instance ID maps to a different template-specific Sandbox
+  Durable Object and therefore a different container. Display names such as
   `amber-otter-4f2a` are generated randomly.
-- New instances are provisioned lazily: creation adds a stopped logical
-  instance immediately; its current configured image starts when it is first
-  opened.
+- New instances are provisioned lazily: creation records the selected template
+  and adds a stopped logical instance immediately; its image starts when the
+  instance is first opened.
 - The first Hub access registers the previous single-instance ID, `opencode`,
   as `original-opencode`, preserving its Durable Object storage and R2 backup
   during the migration.
@@ -49,10 +49,24 @@ Wildcard subdomains would be simpler if they become available: the Worker
 could route `<instance>.example.com` directly and stock OpenCode could use that
 origin without UI adaptation. The current design works with one exact hostname.
 
-Instance records already contain an `imageKey`. It currently resolves only to
-`opencode-v1`. Cloudflare binds an image to a Container/Durable Object class, so a
-future image catalog should add another Sandbox class/binding and resolver case;
-the Hub schema and URLs do not need to change.
+Each template is backed by a container image and a dedicated Durable Object
+class binding. Instance records persist the image key, allowing the router and
+lifecycle operations to resolve the correct Sandbox class without changing
+instance URLs.
+
+## Workspace templates
+
+The creation dialog offers two templates built from the same multi-stage
+`Dockerfile`:
+
+- **Base** (internal image key `opencode-v1`) installs OpenCode, `gh`, Wrangler,
+  and the bundled credentials, but starts with no repository in `/workspace`.
+- **Logto** (internal image key `logto-v1`) extends Base and shallow-clones
+  [`logto-io/logto`](https://github.com/logto-io/logto) over HTTPS into
+  `/workspace/logto`.
+
+Both templates use `/workspace` as the OpenCode working directory and persist
+that complete directory in instance snapshots.
 
 ## Prerequisites
 
@@ -88,13 +102,13 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:8787>. The first instance start builds the image and can
+Open <http://localhost:8787>. Building a template image for the first time can
 take several minutes. Local development uses Wrangler's local R2 store via
 `PERSISTENCE_LOCAL_BUCKET=true`.
 
-The image installs OpenCode, `gh`, and Wrangler, and checks this repository out
-over SSH into `/workspace/opencode-cloud`. OpenCode data, state, and cache are
-kept below `/workspace`, so they are part of each instance snapshot.
+The shared Base stage installs OpenCode, `gh`, and Wrangler. OpenCode data,
+state, and cache are kept below `/workspace`, so they are part of each instance
+snapshot alongside any checked-out repositories.
 
 ## Instance API
 
@@ -102,8 +116,19 @@ kept below `/workspace`, so they are part of each instance snapshot.
 # List instances with live container and persistence state.
 curl http://localhost:8787/api/instances
 
-# Create a stopped instance with a random display name.
+# Create a stopped Base instance with a random display name. An empty POST uses
+# Base for backward compatibility.
 curl -X POST http://localhost:8787/api/instances
+
+# Explicitly create a Base instance.
+curl -X POST http://localhost:8787/api/instances \
+  -H 'Content-Type: application/json' \
+  --data '{"imageKey":"opencode-v1"}'
+
+# Create a Logto instance with the repository at /workspace/logto.
+curl -X POST http://localhost:8787/api/instances \
+  -H 'Content-Type: application/json' \
+  --data '{"imageKey":"logto-v1"}'
 
 # Inspect one instance.
 curl http://localhost:8787/api/instances/<instance-id>
@@ -197,5 +222,6 @@ pnpm run typecheck
 pnpm run deploy
 ```
 
-The `v2` Durable Object migration creates the Hub registry. Wrangler builds and
-pushes the configured current container image during deployment.
+The `v2` Durable Object migration creates the Hub registry, while `v3` adds the
+`LogtoSandbox` class. Wrangler builds and pushes both configured template images
+during deployment.

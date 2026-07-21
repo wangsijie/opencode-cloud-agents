@@ -24,6 +24,8 @@ import {
   CURRENT_IMAGE_KEY,
   HUB_DURABLE_OBJECT_ID,
   LEGACY_INSTANCE_ID,
+  LOGTO_IMAGE_KEY,
+  isImageKey,
   type ImageKey,
   type InstanceRecord,
   type InstanceRuntimeStatus,
@@ -38,7 +40,7 @@ import {
 export { ContainerProxy, Hub };
 
 const WORKSPACE_ROOT = '/workspace';
-const WORKSPACE_DIRECTORY = `${WORKSPACE_ROOT}/opencode-cloud`;
+const WORKSPACE_DIRECTORY = WORKSPACE_ROOT;
 const PERSISTENCE_MARKER = `${WORKSPACE_ROOT}/.opencode-persistence-ready`;
 const BACKUP_TTL_SECONDS = 365 * 24 * 60 * 60;
 const BACKUP_STORAGE_KEY = 'persistence:latest-backup';
@@ -309,7 +311,7 @@ export class Sandbox extends BaseSandbox<Env> {
         parts: [
           {
             type: 'text',
-            text: 'Summarize the README.md file in 2-3 sentences. Be concise.'
+            text: 'Reply with exactly: OpenCode is ready.'
           }
         ]
       });
@@ -729,6 +731,9 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 }
 
+/** The same persisted Sandbox behavior backed by the Logto template image. */
+export class LogtoSandbox extends Sandbox {}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -884,7 +889,8 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
       return json(instances);
     }
     if (request.method === 'POST') {
-      const instance = await hub.createInstance();
+      const imageKey = await readCreateInstanceImageKey(request);
+      const instance = await hub.createInstance(imageKey);
       return json(await getInstanceView(env, instance), 201);
     }
     return methodNotAllowed('GET, POST');
@@ -1331,15 +1337,38 @@ async function proxyPreparedContainerRequest(
 }
 
 function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
-  // imageKey is deliberately part of the registry now. Adding a future image
-  // means adding another Sandbox class/binding and one resolver case; records,
-  // API routes, and UI do not need a schema change.
   switch (instance.imageKey) {
     case CURRENT_IMAGE_KEY:
       return getSandbox(env.Sandbox, instance.id, { normalizeId: true });
+    case LOGTO_IMAGE_KEY:
+      return getSandbox(env.LogtoSandbox, instance.id, { normalizeId: true });
     default:
       throw new HttpError(501, `Unsupported image: ${String(instance.imageKey)}`);
   }
+}
+
+async function readCreateInstanceImageKey(request: Request): Promise<ImageKey> {
+  const body = await request.text();
+  if (!body.trim()) {
+    return CURRENT_IMAGE_KEY;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !isImageKey((value as { imageKey?: unknown }).imageKey)
+  ) {
+    throw new HttpError(400, 'Unknown instance template');
+  }
+  return (value as { imageKey: ImageKey }).imageKey;
 }
 
 function getHub(env: Env) {

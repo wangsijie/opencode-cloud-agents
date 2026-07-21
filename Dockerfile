@@ -1,4 +1,6 @@
-FROM docker.io/cloudflare/sandbox:0.12.3@sha256:23f67e16131b780865a5fa5aa3c8607408a730105c248836409f4e02bb6bf042
+ARG WORKSPACE_TEMPLATE=base
+
+FROM docker.io/cloudflare/sandbox:0.12.3@sha256:23f67e16131b780865a5fa5aa3c8607408a730105c248836409f4e02bb6bf042 AS base
 
 ARG OPENCODE_VERSION=1.18.3
 ARG GH_VERSION=2.93.0
@@ -52,13 +54,18 @@ RUN install -d -m 0700 /root/.config/gh /root/.config/.wrangler/config
 COPY --chmod=0600 docker/auth/gh/hosts.yml /root/.config/gh/hosts.yml
 COPY --chmod=0600 docker/auth/wrangler/default.toml /root/.config/.wrangler/config/default.toml
 
-# /workspace is supported by the Sandbox backup/restore API. The image provides
-# the initial checkout; later container starts overlay the latest R2 snapshot.
-RUN mkdir -p /workspace \
-    && git clone --depth 1 git@github.com:wangsijie/opencode-cloud.git \
-        /workspace/opencode-cloud
+# /workspace is supported by the Sandbox backup/restore API. The base template
+# deliberately leaves it empty; later container starts overlay the latest R2
+# snapshot.
+RUN mkdir -p /workspace
 
-WORKDIR /workspace/opencode-cloud
+FROM base AS logto
+
+RUN git clone --depth 1 https://github.com/logto-io/logto.git /workspace/logto
+
+FROM ${WORKSPACE_TEMPLATE} AS final
+
+WORKDIR /workspace
 
 # OpenCode server port.
 EXPOSE 4096

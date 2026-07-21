@@ -3,6 +3,9 @@ import { getSandbox } from '@cloudflare/sandbox';
 import {
   CURRENT_IMAGE_KEY,
   LEGACY_INSTANCE_ID,
+  LOGTO_IMAGE_KEY,
+  isImageKey,
+  type ImageKey,
   type InstanceRecord
 } from './instances';
 
@@ -128,21 +131,24 @@ export class Hub extends DurableObject<Env> {
     return this.ctx.storage.get<InstanceRecord>(instanceStorageKey(id));
   }
 
-  async createInstance(): Promise<InstanceRecord> {
+  async createInstance(
+    imageKey: ImageKey = CURRENT_IMAGE_KEY
+  ): Promise<InstanceRecord> {
     await this.initialized;
+    if (!isImageKey(imageKey)) {
+      throw new Error(`Unsupported image: ${String(imageKey)}`);
+    }
     const now = new Date().toISOString();
     const record: InstanceRecord = {
       id: `inst-${crypto.randomUUID()}`,
       name: randomInstanceName(),
-      imageKey: CURRENT_IMAGE_KEY,
+      imageKey,
       lifecycle: 'ready',
       createdAt: now,
       updatedAt: now
     };
 
-    const sandbox = getSandbox(this.env.Sandbox, record.id, {
-      normalizeId: true
-    });
+    const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
     await sandbox.initializeInstance(record.id, record.imageKey);
     try {
       await this.ctx.storage.put(instanceStorageKey(record.id), record);
@@ -190,12 +196,7 @@ export class Hub extends DurableObject<Env> {
     if (record) {
       const operationId = record.deleteOperationId!;
       try {
-        if (record.imageKey !== CURRENT_IMAGE_KEY) {
-          throw new Error(`Unsupported image: ${String(record.imageKey)}`);
-        }
-        const sandbox = getSandbox(this.env.Sandbox, record.id, {
-          normalizeId: true
-        });
+        const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
         await withTimeout(
           sandbox.purgeInstance(),
           DELETE_ATTEMPT_TIMEOUT_MS,
@@ -284,6 +285,17 @@ function instanceStorageKey(id: string): string {
 
 function isPendingDeletion(record: InstanceRecord): boolean {
   return record.lifecycle === 'deleting' && Boolean(record.deleteOperationId);
+}
+
+function resolveSandbox(env: Env, id: string, imageKey: ImageKey) {
+  switch (imageKey) {
+    case CURRENT_IMAGE_KEY:
+      return getSandbox(env.Sandbox, id, { normalizeId: true });
+    case LOGTO_IMAGE_KEY:
+      return getSandbox(env.LogtoSandbox, id, { normalizeId: true });
+    default:
+      throw new Error(`Unsupported image: ${String(imageKey)}`);
+  }
 }
 
 function randomInstanceName(): string {

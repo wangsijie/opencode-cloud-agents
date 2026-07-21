@@ -1,9 +1,16 @@
 export const HUB_DURABLE_OBJECT_ID = 'opencode-hub';
 export const CURRENT_IMAGE_KEY = 'opencode-v1';
+export const LOGTO_IMAGE_KEY = 'logto-v1';
 export const LEGACY_INSTANCE_ID = 'opencode';
 
-export type ImageKey = typeof CURRENT_IMAGE_KEY;
+export const IMAGE_KEYS = [CURRENT_IMAGE_KEY, LOGTO_IMAGE_KEY] as const;
+
+export type ImageKey = (typeof IMAGE_KEYS)[number];
 export type InstanceLifecycle = 'ready' | 'deleting' | 'delete_failed';
+
+export function isImageKey(value: unknown): value is ImageKey {
+  return IMAGE_KEYS.some((imageKey) => imageKey === value);
+}
 
 export interface InstanceRecord {
   id: string;

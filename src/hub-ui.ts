@@ -108,12 +108,45 @@ const HUB_HTML = String.raw`<!doctype html>
       dialog h3 { margin: 0 0 10px; font-size: 18px; }
       dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
       dialog code { color: var(--text); }
+      #create-dialog { width: min(610px, calc(100% - 32px)); }
+      .template-options {
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+        margin: 20px 0 0; padding: 0; border: 0;
+      }
+      .visually-hidden {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+      }
+      .template-option { position: relative; cursor: pointer; }
+      .template-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+      .template-card {
+        position: relative; display: flex; min-height: 150px; padding: 17px;
+        border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel);
+        transition: 140ms ease;
+      }
+      .template-card > span { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+      .template-option:hover .template-card { border-color: #566171; background: var(--panel-hover); }
+      .template-option input:focus-visible + .template-card { outline: 2px solid var(--accent); outline-offset: 3px; }
+      .template-option input:checked + .template-card {
+        border-color: var(--accent); background: linear-gradient(145deg, rgba(214,255,83,.08), transparent 70%), var(--panel);
+      }
+      .template-option input:checked + .template-card::after {
+        content: "\2713"; position: absolute; top: 13px; right: 13px;
+        display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+        background: var(--accent); color: var(--accent-ink); font-size: 12px; font-weight: 800;
+      }
+      .template-option input:disabled + .template-card { opacity: .45; cursor: wait; }
+      .template-name { display: block; padding-right: 28px; font: 650 16px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .template-description { display: block; margin-top: 11px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .template-path { display: block; margin-top: auto; padding-top: 17px; color: #c0c6cf; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .dialog-error { margin-top: 14px; padding: 10px 12px; border: 1px solid rgba(255,107,115,.35); border-radius: 8px; background: rgba(255,107,115,.07); color: #ffb2b7; font-size: 12px; }
       .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
       @media (max-width: 650px) {
         .shell { width: min(100% - 24px, 1180px); padding-top: 20px; }
         header, .hero { align-items: stretch; }
         .hero { margin-top: 46px; flex-direction: column; }
         .grid { grid-template-columns: 1fr; }
+        .template-options { grid-template-columns: 1fr; }
         .button.primary { padding-inline: 12px; }
       }
     </style>
@@ -125,7 +158,7 @@ const HUB_HTML = String.raw`<!doctype html>
           <div class="mark">&gt;_</div>
           <div><h1>OpenCode Hub</h1><div class="subtitle">Cloudflare Sandbox instances</div></div>
         </div>
-        <button class="button primary" id="create">＋ 新建实例</button>
+        <button class="button primary" id="create" aria-haspopup="dialog" aria-controls="create-dialog">＋ 新建实例</button>
       </header>
 
       <section class="hero">
@@ -136,15 +169,50 @@ const HUB_HTML = String.raw`<!doctype html>
         <div class="summary" id="summary">正在读取实例…</div>
       </section>
 
-      <div class="error-box hidden" id="error"></div>
+      <div class="error-box hidden" id="error" role="alert"></div>
       <section class="grid" id="instances">
         <article class="card skeleton"></article><article class="card skeleton"></article>
       </section>
     </main>
 
-    <dialog id="delete-dialog">
-      <h3>删除这个实例？</h3>
-      <p>将永久销毁 <code id="delete-name"></code> 的容器，并删除 R2 中所有已跟踪的持久化快照。此操作不可撤销。</p>
+    <dialog id="create-dialog" aria-labelledby="create-title" aria-describedby="create-description">
+      <form id="create-form">
+        <h3 id="create-title">选择实例模板</h3>
+        <p id="create-description">模板决定实例首次启动时使用的镜像和工作区内容。</p>
+        <fieldset class="template-options">
+          <legend class="visually-hidden">实例模板</legend>
+          <label class="template-option">
+            <input type="radio" name="imageKey" value="opencode-v1" checked autofocus />
+            <span class="template-card">
+              <span>
+                <span class="template-name">Base</span>
+                <span class="template-description">基础 OpenCode 环境，进入后是一个空白工作区。</span>
+                <span class="template-path">/workspace</span>
+              </span>
+            </span>
+          </label>
+          <label class="template-option">
+            <input type="radio" name="imageKey" value="logto-v1" />
+            <span class="template-card">
+              <span>
+                <span class="template-name">Logto</span>
+                <span class="template-description">在基础环境上预先克隆 <code>logto-io/logto</code>。</span>
+                <span class="template-path">/workspace/logto</span>
+              </span>
+            </span>
+          </label>
+        </fieldset>
+        <div class="dialog-error hidden" id="create-error" role="alert"></div>
+        <div class="dialog-actions">
+          <button class="button small" id="create-cancel" type="button">取消</button>
+          <button class="button small primary" id="create-confirm" type="submit">创建实例</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+      <h3 id="delete-title">删除这个实例？</h3>
+      <p id="delete-description">将永久销毁 <code id="delete-name"></code> 的容器，并删除 R2 中所有已跟踪的持久化快照。此操作不可撤销。</p>
       <div class="dialog-actions">
         <button class="button small" id="delete-cancel">取消</button>
         <button class="button small danger" id="delete-confirm">永久删除</button>
@@ -156,6 +224,12 @@ const HUB_HTML = String.raw`<!doctype html>
       const summary = document.querySelector('#summary')
       const errorBox = document.querySelector('#error')
       const createButton = document.querySelector('#create')
+      const createDialog = document.querySelector('#create-dialog')
+      const createForm = document.querySelector('#create-form')
+      const createCancel = document.querySelector('#create-cancel')
+      const createConfirm = document.querySelector('#create-confirm')
+      const createError = document.querySelector('#create-error')
+      const templateInputs = [...createForm.querySelectorAll('input[name="imageKey"]')]
       const deleteDialog = document.querySelector('#delete-dialog')
       const deleteName = document.querySelector('#delete-name')
       const deleteConfirm = document.querySelector('#delete-confirm')
@@ -249,6 +323,19 @@ const HUB_HTML = String.raw`<!doctype html>
         errorBox.classList.remove('hidden')
       }
 
+      function showCreateError(error) {
+        createError.textContent = error instanceof Error ? error.message : String(error)
+        createError.classList.remove('hidden')
+      }
+
+      function syncBusyState() {
+        createButton.disabled = busy
+        createCancel.disabled = busy
+        createConfirm.disabled = busy
+        createForm.setAttribute('aria-busy', String(busy))
+        for (const input of templateInputs) input.disabled = busy
+      }
+
       async function api(path, options) {
         const response = await fetch(path, options)
         const body = response.status === 204 ? null : await response.json().catch(() => null)
@@ -266,13 +353,14 @@ const HUB_HTML = String.raw`<!doctype html>
         }
       }
 
-      async function mutate(work) {
-        if (busy) return
+      async function mutate(work, handleError = showError) {
+        if (busy) return false
         busy = true
-        createButton.disabled = true
+        syncBusyState()
         render()
-        try { await work(); await refresh() } catch (error) { showError(error); await refresh(true) }
-        finally { busy = false; createButton.disabled = false; render() }
+        try { await work(); await refresh(); return true }
+        catch (error) { handleError(error); await refresh(true); return false }
+        finally { busy = false; syncBusyState(); render() }
       }
 
       async function command(id, commandName) {
@@ -285,7 +373,36 @@ const HUB_HTML = String.raw`<!doctype html>
         deleteDialog.showModal()
       }
 
-      createButton.addEventListener('click', () => mutate(() => api('/api/instances', { method: 'POST' })))
+      createButton.addEventListener('click', () => {
+        createError.classList.add('hidden')
+        createDialog.showModal()
+      })
+      createCancel.addEventListener('click', () => createDialog.close())
+      createForm.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        if (busy) return
+        const imageKey = new FormData(createForm).get('imageKey')
+        if (typeof imageKey !== 'string') {
+          showCreateError('请选择一个实例模板')
+          return
+        }
+        createError.classList.add('hidden')
+        const created = await mutate(
+          () => api('/api/instances', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageKey })
+          }),
+          showCreateError
+        )
+        if (created) createDialog.close()
+      })
+      createDialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault() })
+      createDialog.addEventListener('close', () => {
+        createForm.reset()
+        createError.textContent = ''
+        createError.classList.add('hidden')
+      })
       document.querySelector('#delete-cancel').addEventListener('click', () => deleteDialog.close())
       deleteConfirm.addEventListener('click', () => {
         const target = deleting

@@ -21,6 +21,17 @@
     {
       "class_name": "Sandbox",
       "image": "./Dockerfile",
+      "image_vars": {
+        "WORKSPACE_TEMPLATE": "base"
+      },
+      "instance_type": "standard-4"
+    },
+    {
+      "class_name": "LogtoSandbox",
+      "image": "./Dockerfile",
+      "image_vars": {
+        "WORKSPACE_TEMPLATE": "logto"
+      },
       "instance_type": "standard-4"
     }
   ],
@@ -29,6 +40,10 @@
       {
         "class_name": "Sandbox",
         "name": "Sandbox"
+      },
+      {
+        "class_name": "LogtoSandbox",
+        "name": "LogtoSandbox"
       },
       {
         "class_name": "Hub",
@@ -44,6 +59,10 @@
     {
       "new_sqlite_classes": ["Hub"],
       "tag": "v2"
+    },
+    {
+      "new_sqlite_classes": ["LogtoSandbox"],
+      "tag": "v3"
     }
   ]
 }
