@@ -32,7 +32,10 @@ The stock OpenCode SPA cannot be mounted transparently below
 server routing:
 
 - `/?_hub=<id>` loads that instance's OpenCode UI shell.
-- `/ui/<id>/*` serves UI assets from the selected instance.
+- `/ui/<id>/__hub-v<version>/*` serves a versioned UI asset graph from the
+  selected instance. Versioning the path, rather than only the entry module's
+  query string, keeps lazy ESM chunks and their shared context providers in one
+  browser module graph.
 - `/gateway/<id>/*` is the OpenCode server base URL. The Worker strips the
   prefix and streams HTTP, SSE, and terminal WebSocket traffic to that
   instance's port 4096.

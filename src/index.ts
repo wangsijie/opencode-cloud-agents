@@ -49,7 +49,8 @@ const ERROR_STORAGE_KEY = 'persistence:last-error';
 const PURGE_STORAGE_KEY = 'instance:purge-requested';
 const IDENTITY_STORAGE_KEY = 'instance:identity';
 const UI_INSTANCE_PARAM = '_hub';
-const UI_COMPAT_VERSION = '2';
+const UI_COMPAT_VERSION = '3';
+const UI_ASSET_VERSION_SEGMENT = `__hub-v${UI_COMPAT_VERSION}`;
 const OPENCODE_PORT = 4096;
 const ACCESS_JWKS = new Map<
   string,
@@ -1011,7 +1012,7 @@ async function serveOpencodeUi(
     return upstream;
   }
 
-  const scope = `/ui/${encodeURIComponent(instance.id)}`;
+  const scope = scopedUiPrefix(instance.id);
   const bootstrap = `/hub/bootstrap.js?${UI_INSTANCE_PARAM}=${encodeURIComponent(instance.id)}&v=${UI_COMPAT_VERSION}`;
   let html = await upstream.text();
   html = html
@@ -1019,10 +1020,6 @@ async function serveOpencodeUi(
     .replaceAll("src='/", `src='${scope}/`)
     .replaceAll('href="/', `href="${scope}/`)
     .replaceAll("href='/", `href='${scope}/`)
-    .replace(
-      /src="(\/ui\/[^"?]+\/assets\/index-[^"?]+\.js)"/,
-      `src="$1?hub-ui=${UI_COMPAT_VERSION}"`
-    )
     .replace(
       '<head>',
       `<head><script src="${bootstrap}"></script>`
@@ -1052,7 +1049,19 @@ async function proxyScopedUiAsset(
     env,
     decodeRouteSegment(match[1])
   );
-  url.pathname = match[2] || '/';
+  const scopedPath = match[2] || '/';
+  const versionRoot = `/${UI_ASSET_VERSION_SEGMENT}`;
+  url.pathname =
+    scopedPath === versionRoot
+      ? '/'
+      : scopedPath.startsWith(`${versionRoot}/`)
+        ? scopedPath.slice(versionRoot.length)
+        : scopedPath;
+  // v2 used this query parameter to bust the entry bundle cache. That gave
+  // the entry module a different URL from the copy imported by lazy chunks,
+  // so framework contexts were duplicated. Version the entire asset path
+  // instead, keeping every relative ESM import in one module graph.
+  url.searchParams.delete('hub-ui');
   const rewritten = createContainerRequest(url, request);
   const upstream = await proxyPreparedContainerRequest(
     resolveSandbox(env, instance),
@@ -1104,7 +1113,7 @@ async function proxyScopedUiAsset(
     upstream.ok &&
     (upstream.headers.get('content-type') ?? '').includes('application/manifest')
   ) {
-    const scope = `/ui/${encodeURIComponent(instance.id)}`;
+    const scope = scopedUiPrefix(instance.id);
     const manifest = (await upstream.text())
       .replace('"id": "/"', `"id": "/instances/${encodeURIComponent(instance.id)}"`)
       .replace(
@@ -1474,6 +1483,10 @@ function instanceIdFromReferrer(referrer: string | null): string | undefined {
     return undefined;
   }
   return undefined;
+}
+
+function scopedUiPrefix(instanceId: string): string {
+  return `/ui/${encodeURIComponent(instanceId)}/${UI_ASSET_VERSION_SEGMENT}`;
 }
 
 function isKnownRootUiAsset(pathname: string): boolean {
