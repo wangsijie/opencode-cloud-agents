@@ -1,25 +1,80 @@
 # opencode-cloud
 
-This repository follows Cloudflare's official
+OpenCode Hub running on Cloudflare Workers, Durable Objects, Containers, and
+R2. One Worker hostname serves a management dashboard and routes traffic to any
+number of independently sleeping OpenCode instances.
+
+The container integration follows Cloudflare's
 [`sandbox-sdk/examples/opencode`](https://github.com/cloudflare/sandbox-sdk/tree/main/examples/opencode)
-example. The upstream snapshot used when creating it was commit
-`453e4c7cbb03647ba631bd740972c3e2707ed8c0` (2026-07-17).
+example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
+`1.18.3` together.
 
-That upstream commit references the not-yet-published `0.12.4` release. This
-experiment pins both the npm package and the container image to the matching
-stable release, `0.12.3`. The image extends Cloudflare's generic Sandbox image
-and installs OpenCode `1.18.3` itself, so OpenCode can be upgraded independently
-without waiting for Cloudflare's `-opencode` image variant.
+## Hub architecture
 
-It starts OpenCode inside a Cloudflare Sandbox and proxies the OpenCode web UI,
-API, event stream, and terminal WebSocket through a Worker. The default and
-small model are both `vwnpc/grok-4.5`.
+- `/` is the Hub dashboard. It lists instance/container state and backup state,
+  and supports create, enter, checkpoint, stop, and delete.
+- The `Hub` Durable Object is the strongly consistent instance registry.
+- Every immutable instance ID maps to a different `Sandbox` Durable Object and
+  therefore a different container. Display names such as
+  `amber-otter-4f2a` are generated randomly.
+- New instances are provisioned lazily: creation adds a stopped logical
+  instance immediately; its current configured image starts when it is first
+  opened.
+- The first Hub access registers the previous single-instance ID, `opencode`,
+  as `original-opencode`, preserving its Durable Object storage and R2 backup
+  during the migration.
+
+### Why the single-domain router is path based
+
+The stock OpenCode SPA cannot be mounted transparently below
+`/instances/<id>`: it uses root-relative assets, root SPA routes, and
+`location.origin` as its default server. The Hub therefore separates UI and
+server routing:
+
+- `/?_hub=<id>` loads that instance's OpenCode UI shell.
+- `/ui/<id>/*` serves UI assets from the selected instance.
+- `/gateway/<id>/*` is the OpenCode server base URL. The Worker strips the
+  prefix and streams HTTP, SSE, and terminal WebSocket traffic to that
+  instance's port 4096.
+
+The small bootstrap loaded with the UI selects the path-based gateway as
+OpenCode's default server and keeps the instance marker on SPA history URLs.
+This avoids cookies, so separate tabs do not use a cookie to decide which
+instance receives API traffic.
+
+Wildcard subdomains would be simpler if they become available: the Worker
+could route `<instance>.example.com` directly and stock OpenCode could use that
+origin without UI adaptation. The current design works with one exact hostname.
+
+Instance records already contain an `imageKey`. It currently resolves only to
+`opencode-v1`. Cloudflare binds an image to a Container/Durable Object class, so a
+future image catalog should add another Sandbox class/binding and resolver case;
+the Hub schema and URLs do not need to change.
 
 ## Prerequisites
 
 - Docker is running locally.
 - Node.js and pnpm are installed.
-- Deploying to Cloudflare requires a Workers Paid plan.
+- Deploying Containers requires a Cloudflare Workers Paid plan.
+
+## Production access control
+
+The Hub exposes a terminal inside an image that contains deployment credentials,
+so production requests fail closed unless they carry a valid Cloudflare Access
+application JWT. Put the one Hub hostname behind an Access self-hosted
+application, then configure the exact team issuer and application Audience tag:
+
+```bash
+# Example issuer value: https://your-team.cloudflareaccess.com
+pnpm wrangler secret put ACCESS_TEAM_DOMAIN
+pnpm wrangler secret put ACCESS_POLICY_AUD
+```
+
+The Worker validates the `Cf-Access-Jwt-Assertion` signature, issuer, and
+audience against Access's rotating JWKS. Keep the default `workers.dev` route
+disabled or protect it with the same policy so it cannot become a second entry
+point. Local Wrangler requests are exempt only when
+`PERSISTENCE_LOCAL_BUCKET=true` and the hostname is loopback.
 
 ## Run locally
 
@@ -30,94 +85,76 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:8787> for the full OpenCode web UI. The first run builds
-the container image and can take several minutes.
+Open <http://localhost:8787>. The first instance start builds the image and can
+take several minutes. Local development uses Wrangler's local R2 store via
+`PERSISTENCE_LOCAL_BUCKET=true`.
 
-The image installs the same OpenCode version as `@opencode-ai/sdk`, then checks
-out this repository over SSH into `/workspace/opencode-cloud`. `/workspace` is
-snapshotted to R2 before the sandbox sleeps and restored automatically when a
-fresh container starts.
+The image installs OpenCode, `gh`, and Wrangler, and checks this repository out
+over SSH into `/workspace/opencode-cloud`. OpenCode data, state, and cache are
+kept below `/workspace`, so they are part of each instance snapshot.
 
-The image also installs `gh` and Wrangler globally. Both commands are already
-authenticated using the committed CLI credentials under `docker/auth`, so they
-can access GitHub and Cloudflare without an interactive login.
-
-## GitHub SSH access
-
-The image includes a dedicated Ed25519 key at `/root/.ssh/id_ed25519` for Git
-operations over SSH. Add `docker/ssh/id_ed25519.pub` to GitHub as a deploy key
-on the target repository; enable write access if the sandbox needs to push.
-Alternatively, add it as an account SSH key when the sandbox needs access to
-multiple repositories.
-
-The private key is intentionally committed to this private repository and
-embedded in the image. Anyone who can read the repository or pull the image can
-use it, so keep its GitHub permissions narrow and rotate it if either artifact
-is exposed.
-
-Git is globally configured in the image with the identity `wangsijie
-<sijiewg@gmail.com>`. Commit signing is enabled by default using the SSH key at
-`/root/.ssh/id_ed25519`. Add `docker/ssh/id_ed25519.pub` to the matching GitHub
-account as a signing key if commits should display as Verified on GitHub.
-
-The same warning applies to the GitHub and Cloudflare credentials under
-`docker/auth`. The Wrangler credential includes a refresh token so its OAuth
-session can be renewed inside the container. Re-copy the local credentials and
-rebuild the image whenever either login is rotated or revoked.
-
-When upgrading Cloudflare Sandbox, update `@cloudflare/sandbox` and the base
-image tag and digest together. OpenCode and `@opencode-ai/sdk` should likewise
-be updated together.
-
-## Programmatic SDK test
-
-With the dev server running and a valid API key configured:
+## Instance API
 
 ```bash
-curl -X POST http://localhost:8787/api/test
+# List instances with live container and persistence state.
+curl http://localhost:8787/api/instances
+
+# Create a stopped instance with a random display name.
+curl -X POST http://localhost:8787/api/instances
+
+# Inspect one instance.
+curl http://localhost:8787/api/instances/<instance-id>
+
+# Create a snapshot without stopping.
+curl -X POST http://localhost:8787/api/instances/<instance-id>/checkpoint
+
+# Snapshot and stop. The next request starts and restores a fresh container.
+curl -X POST http://localhost:8787/api/instances/<instance-id>/stop
+
+# Queue container destruction and permanent R2 cleanup (returns HTTP 202).
+curl -X DELETE http://localhost:8787/api/instances/<instance-id>
+
+# Programmatic OpenCode SDK smoke test for one instance.
+curl -X POST http://localhost:8787/api/instances/<instance-id>/test
 ```
 
-This creates an OpenCode session and asks it to summarize the sample
-repository's `README.md`.
+## Persistence and deletion guarantees
 
-## Workspace persistence
+The container filesystem is ephemeral after sleep. Each Sandbox Durable Object
+stores its own latest `/workspace` backup handle and restores it once per fresh
+runtime.
 
-The sandbox filesystem is ephemeral after a container sleeps. This project
-stores the latest `/workspace` snapshot in R2 and keeps its backup handle in the
-Sandbox Durable Object:
+- The normal 10-minute idle stop checkpoints before stopping.
+- Only the latest successful snapshot is retained during normal operation.
+- A backup ledger retains every handle whose R2 deletion has not yet been
+  confirmed, so failed stale-backup cleanup remains retryable.
+- Deleting the migrated `opencode` instance also recognizes the two legacy
+  snapshot names (`opencode-manual` and `opencode-idle-stop`).
+- Instance deletion first marks the registry record as `deleting`, which blocks
+  new UI/API traffic, and returns `202` immediately. A Hub Durable Object alarm
+  waits for in-flight startup/checkpoint/stop operations, destroys the container
+  without making another snapshot, deletes every object below each tracked
+  `backups/<backup-id>/` prefix, clears the instance Durable Object storage, then
+  removes the Hub record. This keeps slow container teardown out of the client
+  request lifetime.
+- If any deletion step fails, the record becomes `delete_failed`; the dashboard
+  can retry while the backup ledger is still available.
 
-- A fresh container restores the latest snapshot before OpenCode starts.
-- The normal 10-minute idle stop creates a checkpoint before the container is
-  allowed to stop.
-- Only the latest snapshot is retained; a successful checkpoint deletes the
-  previous R2 archive.
-- OpenCode's XDG data, state, and cache directories live under
-  `/workspace/.opencode-state`, so sessions are included in the snapshot.
+No distributed transaction can cover both R2 and Durable Object storage. The
+ordering above prevents losing backup handles before R2 confirms deletion. An
+R2 lifecycle rule for `backups/` is still recommended for uploads interrupted
+before a handle can be recorded, and for orphaned snapshots created by older
+versions of this project.
 
-Local development uses Wrangler's local R2 storage automatically. These
-endpoints are available in both local development and production:
-
-```bash
-# Inspect the current backup handle and the last persistence error, if any.
-curl http://localhost:8787/api/persistence/status
-
-# Create a checkpoint without stopping the sandbox.
-curl -X POST http://localhost:8787/api/persistence/checkpoint
-
-# Checkpoint and stop now. The next request starts and restores a fresh container.
-curl -X POST http://localhost:8787/api/persistence/stop
-```
-
-Before the first production deployment, create the remote bucket named in
+Before the first production deployment, create the bucket from
 `wrangler.jsonc`:
 
 ```bash
 pnpm wrangler r2 bucket create opencode-cloud-backups
 ```
 
-Production backup uploads use presigned R2 URLs. Create an R2 API token with
-Object Read & Write access to this bucket, then configure its credentials and
-the Cloudflare account ID as Worker secrets:
+Production backup uploads use presigned R2 URLs. Configure an R2 Object Read &
+Write token and the Cloudflare account ID as Worker secrets:
 
 ```bash
 pnpm wrangler secret put CLOUDFLARE_R2_ACCOUNT_ID
@@ -125,29 +162,37 @@ pnpm wrangler secret put R2_ACCESS_KEY_ID
 pnpm wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
-Backups use a one-year restore TTL. The TTL is checked at restore time; it does
-not delete R2 objects. The rolling latest-backup behavior prevents normal
-checkpoints from accumulating archives, but an R2 lifecycle rule is still
-recommended to clean up orphaned objects after failed or interrupted writes.
+## GitHub SSH and bundled CLI access
+
+The image includes a dedicated Ed25519 key at `/root/.ssh/id_ed25519`. Add
+`docker/ssh/id_ed25519.pub` to GitHub as a deploy key and enable write access if
+the sandbox should push. Alternatively, add it as an account SSH key when it
+needs access to multiple repositories.
+
+Git is configured as `wangsijie <sijiewg@gmail.com>` with SSH commit signing.
+Add the same public key as a GitHub signing key if sandbox commits should appear
+as Verified.
+
+The private key and the `gh`/Wrangler credentials below `docker/auth` are
+intentionally bundled for this private image. Anyone who can read the repository
+or pull the image can use them. Keep their permissions narrow, rotate them if
+the artifacts are exposed, and rebuild the image after a credential rotation.
 
 ## OpenCode configuration
 
-The complete OpenCode configuration lives in `src/opencode-config.ts`. Default
-models, providers, endpoints, credentials, model limits, and future custom
-settings are managed together in that committed file. The VW NPC provider uses
-`@ai-sdk/anthropic` because its endpoint implements the Anthropic-compatible
-protocol.
+The complete configuration is in `src/opencode-config.ts`. The default and
+small model are both `vwnpc/grok-4.5`. Provider endpoints, credentials, limits,
+and future model settings are managed in that file.
 
-This repository is private and intentionally commits provider credentials. If
-the repository visibility or access list changes, rotate those credentials
-first.
+This private repository intentionally commits provider credentials. Rotate them
+before changing repository visibility or access.
 
-## Deploy
+## Verify and deploy
 
 ```bash
+pnpm run typecheck
 pnpm run deploy
 ```
 
-Wrangler builds and pushes the container image, deploys the Worker, and applies
-the Durable Object migration. No environment variables or Worker secrets are
-required.
+The `v2` Durable Object migration creates the Hub registry. Wrangler builds and
+pushes the configured current container image during deployment.

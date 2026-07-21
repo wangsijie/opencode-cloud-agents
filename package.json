@@ -12,7 +12,8 @@
     "typecheck": "pnpm types && tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.3"
+    "@opencode-ai/sdk": "1.18.3",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "0.12.3",
