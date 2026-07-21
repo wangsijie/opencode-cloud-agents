@@ -1,0 +1,28 @@
+{
+  "linear": {
+    "tokens": {
+      "accessToken": "7e389eed-555b-48c9-bbd9-7a5599c616ae:uS4jYyKN4aNsfuOv:_PK9bYFjAngBthHzfCL_4OWUQVpxQ_vS",
+      "refreshToken": "7e389eed-555b-48c9-bbd9-7a5599c616ae:uS4jYyKN4aNsfuOv:fiCT0NURZIgEBbEMezyPYYtOaYP83PPI",
+      "expiresAt": 1784708649.787,
+      "scope": "read write"
+    },
+    "clientInfo": {
+      "clientId": "sSyu8ZM_Jw2wMp_D",
+      "clientIdIssuedAt": 1784622515
+    },
+    "serverUrl": "https://mcp.linear.app/mcp"
+  },
+  "notion": {
+    "tokens": {
+      "accessToken": "b0717a0e-7b09-483e-830e-8be7245e9725:1WkvS8D3v80UyCAO:YkhLw9wIUKp67kYn1-itWM8W6UhrPZUW",
+      "refreshToken": "b0717a0e-7b09-483e-830e-8be7245e9725:1WkvS8D3v80UyCAO:POsQhLJnZ52HGoiML7PADhOjV43YA2td",
+      "expiresAt": 1784667447.472,
+      "scope": ""
+    },
+    "clientInfo": {
+      "clientId": "LSIaDUvdtpML1D9N",
+      "clientIdIssuedAt": 1784638640
+    },
+    "serverUrl": "https://mcp.notion.com/mcp"
+  }
+}

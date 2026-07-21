@@ -54,6 +54,11 @@ RUN install -d -m 0700 /root/.config/gh /root/.config/.wrangler/config
 COPY --chmod=0600 docker/auth/gh/hosts.yml /root/.config/gh/hosts.yml
 COPY --chmod=0600 docker/auth/wrangler/default.toml /root/.config/.wrangler/config/default.toml
 
+# OpenCode runs with XDG_DATA_HOME under /workspace, so seed its OAuth store
+# directly in the image for the bundled Linear and Notion MCP servers.
+RUN install -d -m 0700 /workspace/.opencode-state/data/opencode
+COPY --chmod=0600 docker/auth/opencode/mcp-auth.json /workspace/.opencode-state/data/opencode/mcp-auth.json
+
 # /workspace is supported by the Sandbox backup/restore API. The base template
 # deliberately leaves it empty; later container starts overlay the latest R2
 # snapshot.

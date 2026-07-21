@@ -15,6 +15,18 @@ const DEFAULT_MODEL = `${DEFAULT_PROVIDER_ID}/${DEFAULT_MODEL_ID}`;
 export const OPENCODE_CONFIG: Config = {
   model: DEFAULT_MODEL,
   small_model: DEFAULT_MODEL,
+  mcp: {
+    linear: {
+      type: 'remote',
+      url: 'https://mcp.linear.app/mcp',
+      enabled: true
+    },
+    notion: {
+      type: 'remote',
+      url: 'https://mcp.notion.com/mcp',
+      enabled: true
+    }
+  },
   provider: {
     [DEFAULT_PROVIDER_ID]: {
       npm: '@ai-sdk/anthropic',
@@ -26,6 +38,11 @@ export const OPENCODE_CONFIG: Config = {
       models: {
         [DEFAULT_MODEL_ID]: {
           name: 'Grok 4.5',
+          attachment: true,
+          modalities: {
+            input: ['text', 'image'],
+            output: ['text']
+          },
           limit: {
             context: 500000,
             output: 65536
