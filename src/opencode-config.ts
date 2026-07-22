@@ -47,6 +47,20 @@ export const OPENCODE_CONFIG: Config = {
             context: 500000,
             output: 65536
           }
+        },
+        'gemini-3.6-flash-high': {
+          name: 'Gemini 3.6 Flash High',
+          reasoning: true,
+          tool_call: true,
+          attachment: true,
+          modalities: {
+            input: ['text', 'image'],
+            output: ['text']
+          },
+          limit: {
+            context: 1048576,
+            output: 65536
+          }
         }
       }
     }
