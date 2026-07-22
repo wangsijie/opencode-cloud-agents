@@ -54,6 +54,11 @@ RUN install -d -m 0700 /root/.config/gh /root/.config/.wrangler/config
 COPY --chmod=0600 docker/auth/gh/hosts.yml /root/.config/gh/hosts.yml
 COPY --chmod=0600 docker/auth/wrangler/default.toml /root/.config/.wrangler/config/default.toml
 
+# Seed OpenCode skills in both global config and workspace template
+RUN install -d -m 0755 /root/.config/opencode/skills /workspace/.opencode/skills
+COPY docker/opencode/skills /root/.config/opencode/skills
+COPY docker/opencode/skills /workspace/.opencode/skills
+
 # OpenCode runs with XDG_DATA_HOME under /workspace, so seed its OAuth store
 # directly in the image for the bundled Linear and Notion MCP servers.
 RUN install -d -m 0700 /workspace/.opencode-state/data/opencode
