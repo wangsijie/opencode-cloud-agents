@@ -241,7 +241,7 @@ the artifacts are exposed, and rebuild the image after a credential rotation.
 ## OpenCode configuration
 
 The complete configuration is in `src/opencode-config.ts`. The default and
-small model are both `vwnpc/grok-4.5`. Provider endpoints, credentials, models,
+small model are both `vwnpc/ag/gemini-3.6-flash-high`. Provider endpoints, credentials, models,
 limits, costs, variants and input modalities are managed in that file. It is
 also the canonical source for equivalent configurations deployed to other
 machines; live machine files are derived copies.

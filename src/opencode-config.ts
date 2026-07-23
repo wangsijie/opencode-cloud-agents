@@ -1,7 +1,7 @@
 import type { Config } from '@opencode-ai/sdk/v2';
 
 export const DEFAULT_PROVIDER_ID = 'vwnpc';
-export const DEFAULT_MODEL_ID = 'grok-4.5';
+export const DEFAULT_MODEL_ID = 'ag/gemini-3.6-flash-high';
 
 const DEFAULT_MODEL = `${DEFAULT_PROVIDER_ID}/${DEFAULT_MODEL_ID}`;
 
@@ -30,13 +30,13 @@ export const OPENCODE_CONFIG: Config = {
   provider: {
     [DEFAULT_PROVIDER_ID]: {
       npm: '@ai-sdk/openai-compatible',
-      name: 'VWNPC CPA',
+      name: 'VWNPC',
       options: {
-        apiKey: "sk-1XSC7d5LAkDdYeWUn",
-        baseURL: 'https://ai.vwnpc.com/v1'
+        apiKey: 'sk-15901412e7cb7127-bkmlv9-d635466a',
+        baseURL: 'https://sub.vwnpc.com/v1'
       },
       models: {
-        [DEFAULT_MODEL_ID]: {
+        'gcli/grok-4.5': {
           name: 'Grok 4.5',
           attachment: true,
           modalities: {
@@ -58,7 +58,7 @@ export const OPENCODE_CONFIG: Config = {
             }
           }
         },
-        'gemini-3.6-flash-high': {
+        'ag/gemini-3.6-flash-high': {
           name: 'Gemini 3.6 Flash High',
           reasoning: true,
           tool_call: true,
@@ -72,7 +72,7 @@ export const OPENCODE_CONFIG: Config = {
             output: 65536
           }
         },
-        'gpt-5.6-sol': {
+        'cx/gpt-5.6-sol': {
           name: 'GPT-5.6 Sol',
           reasoning: true,
           tool_call: true,
@@ -103,7 +103,7 @@ export const OPENCODE_CONFIG: Config = {
             xhigh: { reasoningEffort: 'xhigh' }
           }
         },
-        'gpt-5.6-terra': {
+        'cx/gpt-5.6-terra': {
           name: 'GPT-5.6 Terra',
           reasoning: true,
           tool_call: true,
@@ -134,7 +134,7 @@ export const OPENCODE_CONFIG: Config = {
             xhigh: { reasoningEffort: 'xhigh' }
           }
         },
-        'gpt-5.6-luna': {
+        'cx/gpt-5.6-luna': {
           name: 'GPT-5.6 Luna',
           reasoning: true,
           tool_call: true,
