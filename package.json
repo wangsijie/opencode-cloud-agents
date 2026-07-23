@@ -13,7 +13,7 @@
     "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.3",
+    "@opencode-ai/sdk": "1.18.4",
     "jose": "^6.2.3"
   },
   "devDependencies": {
