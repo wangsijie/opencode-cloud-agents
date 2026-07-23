@@ -29,8 +29,8 @@ export const OPENCODE_CONFIG: Config = {
   },
   provider: {
     [DEFAULT_PROVIDER_ID]: {
-      npm: '@ai-sdk/anthropic',
-      name: 'VW NPC (Grok)',
+      npm: '@ai-sdk/openai-compatible',
+      name: 'VWNPC CPA',
       options: {
         apiKey: "sk-1XSC7d5LAkDdYeWUn",
         baseURL: 'https://ai.vwnpc.com/v1'
