@@ -1,5 +1,11 @@
+import { REPOS } from './repos';
+
 export function renderHubHtml(): Response {
-  return new Response(HUB_HTML, {
+  const html = HUB_HTML.replace(
+    '<!--WORKSPACE_OPTIONS-->',
+    workspaceOptionsHtml()
+  );
+  return new Response(html, {
     headers: {
       'Cache-Control': 'no-store',
       'Content-Type': 'text/html; charset=utf-8',
@@ -17,6 +23,30 @@ export function renderHubHtml(): Response {
       'X-Frame-Options': 'DENY'
     }
   });
+}
+
+/** Render one radio card per catalog repository for the creation dialog. */
+function workspaceOptionsHtml(): string {
+  return REPOS.map(
+    (repo) => `<label class="template-option">
+            <input type="radio" name="workspace" value="${escapeHtml(repo.repoKey)}" />
+            <span class="template-card">
+              <span>
+                <span class="template-name">${escapeHtml(repo.displayName)}</span>
+                <span class="template-description">首次唤醒时克隆 <code>${escapeHtml(repo.cloneUrl)}</code>，之后唤醒自动 fetch 更新。</span>
+                <span class="template-path">/workspace/${escapeHtml(repo.repoKey)}</span>
+              </span>
+            </span>
+          </label>`
+  ).join('\n          ');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }
 
 const HUB_HTML = String.raw`<!doctype html>
@@ -178,30 +208,21 @@ const HUB_HTML = String.raw`<!doctype html>
 
     <dialog id="create-dialog" aria-labelledby="create-title" aria-describedby="create-description">
       <form id="create-form">
-        <h3 id="create-title">选择实例模板</h3>
-        <p id="create-description">模板决定实例首次启动时使用的镜像和工作区内容。</p>
+        <h3 id="create-title">选择工作区</h3>
+        <p id="create-description">仓库实例使用统一基础镜像，在首次唤醒时把所选仓库克隆到工作区。</p>
         <fieldset class="template-options">
-          <legend class="visually-hidden">实例模板</legend>
+          <legend class="visually-hidden">工作区</legend>
           <label class="template-option">
-            <input type="radio" name="imageKey" value="opencode-v1" checked autofocus />
+            <input type="radio" name="workspace" value="" checked autofocus />
             <span class="template-card">
               <span>
-                <span class="template-name">Base</span>
+                <span class="template-name">空白</span>
                 <span class="template-description">基础 OpenCode 环境，进入后是一个空白工作区。</span>
                 <span class="template-path">/workspace</span>
               </span>
             </span>
           </label>
-          <label class="template-option">
-            <input type="radio" name="imageKey" value="logto-v1" />
-            <span class="template-card">
-              <span>
-                <span class="template-name">Logto</span>
-                <span class="template-description">在基础环境上预先克隆 <code>logto-io/logto</code>。</span>
-                <span class="template-path">/workspace/logto</span>
-              </span>
-            </span>
-          </label>
+          <!--WORKSPACE_OPTIONS-->
         </fieldset>
         <div class="dialog-error hidden" id="create-error" role="alert"></div>
         <div class="dialog-actions">
@@ -230,7 +251,7 @@ const HUB_HTML = String.raw`<!doctype html>
       const createCancel = document.querySelector('#create-cancel')
       const createConfirm = document.querySelector('#create-confirm')
       const createError = document.querySelector('#create-error')
-      const templateInputs = [...createForm.querySelectorAll('input[name="imageKey"]')]
+      const templateInputs = [...createForm.querySelectorAll('input[name="workspace"]')]
       const deleteDialog = document.querySelector('#delete-dialog')
       const deleteName = document.querySelector('#delete-name')
       const deleteConfirm = document.querySelector('#delete-confirm')
@@ -337,7 +358,10 @@ const HUB_HTML = String.raw`<!doctype html>
 
           const meta = node('div', 'meta')
           const image = node('div')
-          image.append(node('div', 'meta-label', 'Image'), node('div', 'meta-value', instance.imageKey))
+          const workspaceText = instance.repoKey
+            ? instance.repoKey + ' → /workspace/' + instance.repoKey
+            : instance.imageKey
+          image.append(node('div', 'meta-label', instance.repoKey ? 'Repo' : 'Image'), node('div', 'meta-value', workspaceText))
           const backup = node('div')
           const backupText = instance.runtime.persistence.hasBackup
             ? '已备份 · ' + formatTime(instance.runtime.persistence.lastCheckpointAt)
@@ -452,17 +476,18 @@ const HUB_HTML = String.raw`<!doctype html>
       createForm.addEventListener('submit', async (event) => {
         event.preventDefault()
         if (busy) return
-        const imageKey = new FormData(createForm).get('imageKey')
-        if (typeof imageKey !== 'string') {
-          showCreateError('请选择一个实例模板')
+        const workspace = new FormData(createForm).get('workspace')
+        if (typeof workspace !== 'string') {
+          showCreateError('请选择一个工作区')
           return
         }
         createError.classList.add('hidden')
+        const payload = workspace ? { repoKey: workspace } : { imageKey: 'opencode-v1' }
         const created = await mutate(
           () => api('/api/instances', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageKey })
+            body: JSON.stringify(payload)
           }),
           showCreateError
         )

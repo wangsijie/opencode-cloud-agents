@@ -25,6 +25,8 @@ export interface InstanceRecord {
   id: string;
   name: string;
   imageKey: ImageKey;
+  /** Catalog repository provisioned at wake time; absent for blank/template instances. */
+  repoKey?: string;
   lifecycle: InstanceLifecycle;
   createdAt: string;
   updatedAt: string;

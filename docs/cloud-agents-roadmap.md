@@ -151,9 +151,15 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 
 > 开工顺序：最先做 M2 里的 promptAsync spike（见决策记录），然后 M1 → M2 → M3 → M4 → M5。
 
-### M1 · 运行时 repo 置备（去模板化） — 约 2–4 天
+### M1 · 运行时 repo 置备（去模板化） — ✅ 完成（2026-07-25）
 
-范围：
+实际交付与验证：`src/repos.ts` 目录表（logto 起步）；`ensureRepoProvisioned` 挂进
+`performWakeForLifecycle`（restore 之后、server 启动之前；clone 失败阻断唤醒，fetch 失败仅告警）；
+创建 API/对话框改为工作区选择（空白 / 目录表仓库），仓库实例强制 base 镜像；旧 logto-v1
+实例不受影响。本地实测：logto 首次唤醒 14s 内完成 clone；完整 clone→checkpoint→restore→fetch
+闭环用小仓库验证通过（本地 localBucket 模式恢复大工作区受 413 限制，见风险表；生产不受影响）。
+
+原范围：
 
 - 新增 `src/repos.ts` 仓库目录表；`InstanceRecord` 增加 `repoKey`（模板字段保留用于旧实例）。
 - 容器侧 `ensure-repo` 步骤接入 `wakeForLifecycle`（restore 之后、标记 running 之前）：
@@ -263,6 +269,7 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 | 长对话镜像体积 | M4 存储 | 正文进 R2、DO 只存索引；分页读取 |
 | 一实例被 stock UI 开出多个 OpenCode session | 镜像/状态聚焦 | 会话页只聚焦主 `opencodeSessionId`，其余 session 照常被活动探测保活，镜像可顺带导出 |
 | Containers 并发实例上限与 standard-4 成本 | 规模化 | 会话数上来后评估更小 instance type / 并发上限与排队 |
+| 本地 dev（localBucket）restore 大工作区报 413 | 仅本地联调 | SDK 0.12.3 本地模式经容器文件 API 推送归档有体积上限；生产 presigned R2 路径不受影响。本地用小仓库验证快照链路（已记入 README） |
 | 单账号多端同时操作同一会话 | 一致性 | 依赖 OpenCode server 端事件序；UI 以事件流为准做最终一致 |
 
 ## 六、工程纪律（每个里程碑通用）

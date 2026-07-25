@@ -51,6 +51,7 @@ import {
   queryOpenCodeActivity,
   type OpenCodeLocation
 } from './opencode-activity';
+import { findRepo, isRepoKey, type RepoDefinition } from './repos';
 
 export { ContainerProxy, Hub, LifecycleCoordinator };
 
@@ -76,6 +77,8 @@ const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
+const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
+const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
 const ACCESS_JWKS = new Map<
   string,
@@ -117,6 +120,8 @@ interface PersistenceStatus {
 interface InstanceIdentity {
   id: string;
   imageKey: ImageKey;
+  /** Catalog repository provisioned during wake; absent for blank/template instances. */
+  repoKey?: string;
   state: 'active' | 'deleting';
   initializedAt: string;
 }
@@ -240,16 +245,24 @@ export class Sandbox extends BaseSandbox<Env> {
     });
   }
 
-  async initializeInstance(id: string, imageKey: ImageKey): Promise<void> {
+  async initializeInstance(
+    id: string,
+    imageKey: ImageKey,
+    repoKey?: string
+  ): Promise<void> {
     await this.lifecycleReady;
     await this.setKeepAlive(true);
     if (this.purgeRequested) {
       throw new Error('A deleting instance cannot be initialized');
     }
+    if (repoKey !== undefined && !isRepoKey(repoKey)) {
+      throw new Error(`Unknown repository: ${String(repoKey)}`);
+    }
     if (this.instanceIdentity) {
       if (
         this.instanceIdentity.id !== id ||
-        this.instanceIdentity.imageKey !== imageKey
+        this.instanceIdentity.imageKey !== imageKey ||
+        (this.instanceIdentity.repoKey ?? undefined) !== (repoKey ?? undefined)
       ) {
         throw new Error('Sandbox identity does not match the Hub record');
       }
@@ -266,6 +279,7 @@ export class Sandbox extends BaseSandbox<Env> {
     const identity: InstanceIdentity = {
       id,
       imageKey,
+      ...(repoKey ? { repoKey } : {}),
       state: 'active',
       initializedAt: new Date().toISOString()
     };
@@ -333,6 +347,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
     try {
       await this.ensureWorkspaceRestored();
+      await this.withControlPlaneAccess(() => this.ensureRepoProvisioned());
       await this.withControlPlaneAccess(() =>
         createOpencodeServer(this, {
           port: OPENCODE_PORT,
@@ -350,6 +365,51 @@ export class Sandbox extends BaseSandbox<Env> {
     } catch (error) {
       await this.setRuntimeGate({ phase: 'sleeping', revision });
       throw error;
+    }
+  }
+
+  /**
+   * Provision the instance's catalog repository below /workspace during wake.
+   * The first wake clones; later wakes see the snapshot-restored checkout and
+   * only run a best-effort fetch, never touching the working tree.
+   */
+  private async ensureRepoProvisioned(): Promise<void> {
+    const repoKey = this.instanceIdentity?.repoKey;
+    if (!repoKey) {
+      return;
+    }
+    const repo = findRepo(repoKey);
+    if (!repo) {
+      throw new Error(
+        `Repository ${repoKey} is no longer in the catalog; wake refused`
+      );
+    }
+
+    const directory = repoWorkspaceDirectory(repo);
+    const checkout = await this.exists(`${directory}/.git`);
+    if (checkout.exists) {
+      // A fetch failure (offline remote, revoked key) must not block resuming
+      // the already-restored workspace.
+      const fetched = await this.exec(
+        `git -C '${directory}' fetch origin --prune`,
+        { timeout: REPO_FETCH_TIMEOUT_MS }
+      );
+      if (!fetched.success) {
+        console.warn(
+          `Repo fetch failed for ${repoKey}: ${truncateOutput(fetched.stderr)}`
+        );
+      }
+      return;
+    }
+
+    const cloned = await this.exec(
+      `git clone --depth 1 --branch '${repo.defaultBranch}' '${repo.cloneUrl}' '${directory}'`,
+      { timeout: REPO_CLONE_TIMEOUT_MS }
+    );
+    if (!cloned.success) {
+      throw new Error(
+        `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
+      );
     }
   }
 
@@ -1620,8 +1680,8 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
       return json(instances);
     }
     if (request.method === 'POST') {
-      const imageKey = await readCreateInstanceImageKey(request);
-      const instance = await hub.createInstance(imageKey);
+      const input = await readCreateInstanceInput(request);
+      const instance = await hub.createInstance(input.imageKey, input.repoKey);
       return json(await getInstanceView(env, instance), 201);
     }
     return methodNotAllowed('GET, POST');
@@ -2360,10 +2420,17 @@ function lifecycleUnavailableResponse(reason: string, phase: string): Response {
   );
 }
 
-async function readCreateInstanceImageKey(request: Request): Promise<ImageKey> {
+interface CreateInstanceInput {
+  imageKey: ImageKey;
+  repoKey?: string;
+}
+
+async function readCreateInstanceInput(
+  request: Request
+): Promise<CreateInstanceInput> {
   const body = await request.text();
   if (!body.trim()) {
-    return CURRENT_IMAGE_KEY;
+    return { imageKey: CURRENT_IMAGE_KEY };
   }
 
   let value: unknown;
@@ -2372,16 +2439,31 @@ async function readCreateInstanceImageKey(request: Request): Promise<ImageKey> {
   } catch {
     throw new HttpError(400, 'Request body must be valid JSON');
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object');
+  }
 
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value) ||
-    !isImageKey((value as { imageKey?: unknown }).imageKey)
-  ) {
+  const { imageKey, repoKey } = value as {
+    imageKey?: unknown;
+    repoKey?: unknown;
+  };
+  if (repoKey !== undefined) {
+    if (!isRepoKey(repoKey)) {
+      throw new HttpError(400, 'Unknown repository');
+    }
+    // Repository instances always provision at runtime on the base image.
+    if (imageKey !== undefined && imageKey !== CURRENT_IMAGE_KEY) {
+      throw new HttpError(400, 'Repository instances use the base image');
+    }
+    return { imageKey: CURRENT_IMAGE_KEY, repoKey };
+  }
+  if (imageKey === undefined) {
+    return { imageKey: CURRENT_IMAGE_KEY };
+  }
+  if (!isImageKey(imageKey)) {
     throw new HttpError(400, 'Unknown instance template');
   }
-  return (value as { imageKey: ImageKey }).imageKey;
+  return { imageKey };
 }
 
 function getHub(env: Env) {
@@ -2517,6 +2599,17 @@ function parseContainerFetchRequest(
 
 function isWorkspaceLocation(value: string): boolean {
   return value === WORKSPACE_ROOT || value.startsWith(`${WORKSPACE_ROOT}/`);
+}
+
+function repoWorkspaceDirectory(repo: RepoDefinition): string {
+  return `${WORKSPACE_ROOT}/${repo.repoKey}`;
+}
+
+function truncateOutput(value: string, limit = 600): string {
+  const collapsed = value.trim();
+  return collapsed.length > limit
+    ? `${collapsed.slice(0, limit)}…`
+    : collapsed;
 }
 
 function isSafeRuntimeEpoch(value: string): boolean {

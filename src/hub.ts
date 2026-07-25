@@ -9,6 +9,7 @@ import {
   type InstanceRecord
 } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
+import { isRepoKey } from './repos';
 
 const INITIALIZED_KEY = 'hub:initialized';
 const SCHEMA_VERSION_KEY = 'hub:schema-version';
@@ -131,17 +132,22 @@ export class Hub extends DurableObject<Env> {
   }
 
   async createInstance(
-    imageKey: ImageKey = CURRENT_IMAGE_KEY
+    imageKey: ImageKey = CURRENT_IMAGE_KEY,
+    repoKey?: string
   ): Promise<InstanceRecord> {
     await this.initialized;
     if (!isImageKey(imageKey)) {
       throw new Error(`Unsupported image: ${String(imageKey)}`);
+    }
+    if (repoKey !== undefined && !isRepoKey(repoKey)) {
+      throw new Error(`Unknown repository: ${String(repoKey)}`);
     }
     const now = new Date().toISOString();
     const record: InstanceRecord = {
       id: `inst-${crypto.randomUUID()}`,
       name: randomInstanceName(),
       imageKey,
+      ...(repoKey ? { repoKey } : {}),
       lifecycle: 'ready',
       createdAt: now,
       updatedAt: now
@@ -149,7 +155,7 @@ export class Hub extends DurableObject<Env> {
 
     const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
     const lifecycle = resolveLifecycle(this.env, record.id);
-    await sandbox.initializeInstance(record.id, record.imageKey);
+    await sandbox.initializeInstance(record.id, record.imageKey, record.repoKey);
     try {
       await lifecycle.initializeInstance({
         instanceId: record.id,

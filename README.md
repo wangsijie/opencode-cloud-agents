@@ -74,18 +74,29 @@ class binding. Instance records persist the image key, allowing the router and
 lifecycle operations to resolve the correct Sandbox class without changing
 instance URLs.
 
-## Workspace templates
+## Workspaces and repository provisioning
 
-The creation dialog offers two templates built from the same multi-stage
-`Dockerfile`:
+New instances always use the **Base** image (internal key `opencode-v1`), which
+installs OpenCode, `gh`, Wrangler, and the bundled credentials. The creation
+dialog chooses the workspace content:
 
-- **Base** (internal image key `opencode-v1`) installs OpenCode, `gh`, Wrangler,
-  and the bundled credentials, but starts with no repository in `/workspace`.
-- **Logto** (internal image key `logto-v1`) extends Base and shallow-clones
-  [`logto-io/logto`](https://github.com/logto-io/logto) over HTTPS into
-  `/workspace/logto`.
+- **Blank** starts with an empty `/workspace`.
+- **Repository** instances record a `repoKey` from the catalog in
+  [`src/repos.ts`](src/repos.ts). The first wake shallow-clones the repository
+  into `/workspace/<repoKey>` before the OpenCode server starts; later wakes
+  restore the workspace snapshot and run a best-effort `git fetch origin`
+  without touching the working tree. A clone failure fails the wake; a fetch
+  failure only logs a warning.
 
-Both templates use `/workspace` as the OpenCode working directory and persist
+Adding a repository is a one-line change in `src/repos.ts` plus a deploy.
+Public repositories use HTTPS clone URLs; private ones use SSH and require the
+bundled image key to be authorized on GitHub.
+
+The legacy **Logto** template image (`logto-v1`, cloned at build time) is no
+longer offered for new instances; existing `logto-v1` instances keep working
+unchanged.
+
+All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.
 
 ## Prerequisites
@@ -126,6 +137,15 @@ Open <http://localhost:8787>. Building a template image for the first time can
 take several minutes. Local development uses Wrangler's local R2 store via
 `PERSISTENCE_LOCAL_BUCKET=true`.
 
+Local-mode restore pushes the whole snapshot archive through the container
+control-plane file API, which rejects large bodies (HTTP 413). Large repository
+workspaces (for example `logto`) therefore cannot be restored after a stop in
+local development; production restores use presigned R2 URLs downloaded inside
+the container and are unaffected. Verify snapshot/restore locally with a small
+repository. Stale `cloudflare/proxy-everything` helper containers from crashed
+`wrangler dev` sessions can also wedge startup; remove them with `docker rm -f`
+if the dev server never becomes ready.
+
 The shared Base stage installs OpenCode, `gh`, and Wrangler. OpenCode data,
 state, and cache are kept below `/workspace`, so they are part of each instance
 snapshot alongside any checked-out repositories.
@@ -140,15 +160,15 @@ curl http://localhost:8787/api/instances
 # Base for backward compatibility.
 curl -X POST http://localhost:8787/api/instances
 
-# Explicitly create a Base instance.
+# Explicitly create a blank Base instance.
 curl -X POST http://localhost:8787/api/instances \
   -H 'Content-Type: application/json' \
   --data '{"imageKey":"opencode-v1"}'
 
-# Create a Logto instance with the repository at /workspace/logto.
+# Create a repository instance; the first wake clones into /workspace/logto.
 curl -X POST http://localhost:8787/api/instances \
   -H 'Content-Type: application/json' \
-  --data '{"imageKey":"logto-v1"}'
+  --data '{"repoKey":"logto"}'
 
 # Inspect one instance.
 curl http://localhost:8787/api/instances/<instance-id>
