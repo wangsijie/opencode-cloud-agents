@@ -59,12 +59,24 @@ Worker（路由 + Access 认证）
 
 ## 三、关键设计决策
 
-### D1 · 用 `session.promptAsync` 派发任务
+### D1 · 用 `session.promptAsync` 派发任务（✅ 已冒烟验证）
 
 SDK v2 已提供 `session.promptAsync`（提交后立即返回，agent loop 在容器内 server 侧运行）。
 因此 Worker/DO 不需要为一次几十分钟的任务持有长连接；现有活动探测会把运行中的会话判为
-busy 并自动保活，干完自然进入 10 分钟空闲倒计时。**M2 第一件事是对 1.18.4 做一次
-promptAsync 语义冒烟**（断连后是否继续、重复提交行为、与 `/api/session/active` 探测的一致性）。
+busy 并自动保活，干完自然进入 10 分钟空闲倒计时。
+
+**Spike 结论（2026-07-25，OpenCode 1.18.4 本地实测）**：
+
+- `POST /session/{id}/prompt_async` 返回 `204`，耗时约 46ms；客户端断开后任务照常在
+  server 侧完整执行（`sleep 90` 任务 95 秒后正常完成）。
+- 运行期间实例视图 `lifecycle: busy`、`activeSessionCount: 1`，busy 信号来自 legacy
+  `/session/status`（该会话运行在 legacy 引擎；v2 `/api/session/active` 为空）。现有
+  保活/空闲机制零改动可用。
+- **busy 期间再次 `prompt_async` 同样 204 立即返回，消息进入服务端队列串行执行**：前一任务
+  一完成，排队消息立刻开始处理。M5 的消息投递因此无需自建顺序队列，只需保证"唤醒后投递"。
+- 任务完成后实例准时进入 10 分钟 idle 倒计时。
+- 附带发现：网关会透传上游 `Content-Encoding: gzip`；Worker 内 fetch 自动解压不受影响，
+  但脚本/镜像消费方需注意。
 
 ### D2 · Transcript 镜像：休眠可读的唯一数据源
 
