@@ -257,7 +257,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 | S1 | `GET /api/sessions/:id/messages` 被动只读 + 会话徽章派生 | ✅ 2026-07-26 |
 | S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | ✅ 2026-07-26 |
 | S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 🟡 已实现，abort 待补验 |
-| S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | 待做 |
+| S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | ✅ 2026-07-26 |
 | S5 | 列表页 + composer 迁入 SPA | 待做 |
 | S6 | 会话详情页 + message part 渲染器 | 待做 |
 | S7 | 并发 tab 验证、测试/类型、文档回填 | 待做 |
@@ -322,6 +322,32 @@ gemini 切到 grok-4.5，transcript 里两条 assistant 消息的 `modelID` 确�
 **待补验**：abort 的实际中断效果没验成。端点本身通到容器、OpenCode 接受并返回 `aborted:
 true`，但连续几次长生成都被上游模型供应商的 TLS 错误（`unknown certificate verification
 error`）打断，拿不到一次「正在流式输出时打断」的干净观测。等供应商恢复后补一次。
+
+**S4 实际交付（2026-07-26）**：`web/`（Vite 8 + React 19 + TS）+ 根 `vite.config.ts`；
+`wrangler.jsonc` 加 `assets`，产物 `web/dist` 由同一个 Worker 同域托管。
+`pnpm run deploy` 前置 `build:web`，一条链不变；`pnpm dev` 也前置构建（`web/dist` 不入库，
+否则新克隆直接起不来）；`pnpm dev:web` 起 Vite 开发服务器并把 Worker 路由代理到
+`wrangler dev`，前端调的是真 DO、真容器。`pnpm run typecheck` 现在同时检查 Worker 与 web
+两个 tsconfig（web 侧是 DOM + JSX，与 Worker 侧的类型互不污染）。
+
+**两个必须绕开的路由冲突**：
+
+1. Vite 默认把产物放 `/assets/`，而这个前缀已经属于 stock UI 的全局资产代理。
+   改用 `build.assetsDir: 'hub-assets'`。
+2. 静态资源托管默认会抢在 Worker 前面应答，但这里三件事都要求 Worker 先跑：Access 必须
+   把住门、`/` 要按 query 决定给 SPA 还是 stock UI、`/assets/` 要继续走容器代理。
+   因此配 `run_worker_first: true`，路由决策全留在 Worker 里；SPA 外壳由 `serveAppShell`
+   显式经 `env.ASSETS` 取 `index.html`，未命中路径仍然是 404 而不是被 SPA fallback 吞掉。
+
+SPA 暂时挂在 `/app`，`/` 保持现有 Hub 不动——S5 才把列表与 composer 搬进去并翻转 `/`，
+这样每一步都是可发布的。外壳本身会读 `/api/sessions` 与 `/api/catalog`，因为 S4 真正要
+验的就是「同域 API + 构建 + 托管」这条链。CSS 按移动优先立了基线（安全区内边距、
+720px 之后放宽），配色沿用 Worker 现有的休眠页，过渡期两边不像两个产品。
+
+本地实测：`/app` 与 `/app/sessions/x` 都返回外壳、`hub-assets` 资源 200、
+`/`｜`/api/*`｜`/hub/bootstrap.js`｜`/?_hub=…` 全部行为不变、`/nope` 仍是 404；
+浏览器里 375px 与 1100px 两个宽度都正常渲染，控制台无报错，统计数字来自真实 API；
+`pnpm dev:web` 的 5173 能正确代理到 8787。
 
 **S2 发现（两条都很坑）**：
 

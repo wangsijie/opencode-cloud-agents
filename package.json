@@ -5,12 +5,14 @@
   "type": "module",
   "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
   "scripts": {
-    "deploy": "WRANGLER_WRITE_LOGS=false wrangler deploy",
-    "dev": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
-    "start": "wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "build:web": "vite build",
+    "deploy": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler deploy",
+    "dev": "pnpm run build:web && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "dev:web": "vite",
+    "start": "pnpm run build:web && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "test": "node --test test/*.test.mjs",
     "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false",
-    "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit"
+    "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit && tsc --noEmit -p web"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.4",
@@ -19,7 +21,13 @@
   "devDependencies": {
     "@cloudflare/sandbox": "0.12.3",
     "@types/node": "^24.10.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^5.9.3",
+    "vite": "^8.1.5",
     "wrangler": "^4.102.0"
   },
   "packageManager": "pnpm@9.15.2"

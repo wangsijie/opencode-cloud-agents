@@ -24,6 +24,9 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 - `/` is the Hub dashboard. Its composer starts a session from a repository, a
   model and a prompt; below it, the dashboard lists every session with its
   dispatch phase and container state.
+- `/app` is the self-built SPA (`web/`, Vite + React), served from the same
+  Worker on the same origin. It is a shell today; it takes over `/` once the
+  session list and the session view move into it.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -155,6 +158,17 @@ pnpm dev
 Open <http://localhost:8787>. Building the container image for the first time
 can take several minutes. Local development uses Wrangler's local R2 store via
 `PERSISTENCE_LOCAL_BUCKET=true`.
+
+`pnpm dev` builds the Hub SPA before starting Wrangler, because the Worker
+serves it from `web/dist` and that directory is not checked in. When working on
+the front end, run the Vite dev server alongside it for hot reload:
+
+```bash
+pnpm dev:web
+```
+
+It serves <http://localhost:5173> and proxies every Worker-owned route to
+`wrangler dev`, so the UI talks to real Durable Objects and real containers.
 
 Local-mode restore pushes the whole snapshot archive through the container
 control-plane file API, which rejects large bodies (HTTP 413). Large repository

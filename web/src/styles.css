@@ -1,0 +1,122 @@
+/*
+ * Design baseline for the Hub SPA.
+ *
+ * Mobile-first per the roadmap decision: the phone is a first-class surface
+ * (queue work on the move, check progress, continue a thread before bed), so
+ * the base rules target a narrow screen and desktop widens from there. The
+ * palette matches the sleeping/entry pages the Worker still serves, so the two
+ * do not look like different products during the transition.
+ */
+:root {
+  --bg: #0b0d10;
+  --surface: #15191f;
+  --surface-raised: #1b2027;
+  --border: #262c35;
+  --text: #e7eaf0;
+  --text-dim: #99a1ae;
+  --accent: #d6ff53;
+  --accent-ink: #101408;
+
+  --radius: 12px;
+  --gap: 12px;
+  --page-pad: 16px;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  /* Reach into the notch and home-indicator areas rather than letting the
+     browser letterbox the page. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--page-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding-block: 8px;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 0.01em;
+}
+
+.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+}
+
+.stat {
+  flex: 1 1 120px;
+  background: var(--surface-raised);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.stat b {
+  display: block;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  border-color: #5b2c2c;
+  background: #241618;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+@media (min-width: 720px) {
+  :root {
+    --page-pad: 24px;
+  }
+}
