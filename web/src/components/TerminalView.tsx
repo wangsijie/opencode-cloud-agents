@@ -40,7 +40,9 @@ export function TerminalView({ sessionId, cwd }: { sessionId: string; cwd: strin
       cursorBlink: true,
       fontSize: 12,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      theme: { background: '#0b0d10', foreground: '#e7eaf0', cursor: '#d6ff53' }
+      // Dark in both themes: shell colours are written for a dark background,
+      // and xterm fixes its palette here rather than reading it from CSS.
+      theme: { background: '#1f1e1d', foreground: '#f5f4ef', cursor: '#f92040' }
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);

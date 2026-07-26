@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,10 +27,9 @@ import {
   reconcileOptimisticPrompts,
   type OptimisticPrompt
 } from '../optimistic';
-import { navigate } from '../router';
-import { useCompletionNotice } from '../useCompletionNotice';
 import { useTranscript } from '../useTranscript';
 import { ChangesPanel } from './ChangesPanel';
+import { ArrowUpIcon, MenuIcon, StopIcon } from './icons';
 import { MessageList } from './MessageList';
 import { StatusBadge } from './StatusBadge';
 import { WorkspacePanel } from './WorkspacePanel';
@@ -59,10 +57,14 @@ const ATTACHED: readonly RuntimeLifecycle[] = ['busy', 'idle'];
  */
 export function SessionPage({
   sessionId,
-  catalog
+  catalog,
+  onMenu,
+  onSessionsChanged
 }: {
   sessionId: string;
   catalog?: Catalog;
+  onMenu: () => void;
+  onSessionsChanged: () => void;
 }) {
   const [session, setSession] = useState<SessionView>();
   const [loadError, setLoadError] = useState<string>();
@@ -71,38 +73,9 @@ export function SessionPage({
   const [model, setModel] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<OptimisticPrompt[]>([]);
-  const composer = useRef<HTMLFormElement>(null);
-
-  // The composer is fixed over the conversation, so the page has to reserve
-  // exactly its height or the last message stays hidden behind it. That height
-  // is not a constant: the controls wrap by width, and the abort button comes
-  // and goes with the container's state.
-  //
-  // Measured on every commit rather than through a ResizeObserver. Both
-  // triggers that change the height are covered — a re-render for the buttons,
-  // the resize listener for the wrapping — and a layout effect runs
-  // synchronously before paint, so the reservation is never one frame stale.
-  useLayoutEffect(() => {
-    const measure = () => {
-      const node = composer.current;
-      if (node) {
-        // The border box, not the content box: the composer's own padding,
-        // which includes the phone's home-indicator inset, is part of what it
-        // covers.
-        document.documentElement.style.setProperty(
-          '--composer-height',
-          `${node.getBoundingClientRect().height}px`
-        );
-      }
-    };
-    measure();
-    addEventListener('resize', measure);
-    return () => removeEventListener('resize', measure);
-  });
-
-  // The same notice the list gives, for the page a user is most likely to be
-  // waiting on. One session is still a list as far as the hook is concerned.
-  useCompletionNotice(useMemo(() => (session ? [session] : undefined), [session]));
+  // The conversation scrolls inside the page rather than the page scrolling, so
+  // the header and the composer stay where the reader left them.
+  const scroller = useRef<HTMLDivElement>(null);
 
   const runtime = session?.instance.runtime.lifecycle;
   const attached = runtime !== undefined && ATTACHED.includes(runtime);
@@ -206,6 +179,7 @@ export function SessionPage({
         promptId: entry.id
       });
       await refreshSession();
+      onSessionsChanged();
     } catch (cause) {
       // The message never reached the queue, so withdraw the bubble and give
       // the text back rather than leaving a message that will never be answered.
@@ -223,6 +197,9 @@ export function SessionPage({
     try {
       await work();
       await refreshSession();
+      // A rename or an abort changes what the sidebar is showing about this
+      // session, and waiting out a poll to see your own edit reads as a bug.
+      onSessionsChanged();
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -231,21 +208,19 @@ export function SessionPage({
   }
 
   return (
-    <main className="page session-page">
-      <header className="masthead session-masthead">
+    <div className="session-view">
+      <header className="content-header">
         <button
-          className="link-button"
-          onClick={() => navigate('/')}
-          aria-label="Back to the list"
+          className="icon-button hamburger"
+          type="button"
+          onClick={onMenu}
+          aria-label="Open sessions"
         >
-          ← All sessions
+          <MenuIcon />
         </button>
-        {session ? <StatusBadge status={session.status} /> : null}
-      </header>
-
-      {session ? (
-        <div className="session-heading">
+        {session ? (
           <h1
+            className="content-title"
             onDoubleClick={() => {
               // `prompt` is the composer's state here, so the browser dialog is named.
               const next = window.prompt('Session title', session.displayTitle);
@@ -257,164 +232,203 @@ export function SessionPage({
           >
             {session.displayTitle}
           </h1>
-          <p className="muted mono">
-            /workspace/{session.repoKey} · {session.model}
-            {session.transcript?.usage &&
-            session.transcript.usage.assistantMessages > 0
-              ? ` · ${formatUsage(session.transcript.usage)}`
-              : ''}
-            {/*
-              The cold start is the one wait with no progress to show beyond a
-              spinner, so the last one's cost is stated rather than left to
-              memory. Only cold wakes are reported: a server restart on a live
-              container is a different number and would flatter the average.
-            */}
-            {session.instance.runtime.lastWake?.cold ? (
-              <span title={describeWakeStages(session.instance.runtime.lastWake)}>
-                {` · last wake ${formatDuration(session.instance.runtime.lastWake.totalMs)}`}
-              </span>
-            ) : null}
-          </p>
-        </div>
-      ) : null}
+        ) : null}
+        <span className="spacer" />
+        {session ? <StatusBadge status={session.status} /> : null}
+      </header>
 
-      {/*
-        Collapsed this is one row, so it can sit above the conversation without
-        pushing it down — and above is where it belongs: what the agent changed
-        is the point of the session, not a footnote to it.
-      */}
-      {session ? (
-        <>
-          <ChangesPanel
-            sessionId={sessionId}
-            attached={attached}
-            sessionTitle={session.title}
-          />
-          <WorkspacePanel
-            sessionId={sessionId}
-            attached={attached}
-            directory={session.directory ?? `/workspace/${session.repoKey}`}
-          />
-        </>
-      ) : null}
-
-      {loadError ? (
-        <section className="card error">
-          <h2>Could not load this session</h2>
-          <p className="muted">{loadError}</p>
-        </section>
-      ) : null}
-
-      {/*
-        A sleeping session is only worth calling out while it is still asleep.
-        Once a message has queued a wake, the progress bar below says everything
-        this banner would, and more usefully.
-      */}
-      {state === 'sleeping' && !dispatching ? (
-        <p className="banner">
-          {mirroredAt
-            ? `This session is asleep. Below is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
-            : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
-        </p>
-      ) : null}
-      {state === 'pending' && !dispatching ? (
-        <p className="banner">Starting up — no messages yet.</p>
-      ) : null}
-      {transcriptError ? <p className="banner error">{transcriptError}</p> : null}
-
-      {(messages && messages.length > 0) || optimistic.length > 0 ? (
-        <MessageList messages={messages ?? []} trailing={optimistic} />
-      ) : state === 'live' ? (
-        <p className="muted">No messages yet.</p>
-      ) : null}
-
-      {dispatching ? (
-        <p className="banner progress" role="status">
-          <i className="spinner" aria-hidden="true" />
-          {waking
-            ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
-            : 'Sandbox is ready, handing the message to the agent…'}
-        </p>
-      ) : null}
-
-      {session?.phase === 'failed' ? (
-        <section className="card error">
-          <h2>Failed to start</h2>
-          {session.lastError ? <p className="muted mono">{session.lastError}</p> : null}
-          <div className="actions">
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => run(() => retrySession(sessionId))}
-            >
-              Retry
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {actionError ? (
-        <p className="banner error" role="alert">
-          {actionError}
-        </p>
-      ) : null}
-
-      <form
-        ref={composer}
-        className="card composer sticky-composer"
-        onSubmit={send}
-        aria-busy={busy}
-      >
-        <textarea
-          className="prompt"
-          rows={2}
-          placeholder={
-            attached ? 'Say something…' : 'Session is asleep — sending wakes it and continues'
-          }
-          value={prompt}
-          disabled={busy || !canSend}
-          onChange={(event) => setPrompt(event.target.value)}
-        />
-        <div className="composer-controls">
-          {catalog ? (
-            <select
-              aria-label="Model"
-              value={model ?? ''}
-              disabled={busy || !canSend}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              {catalog.models.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.displayName}
-                </option>
-              ))}
-            </select>
+      <div className="content-body" ref={scroller}>
+        <div className="session-column">
+          {session ? (
+            <p className="muted mono session-meta-line">
+              /workspace/{session.repoKey} · {session.model}
+              {session.transcript?.usage &&
+              session.transcript.usage.assistantMessages > 0
+                ? ` · ${formatUsage(session.transcript.usage)}`
+                : ''}
+              {/*
+                The cold start is the one wait with no progress to show beyond a
+                spinner, so the last one's cost is stated rather than left to
+                memory. Only cold wakes are reported: a server restart on a live
+                container is a different number and would flatter the average.
+              */}
+              {session.instance.runtime.lastWake?.cold ? (
+                <span title={describeWakeStages(session.instance.runtime.lastWake)}>
+                  {` · last wake ${formatDuration(session.instance.runtime.lastWake.totalMs)}`}
+                </span>
+              ) : null}
+            </p>
           ) : null}
+
           {/*
-            One button, because at any moment there is only one thing to do
-            with a running agent: stop it, or — when it is not running — send
-            the next message.
+            Collapsed this is one row, so it can sit above the conversation
+            without pushing it down — and above is where it belongs: what the
+            agent changed is the point of the session, not a footnote to it.
           */}
-          {working ? (
-            <button
-              className="button primary"
-              type="button"
-              disabled={busy}
-              onClick={() => run(() => abortSession(sessionId))}
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              className="button primary"
-              type="submit"
-              disabled={busy || !canSend || !prompt.trim()}
-            >
-              Send
-            </button>
-          )}
+          {session ? (
+            <>
+              <ChangesPanel
+                sessionId={sessionId}
+                attached={attached}
+                sessionTitle={session.title}
+              />
+              <WorkspacePanel
+                sessionId={sessionId}
+                attached={attached}
+                directory={session.directory ?? `/workspace/${session.repoKey}`}
+              />
+            </>
+          ) : null}
+
+          {loadError ? (
+            <section className="card error">
+              <h2>Could not load this session</h2>
+              <p className="muted">{loadError}</p>
+            </section>
+          ) : null}
+
+          {state === 'pending' && !dispatching ? (
+            <p className="banner">Starting up — no messages yet.</p>
+          ) : null}
+          {transcriptError ? <p className="banner error">{transcriptError}</p> : null}
+
+          {(messages && messages.length > 0) || optimistic.length > 0 ? (
+            <MessageList
+              messages={messages ?? []}
+              trailing={optimistic}
+              scrollerRef={scroller}
+            />
+          ) : state === 'live' ? (
+            <p className="muted">No messages yet.</p>
+          ) : null}
+
+          {session?.phase === 'failed' ? (
+            <section className="card error">
+              <h2>Failed to start</h2>
+              {session.lastError ? (
+                <p className="muted mono">{session.lastError}</p>
+              ) : null}
+              <div className="actions">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => run(() => retrySession(sessionId))}
+                >
+                  Retry
+                </button>
+              </div>
+            </section>
+          ) : null}
         </div>
-      </form>
-    </main>
+      </div>
+
+      {/*
+        These three are all about sending, so they sit with the composer rather
+        than at the end of the conversation — where they would only be visible
+        if the reader happened to be scrolled to the bottom.
+      */}
+      <div className="composer-area">
+        {/*
+          A sleeping session is only worth calling out while it is still asleep.
+          Once a message has queued a wake, the progress banner says everything
+          this one would, and more usefully.
+        */}
+        {state === 'sleeping' && !dispatching ? (
+          <p className="banner">
+            {mirroredAt
+              ? `This session is asleep. Above is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
+              : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
+          </p>
+        ) : null}
+
+        {dispatching ? (
+          <p className="banner progress" role="status">
+            <i className="spinner" aria-hidden="true" />
+            {waking
+              ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
+              : 'Sandbox is ready, handing the message to the agent…'}
+          </p>
+        ) : null}
+
+        {actionError ? (
+          <p className="banner error" role="alert">
+            {actionError}
+          </p>
+        ) : null}
+
+        <form className="composer-box" onSubmit={send} aria-busy={busy}>
+          <textarea
+            className="prompt"
+            rows={2}
+            placeholder={
+              attached
+                ? 'Say something…'
+                : 'Session is asleep — sending wakes it and continues'
+            }
+            value={prompt}
+            disabled={busy || !canSend}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter breaks the line — but not while an
+              // input method is mid-composition, where Enter is how you accept
+              // the candidate you are typing.
+              if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                void send(event);
+              }
+            }}
+          />
+          <div className="composer-row">
+            {catalog ? (
+              <select
+                className="pill-select"
+                aria-label="Model"
+                value={model ?? ''}
+                disabled={busy || !canSend}
+                onChange={(event) => setModel(event.target.value)}
+              >
+                {catalog.models.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.displayName}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <span className="spacer" />
+            {/*
+              One button, because at any moment there is only one thing to do
+              with a running agent: stop it, or — when it is not running — send
+              the next message.
+            */}
+            {working ? (
+              <button
+                className="send-button"
+                type="button"
+                disabled={busy}
+                aria-label="Stop"
+                title="Stop"
+                onClick={() => run(() => abortSession(sessionId))}
+              >
+                <StopIcon />
+              </button>
+            ) : (
+              <button
+                className="send-button"
+                type="submit"
+                disabled={busy || !canSend || !prompt.trim()}
+                aria-label="Send"
+                title="Send"
+              >
+                <ArrowUpIcon />
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

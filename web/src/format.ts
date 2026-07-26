@@ -40,6 +40,39 @@ export function formatRelative(value: string | undefined): string {
   return formatTime(value);
 }
 
+export type RecencyBucket = 'today' | 'yesterday' | 'week' | 'older';
+
+export const RECENCY_LABELS: Record<RecencyBucket, string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  week: 'Previous 7 days',
+  older: 'Older'
+};
+
+/**
+ * Which heading a session belongs under in the sidebar.
+ *
+ * Calendar days rather than elapsed hours: something from 11pm last night is
+ * "yesterday" at 1am, not "today", which is how a person reads their own
+ * history.
+ */
+export function recencyBucket(value: string, now = new Date()): RecencyBucket {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) {
+    return 'older';
+  }
+  const startOf = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((startOf(now) - startOf(at)) / 86_400_000);
+  if (days <= 0) {
+    return 'today';
+  }
+  if (days === 1) {
+    return 'yesterday';
+  }
+  return days <= 7 ? 'week' : 'older';
+}
+
 export function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;

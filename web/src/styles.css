@@ -1,27 +1,82 @@
 /*
  * Design baseline for the Hub SPA.
  *
- * Mobile-first per the roadmap decision: the phone is a first-class surface
- * (queue work on the move, check progress, continue a thread before bed), so
- * the base rules target a narrow screen and desktop widens from there. The
- * palette matches the sleeping/entry pages the Worker still serves, so the two
- * do not look like different products during the transition.
+ * The shape is a sidebar of past sessions beside one conversation, the way a
+ * chat client is laid out, because that is what this app turned out to be: the
+ * session list is navigation, not a page you visit.
+ *
+ * Two palettes, chosen by the operating system. Neither is the "real" one — the
+ * tokens carry every colour, so a rule that names a hex value outside the two
+ * blocks below is a bug waiting for the other theme.
+ *
+ * Mobile-first per the roadmap decision: the phone is a first-class surface, so
+ * the base rules target a narrow screen (sidebar as a drawer) and desktop
+ * widens from there.
  */
 :root {
-  --bg: #0b0d10;
-  --surface: #15191f;
-  --surface-raised: #1b2027;
-  --border: #262c35;
-  --text: #e7eaf0;
-  --text-dim: #99a1ae;
-  --accent: #d6ff53;
-  --accent-ink: #101408;
+  --bg: #faf9f5;
+  --bg-sidebar: #f0eee6;
+  --surface: #ffffff;
+  --surface-raised: #ebe9e0;
+  --surface-sunken: #f5f4ee;
+  --border: rgba(31, 30, 26, 0.1);
+  --border-strong: rgba(31, 30, 26, 0.2);
+  --text: #1a1915;
+  --text-dim: #6e6b64;
 
+  --accent: #f92040;
+  --accent-hover: #e01b39;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(249, 32, 64, 0.12);
+
+  --ok: #3f8f5f;
+  --info: #3b82c4;
+  --warn: #d97a26;
+  --danger: #b0342a;
+  --danger-bg: #f8e9e7;
+  --danger-border: #e7c7c2;
+
+  --radius-sm: 8px;
   --radius: 12px;
-  --gap: 12px;
-  --page-pad: 16px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
 
-  color-scheme: dark;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: ui-serif, Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --gap: 12px;
+  --sidebar-width: 288px;
+  --column: 48rem;
+  --shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #262624;
+    --bg-sidebar: #1f1e1d;
+    --surface: #30302e;
+    --surface-raised: #3a3a37;
+    --surface-sunken: #1f1e1d;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.17);
+    --text: #f5f4ef;
+    --text-dim: #a8a49c;
+
+    --accent-hover: #fb4560;
+    --accent-soft: rgba(249, 32, 64, 0.22);
+
+    --ok: #5fb98a;
+    --info: #7cb5e8;
+    --warn: #e8a45f;
+    --danger: #e5827a;
+    --danger-bg: #3a2422;
+    --danger-border: #5b2c2c;
+
+    --shadow: 0 4px 20px rgb(0 0 0 / 0.4);
+  }
 }
 
 * {
@@ -29,42 +84,29 @@
 }
 
 html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font: 15px/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
 body {
-  /* Reach into the notch and home-indicator areas rather than letting the
-     browser letterbox the page. */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right)
-    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  /* The shell owns the viewport and every scroll happens inside it, so the
+     document itself must not scroll — otherwise a phone gets a second, empty
+     scroll axis behind the fixed layout. */
+  overflow: hidden;
 }
 
-.page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: var(--page-pad);
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-}
-
-.masthead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--gap);
-  padding-block: 8px;
-}
-
-.masthead h1 {
-  margin: 0;
-  font-size: 17px;
-  letter-spacing: 0.01em;
+::selection {
+  background: var(--accent-soft);
 }
 
 .muted {
@@ -72,75 +114,343 @@ body {
   font-size: 13px;
 }
 
-.card {
+.mono,
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* ---------- shell ---------- */
+
+.app {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  /* Flex items refuse to shrink below their content without this, which is what
+     makes long code blocks widen the whole layout instead of scrolling. */
+  min-width: 0;
+  height: 100%;
+}
+
+.content-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 52px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.content-header.bare {
+  border-bottom: 0;
+}
+
+.content-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.content-body {
+  flex: 1 1 0;
+  /* Without min-height the flex child grows to its content and the inner scroll
+     never engages. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-column,
+.composer-area {
+  width: 100%;
+  max-width: var(--column);
+  margin-inline: auto;
+  padding-inline: 16px;
+}
+
+.session-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding-block: 16px;
+}
+
+.composer-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+.session-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------- sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--sidebar-width);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding-left: env(safe-area-inset-left);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  flex: none;
+  min-height: 52px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin: 0 8px 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sidebar-new:hover {
+  background: var(--surface-raised);
+}
+
+.sidebar-history {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 8px;
+}
+
+.sidebar-group-label {
+  margin: 12px 0 4px;
+  padding-inline: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* 40px keeps the row inside a comfortable thumb target on a phone. */
+  min-height: 40px;
+  padding-right: 4px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+/* The link is a sibling of the menu button rather than its parent: a button
+   inside an anchor is not something HTML allows. */
+.row-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 4px 6px 10px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.session-row:hover {
+  background: var(--surface-raised);
+}
+
+.session-row.active {
+  background: var(--surface-raised);
+  font-weight: 500;
+}
+
+.session-row.deleting {
+  opacity: 0.5;
+}
+
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.row-dot.working {
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.row-dot.failed {
+  background: var(--danger);
+}
+
+.row-menu-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.row-menu-button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* On a mouse the menu button only appears for the row under the pointer;
+   without hover — a phone — it is always there, because there is nothing else
+   to reveal it. */
+@media (hover: hover) {
+  .session-row .row-menu-button {
+    opacity: 0;
+  }
+
+  .session-row:hover .row-menu-button,
+  .session-row:focus-within .row-menu-button,
+  .session-row .row-menu-button:focus-visible,
+  .session-row.menu-open .row-menu-button {
+    opacity: 1;
+  }
+}
+
+.row-menu {
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 4px;
+  z-index: 10;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px;
+  box-shadow: var(--shadow);
 }
 
-.card h2 {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.stat-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--gap);
-}
-
-.stat {
-  flex: 1 1 120px;
-  background: var(--surface-raised);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.stat b {
+.row-menu button {
   display: block;
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
 }
 
-.error {
-  border-color: #5b2c2c;
-  background: #241618;
+.row-menu button:hover:not(:disabled) {
+  background: var(--surface-raised);
 }
 
-.banner {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: 13px;
+.row-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-code,
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
+.row-menu button.danger {
+  color: var(--danger);
 }
 
-code {
-  color: var(--accent);
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  flex: none;
+  padding: 8px 16px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-error {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-empty {
+  padding: 12px 10px;
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 /* ---------- controls ---------- */
 
 .button {
   appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-raised);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
   color: var(--text);
-  /* 40px keeps every control inside a comfortable thumb target on a phone. */
   min-height: 40px;
-  padding: 0 14px;
+  padding: 0 16px;
   font: inherit;
   font-size: 14px;
   cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-raised);
 }
 
 .button:disabled {
@@ -155,245 +465,13 @@ code {
   font-weight: 600;
 }
 
+.button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
 .button.danger {
-  color: #ff9b9b;
-}
-
-textarea,
-select {
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--bg);
-  color: var(--text);
-  padding: 10px 12px;
-  /* Below 16px iOS Safari zooms the page on focus. */
-  font: inherit;
-  font-size: 16px;
-  min-height: 40px;
-}
-
-textarea {
-  resize: vertical;
-}
-
-textarea:focus-visible,
-select:focus-visible,
-.button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* ---------- composer ---------- */
-
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.composer-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.composer-controls select {
-  flex: 1 1 160px;
-  width: auto;
-  /* Flex items default to min-width:auto, so a long model name would refuse to
-     shrink and push the row past the viewport. */
-  min-width: 0;
-}
-
-.composer-controls .button {
-  flex: 1 1 100%;
-}
-
-.form-error {
-  margin: 0;
-  color: #ff9b9b;
-  font-size: 13px;
-}
-
-/* ---------- session list ---------- */
-
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-}
-
-.session {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.session-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.session-identity {
-  min-width: 0;
-}
-
-.session-identity h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  /* Titles come from the opening prompt and can be long. */
-  overflow-wrap: anywhere;
-}
-
-.session-identity p {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-}
-
-.session-meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-}
-
-.session-meta dt {
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.session-meta dd {
-  margin: 2px 0 0;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.session-error {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #241618;
-  color: #ff9b9b;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.actions .button {
-  flex: 1 1 auto;
-}
-
-.empty {
-  text-align: center;
-}
-
-.empty p {
-  margin: 6px 0 0;
-}
-
-/* ---------- status badge ---------- */
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.badge .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.badge-working .dot,
-.badge-starting .dot {
-  background: var(--accent);
-}
-
-.badge-idle .dot {
-  background: #6ee7a8;
-}
-
-.badge-queued .dot {
-  background: #7cc4ff;
-}
-
-.badge-failed .dot,
-.badge-error .dot {
-  background: #ff7a7a;
-}
-
-.badge-deleting .dot {
-  background: #ffb56b;
-}
-
-/* A running agent is the one state worth noticing from across the room. */
-.badge-working .dot {
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.25;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .badge-working .dot {
-    animation: none;
-  }
-}
-
-@media (min-width: 720px) {
-  :root {
-    --page-pad: 24px;
-  }
-
-  .session-meta {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .composer-controls .button {
-    flex: 0 0 auto;
-  }
-
-  .actions .button {
-    flex: 0 0 auto;
-  }
-}
-
-/* ---------- session page ---------- */
-
-.session-page {
-  /* Room for the composer pinned to the bottom of the viewport. Its height is
-     measured and published by the session page, because it genuinely varies:
-     the controls wrap differently by width, and the abort button comes and
-     goes. The fallback only has to cover the first paint. */
-  padding-bottom: calc(var(--composer-height, 200px) + 16px);
-}
-
-.session-masthead {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--bg);
-  padding-block: 10px;
+  color: var(--danger);
 }
 
 .link-button {
@@ -411,24 +489,244 @@ select:focus-visible,
   color: var(--text);
 }
 
-.session-heading h1 {
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.send-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+textarea,
+select,
+input[type='text'] {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 12px;
+  /* Below 16px iOS Safari zooms the page on focus. */
+  font: inherit;
+  font-size: 16px;
+  min-height: 40px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.pill-select {
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+textarea:focus-visible,
+select:focus-visible,
+input:focus-visible,
+a:focus-visible,
+.button:focus-visible,
+.link-button:focus-visible,
+.icon-button:focus-visible,
+.send-button:focus-visible,
+.file-entry:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- composer ---------- */
+
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The box carries the focus ring for everything inside it, so the field itself
+   is chrome-free. */
+.composer-box .prompt {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 4px 2px;
+  min-height: 0;
+  max-height: 200px;
+  resize: none;
+  outline: none;
+  field-sizing: content;
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.composer-row .pill-select {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* Legacy composer shape, still used by the publish form. */
+.composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-error {
   margin: 0;
-  font-size: 17px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ---------- new session page ---------- */
+
+.new-session {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  min-height: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.greeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font: 400 clamp(26px, 4vw, 32px) / 1.3 var(--font-serif);
+}
+
+.greeting .spark {
+  flex: none;
+  color: var(--accent);
+}
+
+/* ---------- cards, banners ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.card.error h2,
+.banner.error {
+  color: var(--danger);
+}
+
+.banner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.banner.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.banner.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions .button {
+  flex: 1 1 auto;
+}
+
+.session-meta-line {
+  margin: 0;
   overflow-wrap: anywhere;
-}
-
-.session-heading p {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-}
-
-.session-identity a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.session-identity a:hover {
-  text-decoration: underline;
 }
 
 /* ---------- messages ---------- */
@@ -436,7 +734,8 @@ select:focus-visible,
 .messages {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  padding-block: 8px;
 }
 
 .message-body {
@@ -452,8 +751,14 @@ select:focus-visible,
   align-self: flex-end;
   max-width: 85%;
   background: var(--surface-raised);
-  border-radius: var(--radius);
-  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+}
+
+.message.assistant .part-text {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.65;
 }
 
 .part-text {
@@ -469,21 +774,25 @@ select:focus-visible,
 }
 
 .part-text pre {
-  background: var(--surface);
+  background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   /* Code must scroll inside its block rather than widening the page. */
   overflow-x: auto;
 }
 
 .part-text code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 
 .part-text pre code {
-  color: var(--text);
+  background: none;
+  padding: 0;
 }
 
 .part-text table {
@@ -520,13 +829,13 @@ select:focus-visible,
   gap: 8px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   font-size: 13px;
 }
 
 .part-tool .tool-name {
-  color: var(--accent);
+  color: var(--text-dim);
   flex: 0 0 auto;
 }
 
@@ -544,7 +853,7 @@ select:focus-visible,
 }
 
 .tool-error {
-  border-color: #5b2c2c;
+  border-color: var(--danger-border);
 }
 
 .part-todo {
@@ -566,7 +875,7 @@ select:focus-visible,
 
 .message-failure {
   margin: 0;
-  color: #ff9b9b;
+  color: var(--danger);
   font-size: 13px;
 }
 
@@ -582,20 +891,65 @@ select:focus-visible,
   overflow-wrap: anywhere;
 }
 
-/* ---------- wake progress ---------- */
+/* ---------- status badge ---------- */
 
-.banner.progress {
-  display: flex;
+.badge {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  color: var(--text-dim);
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.badge-working .dot,
+.badge-starting .dot {
+  background: var(--accent);
+}
+
+.badge-idle .dot {
+  background: var(--ok);
+}
+
+.badge-queued .dot {
+  background: var(--info);
+}
+
+.badge-failed .dot,
+.badge-error .dot {
+  background: var(--danger);
+}
+
+.badge-deleting .dot {
+  background: var(--warn);
+}
+
+/* A running agent is the one state worth noticing from across the room. */
+.badge-working .dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
 }
 
 .spinner {
   flex: none;
   width: 12px;
   height: 12px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
@@ -605,64 +959,6 @@ select:focus-visible,
   to {
     transform: rotate(360deg);
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
-}
-
-.sticky-composer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 3;
-  border-radius: 0;
-  border-left: 0;
-  border-right: 0;
-  border-bottom: 0;
-  /* Clear the home indicator on a phone. */
-  padding-bottom: calc(14px + env(safe-area-inset-bottom));
-}
-
-@media (min-width: 720px) {
-  .sticky-composer {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(720px, 100%);
-    border-radius: var(--radius) var(--radius) 0 0;
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-  }
-}
-
-/* The session composer is pinned over the conversation, so it must not grow
-   into half the viewport: its controls share one row rather than stacking. */
-.sticky-composer .composer-controls .button {
-  flex: 1 1 auto;
-}
-
-.sticky-composer .composer-controls select {
-  flex: 1 1 100%;
-}
-
-@media (min-width: 520px) {
-  .sticky-composer .composer-controls select {
-    flex: 1 1 160px;
-  }
-}
-
-/* ---------- list controls ---------- */
-
-.list-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--gap);
-  flex-wrap: wrap;
 }
 
 /* ---------- changes panel ---------- */
@@ -705,7 +1001,7 @@ select:focus-visible,
   flex: 0 0 auto;
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--surface-raised);
   color: var(--text-dim);
@@ -713,12 +1009,12 @@ select:focus-visible,
 
 .file-status.status-deleted,
 .file-status.status-conflicted {
-  color: #ff9d9d;
+  color: var(--danger);
 }
 
 .file-status.status-added,
 .file-status.status-untracked {
-  color: var(--accent);
+  color: var(--ok);
 }
 
 /* A diff is wide by nature: it scrolls inside its own box rather than making
@@ -728,7 +1024,7 @@ select:focus-visible,
   overflow: auto;
   margin: 8px 0 0;
   padding: 10px;
-  background: var(--bg);
+  background: var(--surface-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 12px;
@@ -773,6 +1069,7 @@ select:focus-visible,
 
 .workspace-tabs .link-button.active {
   color: var(--accent);
+  font-weight: 600;
 }
 
 .file-path {
@@ -839,7 +1136,7 @@ select:focus-visible,
   overflow: auto;
   margin: 8px 0 0;
   padding: 10px;
-  background: var(--bg);
+  background: var(--surface-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 12px;
@@ -857,12 +1154,82 @@ select:focus-visible,
   font-size: 12px;
 }
 
+/* A terminal is dark in both themes: the colours a shell prints are written for
+   a dark background, and xterm's palette is fixed when it is constructed. */
 .terminal-host {
   height: 42vh;
   min-height: 220px;
   padding: 8px;
-  background: var(--bg);
+  background: #1f1e1d;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+}
+
+/* ---------- phone: the sidebar becomes a drawer ---------- */
+
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(85vw, 320px);
+    transform: translateX(-100%);
+    /* Hidden rather than merely off-screen, so a closed drawer is not in the
+       tab order. */
+    visibility: hidden;
+    transition:
+      transform 0.2s ease,
+      visibility 0s 0.2s;
+  }
+
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.2s ease;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    padding: 0;
+    background: rgb(0 0 0 / 0.4);
+  }
+}
+
+@media (min-width: 768px) {
+  .hamburger {
+    display: none;
+  }
+
+  .content-header,
+  .session-column,
+  .composer-area {
+    padding-inline: 24px;
+  }
+
+  /* The iOS zoom-on-focus floor only applies where iOS is: on a wider screen
+     these can be the size they want to be. */
+  .pill-select {
+    font-size: 13px;
+  }
+
+  .composer-box .prompt {
+    font-size: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge-working .dot,
+  .row-dot.working,
+  .spinner {
+    animation: none;
+  }
+
+  .sidebar {
+    transition: none;
+  }
 }
