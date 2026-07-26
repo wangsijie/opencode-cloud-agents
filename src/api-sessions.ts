@@ -18,10 +18,19 @@ import {
   resolveSandbox,
   unknownRuntimeStatus
 } from './instance-access';
-import { ensureLifecycleInitialized } from './instance-runtime';
+import {
+  ensureLifecycleInitialized,
+  OPENCODE_PORT,
+  RUNTIME_EPOCH_HEADER
+} from './instance-runtime';
 import type { InstanceView } from './instances';
 import { DEFAULT_MODEL_REF, isModelRef } from './opencode-config';
 import { findRepo, isRepoKey, repoWorkspaceDirectory } from './repos';
+import {
+  closedSessionEventStream,
+  forwardSessionEventStream,
+  type SessionStateEvent
+} from './session-events';
 import {
   deriveLastActivityAt,
   deriveSessionStatus,
@@ -95,6 +104,13 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       'X-OpenCode-Hub-Transcript-Source': transcript.source,
       'X-OpenCode-Hub-Transcript-At': transcript.observedAt
     });
+  }
+
+  if (action === 'events') {
+    if (request.method !== 'GET') {
+      return methodNotAllowed('GET');
+    }
+    return await streamSessionEvents(env, record);
   }
 
   if (request.method !== 'POST') {
@@ -218,6 +234,75 @@ async function getSessionView(
     status: deriveSessionStatus(record.phase, view.runtime),
     lastActivityAt: deriveLastActivityAt(record)
   };
+}
+
+/**
+ * Attach to a session's live event stream, without ever starting a container.
+ *
+ * The container publishes one server-wide stream, so the Worker reads it and
+ * forwards only this session's frames. When there is nothing to attach to the
+ * response is still a valid stream: it reports the state and closes, and the
+ * browser's own reconnect is what eventually notices a wake.
+ */
+async function streamSessionEvents(
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  const state: SessionStateEvent = {
+    state: 'live',
+    sessionId: record.id,
+    ...(record.opencodeSessionId
+      ? { opencodeSessionId: record.opencodeSessionId }
+      : {}),
+    at: new Date().toISOString()
+  };
+
+  if (!record.opencodeSessionId) {
+    return closedSessionEventStream({ ...state, state: 'pending' });
+  }
+  const repo = findRepo(record.repoKey);
+  if (!repo) {
+    return closedSessionEventStream({
+      ...state,
+      state: 'error',
+      error: `Unknown repository ${record.repoKey}`
+    });
+  }
+
+  const instance = await getHub(env).getInstance(record.instanceId);
+  if (!instance || instance.lifecycle !== 'ready') {
+    return closedSessionEventStream({ ...state, state: 'sleeping' });
+  }
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  if (!runtimeEpoch) {
+    return closedSessionEventStream({ ...state, state: 'sleeping' });
+  }
+
+  const target = new URL(`http://localhost:${OPENCODE_PORT}/event`);
+  target.searchParams.set('directory', repoWorkspaceDirectory(repo));
+  const upstream = await resolveSandbox(env, instance).containerFetch(
+    new Request(target.toString(), {
+      headers: {
+        accept: 'text/event-stream',
+        [RUNTIME_EPOCH_HEADER]: runtimeEpoch
+      }
+    }),
+    OPENCODE_PORT
+  );
+
+  if (!upstream.ok || !upstream.body) {
+    // A runtime that stopped between the epoch read and this request answers
+    // with the sleeping gate, which is a state and not a failure.
+    await upstream.body?.cancel().catch(() => undefined);
+    const gone = await isRuntimeGoneError(env, record.instanceId, runtimeEpoch);
+    return closedSessionEventStream({
+      ...state,
+      state: gone ? 'sleeping' : 'error',
+      ...(gone ? {} : { error: `Event stream unavailable (${upstream.status})` })
+    });
+  }
+
+  return forwardSessionEventStream(upstream.body, state);
 }
 
 /**

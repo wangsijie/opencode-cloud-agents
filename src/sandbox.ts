@@ -24,10 +24,12 @@ import {
   truncateOutput
 } from './http';
 import type { InstanceRuntimeStatus } from './instances';
-import type {
-  CreateOpencodeSessionInput,
-  ListOpencodeSessionMessagesInput,
-  PromptOpencodeSessionInput
+import {
+  OPENCODE_PORT,
+  RUNTIME_EPOCH_HEADER,
+  type CreateOpencodeSessionInput,
+  type ListOpencodeSessionMessagesInput,
+  type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
   DEFAULT_MODEL_ID,
@@ -62,8 +64,6 @@ const PURGE_STORAGE_KEY = 'instance:purge-requested';
 const IDENTITY_STORAGE_KEY = 'instance:identity';
 const RUNTIME_GATE_STORAGE_KEY = 'runtime:gate';
 const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
-const OPENCODE_PORT = 4096;
-const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;

@@ -15,6 +15,16 @@ import type { LifecycleStatus } from './lifecycle';
 const WAKE_POLL_INTERVAL_MS = 500;
 const WAKE_POLL_ATTEMPTS = 60;
 
+/** The container port the OpenCode server listens on. */
+export const OPENCODE_PORT = 4096;
+
+/**
+ * Every container request carries the runtime generation it was issued for, so
+ * a request that survives a stop/start lands in an error instead of silently
+ * reaching a newer container.
+ */
+export const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
+
 export interface CreateOpencodeSessionInput {
   title: string;
   directory: string;

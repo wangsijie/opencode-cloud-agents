@@ -26,10 +26,12 @@ import {
   resolveSandbox
 } from './instance-access';
 import type { Sandbox } from './sandbox';
+import {
+  OPENCODE_PORT,
+  RUNTIME_EPOCH_HEADER
+} from './instance-runtime';
 import { openCodeRouteRequiresWorkLease } from './opencode-activity';
 
-const OPENCODE_PORT = 4096;
-const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
 export const UI_INSTANCE_PARAM = '_hub';
 export const UI_RUNTIME_PARAM = '_runtime';
 export const UI_COMPAT_VERSION = '4';

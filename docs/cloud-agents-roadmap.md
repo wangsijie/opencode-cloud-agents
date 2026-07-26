@@ -255,7 +255,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 | 步骤 | 内容 | 状态 |
 |------|------|------|
 | S1 | `GET /api/sessions/:id/messages` 被动只读 + 会话徽章派生 | ✅ 2026-07-26 |
-| S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | 待做 |
+| S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | ✅ 2026-07-26 |
 | S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 待做 |
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | 待做 |
 | S5 | 列表页 + composer 迁入 SPA | 待做 |
@@ -279,6 +279,37 @@ force-stop 后连读 3 次全是 `sleeping` 且容器保持 `stopped` / `platfor
 **S1 发现（影响 S6）**：实际 part 类型比下面列的多，出现了 `step-start` / `step-finish`，
 渲染器应直接跳过而不是当未知类型显示占位；每个 part 自带稳定 `id`（`prt_…`），SSE 增量
 与全量拉取的合流可直接按它做 map，不必自造 key。
+
+**S2 实际交付（2026-07-26）**：`src/session-events.ts` 承载 SSE 转发。OpenCode 只有一条
+服务器级事件流 `/event`，Worker 用 `TransformStream` 把上游 body 管过来，按
+`properties.sessionID` 过滤后以自有协议重发：`event: hub` 是 Hub 自己的状态帧
+（`live` / `sleeping` / `pending` / `ended` / `error`），`event: opencode` 是逐字转发的容器
+事件。同 S1 的被动约束——不取 work lease、不唤醒容器；挂着的流也拦不住 idle-stop。
+没有可接的目标时（休眠 / OpenCode 会话还没建）依然返回合法 SSE：报一帧状态就关。
+**流会结束，且结束不是错误**——客户端是 `EventSource`，靠 `retry: 15000` 自己重连，重连
+拿到的状态帧就是会话页发现「醒了 / 睡了」的机制。帧解析（跨 chunk 切分、多行 data、
+sessionID 归属）拆成纯函数并单测，共 32 个用例。`OPENCODE_PORT` /
+`RUNTIME_EPOCH_HEADER` 顺手从 sandbox.ts 与 stock-ui.ts 的重复定义收敛进
+`instance-runtime.ts`。
+
+本地实测（wrangler dev + 真实容器）：挂流期间发 prompt，转发到 15–22 帧
+（`message.updated` / `message.part.updated` / `message.part.delta` / `session.status` /
+`session.diff`，以 `session.idle` 收尾），每一帧的 sessionID 都是本会话；休眠会话读到
+一帧 `sleeping` 且容器保持 `stopped`；idle 但醒着的会话挂流 90 秒不断不报错。
+**跨会话隔离实测**：在同一容器里另开一个 OpenCode 会话并发 prompt，网关原始流收到它的
+36 帧，本会话的 `/events` 转发 0 帧。
+
+**S2 发现（两条都很坑）**：
+
+1. `/event` 的 `directory` 查询参数是必需的——不带它时流里只有 `server.connected` /
+   `server.heartbeat` 等服务器级事件，一条会话事件都不会来。
+2. **不能自己手写 pump。** 最初用 `ReadableStream` + `pull` 里 `Promise.race(读, 定时器)`
+   实现心跳，结果被 Workers runtime 判定为「代码挂死、永不产生响应」而掐断请求
+   （日志里的 `The Workers runtime canceled this request…`）。两个诱因叠加：容器被停时
+   上游读**既不 resolve 也不 reject，而是永远挂着**；而会话 idle 之后上游只剩
+   `server.heartbeat`，全被过滤掉，于是这条流一个字节都不产出。改成
+   `upstream.pipeThrough(filter)` 后，runtime 看到的是一条真实 socket 读，问题整体消失，
+   心跳与存活探测都不再需要。
 
 原范围：
 
