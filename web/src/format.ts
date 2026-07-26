@@ -1,4 +1,4 @@
-import type { SessionStatus, SessionView } from './api';
+import type { SessionStatus, SessionUsage, SessionView } from './api';
 
 const TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
@@ -33,6 +33,30 @@ export function formatRelative(value: string | undefined): string {
     return `${Math.floor(elapsedMs / (60 * 60_000))} 小时前`;
   }
   return formatTime(value);
+}
+
+function formatTokens(value: number): string {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `${(value / 1_000).toFixed(1)}k`
+      : String(value);
+}
+
+/**
+ * Tokens and cost in one line.
+ *
+ * Cache reads are folded into the input total rather than shown separately: the
+ * split matters for tuning a prompt, not for the question this line answers,
+ * which is how much this conversation has consumed. The cost is OpenCode's own
+ * figure, so it already prices cached tokens correctly.
+ */
+export function formatUsage(usage: SessionUsage): string {
+  const input = usage.inputTokens + usage.cacheReadTokens;
+  const output = usage.outputTokens + usage.reasoningTokens;
+  const cost =
+    usage.cost >= 0.01 ? `$${usage.cost.toFixed(2)}` : `$${usage.cost.toFixed(4)}`;
+  return `↑${formatTokens(input)} ↓${formatTokens(output)} · ${cost}`;
 }
 
 export const STATUS_LABELS: Record<SessionStatus, string> = {

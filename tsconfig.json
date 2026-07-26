@@ -9,7 +9,11 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // `src/github-catalog.ts` imports a validator from `src/repos.ts` at
+    // runtime, and the node test runner resolves relative specifiers literally,
+    // so that one import names the file it means.
+    "allowImportingTsExtensions": true
   },
   "include": ["worker-configuration.d.ts", "src/**/*.ts"]
 }

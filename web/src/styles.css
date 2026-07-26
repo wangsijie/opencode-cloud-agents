@@ -654,3 +654,106 @@ select:focus-visible,
     flex: 1 1 160px;
   }
 }
+
+/* ---------- list controls ---------- */
+
+.list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  flex-wrap: wrap;
+}
+
+/* ---------- changes panel ---------- */
+
+.changes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.changes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.changes-header .link-button {
+  color: var(--text);
+}
+
+.changed-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.changed-files li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.file-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+}
+
+.file-status.status-deleted,
+.file-status.status-conflicted {
+  color: #ff9d9d;
+}
+
+.file-status.status-added,
+.file-status.status-untracked {
+  color: var(--accent);
+}
+
+/* A diff is wide by nature: it scrolls inside its own box rather than making
+   the whole page scroll sideways on a phone. */
+.diff {
+  max-height: 45vh;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.diff-view summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.publish-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-dim);
+}

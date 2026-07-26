@@ -19,10 +19,9 @@ import {
   methodNotAllowed
 } from './http';
 import { Hub } from './hub';
-import { requireReadyInstance } from './instance-access';
+import { getHub, requireReadyInstance } from './instance-access';
 import { LifecycleCoordinator } from './lifecycle';
 import { MODEL_OPTIONS } from './opencode-config';
-import { REPOS } from './repos';
 import { Sandbox } from './sandbox';
 import { SessionAgent } from './session-agent';
 import {
@@ -88,7 +87,15 @@ export default {
       }
 
       if (url.pathname === '/api/catalog' && request.method === 'GET') {
-        return json({ repos: REPOS, models: MODEL_OPTIONS });
+        // The repository list is GitHub's answer, cached by the Hub. A failure
+        // with nothing cached raises, and the dashboard renders that rather
+        // than an empty picker that would read as "you have no repositories".
+        return json({
+          repos: await getHub(env).listRepoCatalog(
+            url.searchParams.get('refresh') === '1'
+          ),
+          models: MODEL_OPTIONS
+        });
       }
 
       if (url.pathname === '/hub/bootstrap.js') {

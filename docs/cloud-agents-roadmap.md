@@ -143,8 +143,8 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 |------|------|
 | 开工顺序 | 最先执行 promptAsync spike（约半天），验证 D1 后再按 M1 起推进 |
 | 前端栈 | React + Vite + TS（评估过 Solid 借鉴 opencode share 页，按日常栈定 React） |
-| repo 列表来源 | 静态 `src/repos.ts` 起步，动态化留给 M6 |
-| 分支策略 | 不自动建分支，默认分支直接干；产出管理放 M6 设计 |
+| repo 列表来源 | 静态 `src/repos.ts` 起步，动态化留给 M6（已在 M6 落地：`GITHUB_TOKEN` 存在时走 GitHub API） |
+| 分支策略 | ~~不自动建分支，默认分支直接干~~；M6 定案：永不提交默认分支，发布落在 `opencode/<session-id>` |
 | 空闲休眠时长 | 维持 10 分钟；M5 上线后再评估是否缩短 |
 | 移动端 | 手机是一等场景，M3 起移动优先布局 |
 | 多用户 | 单用户模型，不预留 owner 字段 |
@@ -152,7 +152,9 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 ## 四、里程碑
 
 > 开工顺序：最先做 M2 里的 promptAsync spike（见决策记录），然后 M1 → M2 → M3 → M4 → M5。
-> M1–M5 已全部完成（2026-07-26），目标形态闭环；余下的 M6 是按需排期的选做池。
+> M1–M5 已全部完成（2026-07-26），目标形态闭环。M6 选做池里的实时事件镜像、代码产出闭环、
+> 动态仓库列表、会话管理四项也已完成（2026-07-26），余下冷启动优化、终端/文件浏览、
+> 退役 stock UI 与清理。
 
 ### M1 · 运行时 repo 置备（去模板化） — ✅ 完成（2026-07-25）
 
@@ -585,16 +587,57 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
 
 ### M6 · 打磨与增强（按需排期的选做池）
 
-- **实时事件镜像**：醒着时事件流持续写镜像，历史零丢失，列表页"正在输入"级别的实时性。
-- **代码产出闭环**（按决策记录整体在此设计）：是否/何时建分支、changed-files/diff 视图
-  （SDK 已有 `session.diff` / `vcs.diff`）、一键 commit / push / 建 PR（`gh` 已内置）。
-- **动态仓库列表**：用 `gh` 凭据调 GitHub API 替换静态 `repos.ts`。
-- **会话管理**：归档/删除、自动标题、token 用量与成本展示、完成时通知（webhook / push）。
+四项已完成（2026-07-26），余下三项仍在池子里。
+
+- ✅ **实时事件镜像**：Sandbox DO 在 gate 进入 `running` 后订阅容器 `/event`，命中本会话的
+  帧把 transcript 标脏并触发一次 3s 尾随防抖导出（`reason: 'live'`）。探针驱动的 60s
+  刷新退居安全网，并负责 DO 重启后重新挂上订阅；purge 与任何非 running 相位都会断开。
+  崩溃丢失窗口从"一个探针间隔"降到"数秒"，列表页的 `mirroredAt`/`messageCount`/用量也
+  因此是秒级新鲜的。
+- ✅ **代码产出闭环**：新增 `src/session-changes.ts`（纯逻辑：porcelain 解析、shell 转义、
+  分支名校验、发布分支决策）+ Sandbox `readSessionChanges`/`publishSessionChanges` +
+  `GET /api/sessions/:id/changes`、`POST /api/sessions/:id/publish` + 会话页 `ChangesPanel`。
+  **分支决策（补上决策记录里悬着的那条）**：永不提交到默认分支；默认落在
+  `opencode/<session-id>`，首次发布创建、之后复用；已在别的分支上则继续用当前分支；
+  只有显式传 `branch` 才能改。PR 走镜像内置的 `gh`，已存在的 PR 直接回链不报错。
+  未跟踪文件列进文件表但不进 diff（读操作不该动 index），UI 明说这一点。
+- ✅ **动态仓库列表**：Worker 调 GitHub API 列出可 push 的仓库（Hub DO 缓存 10 分钟，
+  失败回落上次缓存；没有缓存就报错，前端显示错误而不是空下拉），过滤 archived/只读。
+  token 按仓库现有惯例直接写在 `src/github-catalog.ts` 里（与 `docker/auth`、`docker/ssh`
+  同一档），`GITHUB_TOKEN` secret 可覆盖。实测列出 149 个可用仓库，按最近 push 排序。
+  静态目录表已删除——`src/repos.ts` 现在只剩条目类型、安全校验和 `/workspace/<repoKey>`
+  路径约定。composer 有「刷新仓库」按钮走 `?refresh=1` 跳过缓存。**顺带修掉一个隐患**：仓库定义现在在建会话时钉死到
+  session/instance/Sandbox 三处记录上，`findRepo(repoKey)` 不再出现在服务存量会话的路径上，
+  "仓库离开目录表 → 唤醒被拒"这条失败模式消失。
+- ✅ **会话管理**：归档（`PATCH /api/sessions/:id {archived}`，列表默认隐藏、发消息自动取消
+  归档、容器与历史全留着，与删除明确区分）、重命名（双击标题，`titleLocked` 之后不再被
+  自动标题覆盖）、自动标题（镜像携带 OpenCode 自己起的 title，`displayTitle` 优先用它）、
+  token 用量与成本（从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）、
+  完成时通知（浏览器原生 Notification，不引入 push 服务与服务端订阅，代价是只在标签页
+  开着时有效——这一点在 README 里明说了）。
 - **冷启动优化**：测量并压缩 wake→可响应耗时（镜像瘦身、快照策略）。
-- **自建 UI 补齐逃生舱能力**：diff 视图、终端（PTY WebSocket 已可代理）、文件浏览。
+- **自建 UI 补齐逃生舱能力**：终端（PTY WebSocket 已可代理）、文件浏览。（diff 已随
+  产出闭环落地。）
 - **退役 stock UI**：补齐后删除 `/ui/` 资产代理、bootstrap、入口 bundle 补丁，
   `/gateway/` 收敛为 Worker 内部通信；OpenCode 升级不再受 UI 补丁牵制。
 - **清理**：退役 Logto 模板镜像与 `LogtoSandbox`、文档收敛。
+
+M6 偏差与备注：
+
+- 动态仓库列表用的是 Worker 侧的 token，不是原计划的"容器内 `gh` 凭据"。
+  原因是目录表在**建会话时**就要用，而那正是还没有任何容器的时刻；镜像里的 `gh` 只能在
+  醒着的容器里用，为了列个下拉去冷启一个容器不划算。clone 仍走镜像里的 SSH key，
+  所以 token 决定"能选什么"、key 决定"能 clone 什么"，两者要分别授权。
+- 动态目录表下 `repoKey` 由仓库名派生，与原静态表可能不同（`logto-io/cloud` 现在是
+  `cloud`，静态表里是 `logto-cloud`）。存量会话不受影响：目录由 `repoKey` 直接推导，
+  remote 与默认分支改为问 checkout 自己（`origin/HEAD`），整条服务存量会话的路径上不再
+  需要目录表。只有新建会话会用新 key。
+- 因此目录表现在只在「建会话」这一步是必需的。仓库改名、权限撤销、GitHub 挂掉都不会
+  影响已经跑起来的会话——这是删掉静态兜底之后仍然敢只留一个数据源的前提。
+- 通知没有做 webhook/push（原范围里写的是 "webhook / push"）。浏览器通知是自包含、
+  零外部依赖的一半；真正的离线推送要引入推送服务与订阅存储，等有实际需要再排。
+- `tsconfig.json` 打开了 `allowImportingTsExtensions`：`src/github-catalog.ts` 需要在运行时
+  从 `src/repos.ts` 取校验函数，而 node 的测试运行器按字面解析相对路径。
 
 ## 五、风险与开放问题
 

@@ -1,27 +1,62 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { REPOS, findRepo, isRepoKey } from '../src/repos.ts'
+import {
+  WORKSPACE_ROOT,
+  isSafeRepoDefinition,
+  isSafeRepoKey,
+  repoWorkspaceDirectory
+} from '../src/repos.ts'
 
-test('catalog is non-empty and importable (module-load validation passed)', () => {
-  assert.ok(REPOS.length > 0)
-})
-
-test('findRepo and isRepoKey agree with the catalog', () => {
-  for (const repo of REPOS) {
-    assert.equal(findRepo(repo.repoKey), repo)
-    assert.ok(isRepoKey(repo.repoKey))
+function definition(overrides = {}) {
+  return {
+    repoKey: 'logto',
+    displayName: 'logto-io/logto',
+    cloneUrl: 'git@github.com:logto-io/logto.git',
+    defaultBranch: 'master',
+    ...overrides
   }
-  assert.equal(findRepo('not-a-repo'), undefined)
-  assert.equal(isRepoKey('not-a-repo'), false)
-  assert.equal(isRepoKey(42), false)
-  assert.equal(isRepoKey(undefined), false)
+}
+
+test('a checkout path is derivable from the key alone', () => {
+  // This is what lets a session outlive the catalog entry it was created from.
+  assert.equal(repoWorkspaceDirectory('logto'), `${WORKSPACE_ROOT}/logto`)
 })
 
-test('repo directories stay below /workspace with safe names', () => {
-  for (const repo of REPOS) {
-    assert.match(repo.repoKey, /^[a-z0-9][a-z0-9-]{0,63}$/)
-    assert.ok(!repo.repoKey.includes('..'))
-    assert.match(repo.cloneUrl, /^(?:https:\/\/|git@)/)
+test('repository keys stay usable as a path segment', () => {
+  for (const key of ['logto', 'v2ray-docker', 'a', 'a0-b']) {
+    assert.ok(isSafeRepoKey(key), key)
+  }
+  for (const key of [
+    '',
+    '-leading',
+    'Upper',
+    'has space',
+    '..',
+    'a..b',
+    'a/b',
+    '$(x)',
+    'a'.repeat(65),
+    42,
+    undefined
+  ]) {
+    assert.equal(isSafeRepoKey(key), false, String(key))
+  }
+})
+
+test('catalog entries are validated before they can reach a shell', () => {
+  assert.ok(isSafeRepoDefinition(definition()))
+  assert.ok(isSafeRepoDefinition(definition({ cloneUrl: 'https://github.com/o/r.git' })))
+  for (const broken of [
+    undefined,
+    null,
+    'nope',
+    definition({ repoKey: '../etc' }),
+    definition({ displayName: '' }),
+    definition({ defaultBranch: 'a branch' }),
+    definition({ cloneUrl: 'file:///etc/passwd' }),
+    definition({ cloneUrl: 'git@github.com:o/r.git; rm -rf /' })
+  ]) {
+    assert.equal(isSafeRepoDefinition(broken), false)
   }
 })

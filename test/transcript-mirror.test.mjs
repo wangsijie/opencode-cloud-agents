@@ -7,6 +7,7 @@ import {
   getTranscriptMirror,
   parseTranscriptMirror,
   putTranscriptMirror,
+  summarizeSessionUsage,
   summarizeTranscriptMessages,
   transcriptMirrorKey,
   transcriptMirrorPrefix,
@@ -15,6 +16,19 @@ import {
 
 function message(id, time) {
   return { info: { id, role: 'assistant', ...(time ? { time } : {}) }, parts: [] }
+}
+
+/** Assistant messages that reported no tokens still count as messages. */
+function emptyUsage(assistantMessages) {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+    assistantMessages
+  }
 }
 
 /** Enough of the R2 binding for the mirror's own reads and writes. */
@@ -54,22 +68,62 @@ test('mirror keys stay under a per-session prefix', () => {
 })
 
 test('the summary follows the newest message, preferring its completion time', () => {
-  assert.deepEqual(summarizeTranscriptMessages([]), { messageCount: 0 })
+  assert.deepEqual(summarizeTranscriptMessages([]), {
+    messageCount: 0,
+    usage: emptyUsage(0)
+  })
   assert.deepEqual(
     summarizeTranscriptMessages([
       message('msg_1', { created: 1_000 }),
       message('msg_2', { created: 2_000, completed: 3_000 })
     ]),
-    { messageCount: 2, lastMessageAt: new Date(3_000).toISOString() }
+    {
+      messageCount: 2,
+      lastMessageAt: new Date(3_000).toISOString(),
+      usage: emptyUsage(2)
+    }
   )
   // A message still being generated has no completion time yet.
   assert.deepEqual(
     summarizeTranscriptMessages([message('msg_1', { created: 5_000 })]),
-    { messageCount: 1, lastMessageAt: new Date(5_000).toISOString() }
+    {
+      messageCount: 1,
+      lastMessageAt: new Date(5_000).toISOString(),
+      usage: emptyUsage(1)
+    }
   )
   // Nor does one OpenCode reported without any clock at all.
   assert.deepEqual(summarizeTranscriptMessages([message('msg_1')]), {
-    messageCount: 1
+    messageCount: 1,
+    usage: emptyUsage(1)
+  })
+})
+
+test('usage adds up assistant messages and ignores everything else', () => {
+  const assistant = (cost, input, output) => ({
+    info: {
+      id: `msg_${input}`,
+      role: 'assistant',
+      cost,
+      tokens: { input, output, reasoning: 1, cache: { read: 2, write: 3 } }
+    },
+    parts: []
+  })
+  const usage = summarizeSessionUsage([
+    { info: { id: 'msg_0', role: 'user' }, parts: [] },
+    assistant(0.01, 100, 20),
+    assistant(0.02, 300, 40),
+    // A message OpenCode reported without any accounting at all.
+    { info: { id: 'msg_x', role: 'assistant' }, parts: [] }
+  ])
+  assert.deepEqual(usage, {
+    inputTokens: 400,
+    outputTokens: 60,
+    reasoningTokens: 2,
+    cacheReadTokens: 4,
+    cacheWriteTokens: 6,
+    cost: 0.01 + 0.02,
+    assistantMessages: 3
   })
 })
 
@@ -87,7 +141,8 @@ test('a built mirror carries its own summary', () => {
     mirroredAt: '2026-07-26T00:00:00.000Z',
     reason: 'idle-stop',
     messageCount: 1,
-    lastMessageAt: new Date(1_000).toISOString()
+    lastMessageAt: new Date(1_000).toISOString(),
+    usage: emptyUsage(1)
   })
 })
 
@@ -111,6 +166,23 @@ test('anything that is not a current-schema mirror reads as no mirror', () => {
   ]) {
     assert.equal(parseTranscriptMirror(broken), undefined)
   }
+})
+
+test('a live export reads back as one, and an unknown reason degrades', () => {
+  const base = {
+    schemaVersion: 1,
+    sessionId: 'session-1',
+    opencodeSessionId: 'ses_1',
+    mirroredAt: '2026-07-26T00:00:00.000Z',
+    messages: []
+  }
+  assert.equal(parseTranscriptMirror({ ...base, reason: 'live' }).reason, 'live')
+  // A mirror written by a newer deployment must still be readable, so an
+  // unrecognized reason falls back rather than voiding the whole object.
+  assert.equal(
+    parseTranscriptMirror({ ...base, reason: 'telepathy' }).reason,
+    'refresh'
+  )
 })
 
 test('malformed messages are dropped rather than failing the whole read', () => {

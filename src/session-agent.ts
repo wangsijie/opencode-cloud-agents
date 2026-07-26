@@ -28,7 +28,7 @@ import {
   type OpencodeSessionActivityInput
 } from './instance-runtime';
 import { isModelRef, parseModelRef } from './opencode-config';
-import { findRepo } from './repos';
+import { WORKSPACE_ROOT } from './repos';
 import type { SessionPhase, SessionStatePatch } from './sessions';
 
 const STATE_KEY = 'session-agent:state';
@@ -178,8 +178,10 @@ export class SessionAgent extends DurableObject<Env> {
       }
       return this.snapshot();
     }
-    if (!findRepo(input.repoKey)) {
-      throw new Error(`Unknown repository: ${input.repoKey}`);
+    // The catalog is dynamic and the caller has already resolved it, so what
+    // matters here is that the checkout path is one this Hub could have made.
+    if (!input.directory.startsWith(`${WORKSPACE_ROOT}/`)) {
+      throw new Error(`Invalid session directory: ${input.directory}`);
     }
     if (!isModelRef(input.model)) {
       throw new Error(`Unknown model: ${input.model}`);

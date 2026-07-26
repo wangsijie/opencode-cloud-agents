@@ -35,6 +35,11 @@ export interface SessionRecord {
   id: string;
   instanceId: string;
   repoKey: string;
+  /**
+   * Absolute container path of this session's checkout, pinned at creation.
+   * Absent on sessions created before the catalog became dynamic.
+   */
+  directory?: string;
   /** `providerID/modelID` reference from the OpenCode model catalog. */
   model: string;
   title: string;
@@ -45,6 +50,17 @@ export interface SessionRecord {
   pendingPromptCount: number;
   lastError?: string;
   lastPromptAt?: string;
+  /**
+   * Set once the session has been archived: it keeps its container, history and
+   * mirror, and only leaves the default list. Sending a message brings it back.
+   */
+  archivedAt?: string;
+  /**
+   * Set when a human named this session. OpenCode titles a conversation of its
+   * own accord, and adopting that title is an improvement on the first line of
+   * the opening prompt — but never on a name somebody chose.
+   */
+  titleLocked?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +102,29 @@ export interface SessionView extends SessionRecord {
    * renders it instead of asking a container how much history a session has.
    */
   transcript?: TranscriptMirrorSummary;
+  /**
+   * The name to show. `title` stays the record's own — the first line of the
+   * opening prompt — and this is what OpenCode has since called the
+   * conversation, unless a human named it.
+   */
+  displayTitle: string;
+}
+
+/**
+ * Which name a session is shown under.
+ *
+ * A prompt's first line is a placeholder: it is what was available before the
+ * conversation existed. Once OpenCode has titled the conversation itself that is
+ * the better label — but a name a human chose outranks both.
+ */
+export function deriveDisplayTitle(
+  record: SessionRecord,
+  transcript?: TranscriptMirrorSummary
+): string {
+  if (record.titleLocked || !transcript?.opencodeTitle) {
+    return record.title;
+  }
+  return transcript.opencodeTitle;
 }
 
 /**
@@ -144,6 +183,25 @@ export interface SessionMessage {
   info: Message;
   parts: Part[];
 }
+
+/**
+ * What a conversation has cost so far.
+ *
+ * OpenCode prices every assistant message itself, so this only adds them up:
+ * the numbers are the provider's, not an estimate made here.
+ */
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** In US dollars, as reported by OpenCode. */
+  cost: number;
+  /** How many assistant messages contributed, for reading the average. */
+  assistantMessages: number;
+}
+
 
 export type SessionTranscriptState =
   /** Read live from the running container. */

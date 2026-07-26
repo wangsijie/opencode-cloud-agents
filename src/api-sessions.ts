@@ -25,17 +25,26 @@ import {
 } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
 import { DEFAULT_MODEL_REF, isModelRef } from './opencode-config';
-import { findRepo, isRepoKey, repoWorkspaceDirectory } from './repos';
+import { isSafeRepoKey, repoWorkspaceDirectory } from './repos';
 import type { QueuePromptInput } from './session-agent';
+import {
+  isSafeBranchName,
+  MAX_COMMIT_MESSAGE_LENGTH,
+  MAX_PULL_REQUEST_BODY_LENGTH,
+  normalizeCommitMessage,
+  type PublishSessionChangesInput
+} from './session-changes';
 import {
   closedSessionEventStream,
   forwardSessionEventStream,
   type SessionStateEvent
 } from './session-events';
 import {
+  deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
   deriveSessionTitle,
+  MAX_SESSION_TITLE_LENGTH,
   normalizeSessionPrompt,
   type SessionMessage,
   type SessionRecord,
@@ -57,7 +66,16 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 
   if (url.pathname === '/api/sessions') {
     if (request.method === 'GET') {
-      const records = await hub.listSessions();
+      // Archived sessions are excluded by default rather than deleted: the list
+      // is a working set, and everything stays reachable behind `?archived=`.
+      const archived = url.searchParams.get('archived');
+      const records = (await hub.listSessions()).filter((record) =>
+        archived === 'all'
+          ? true
+          : archived === '1'
+            ? Boolean(record.archivedAt)
+            : !record.archivedAt
+      );
       return json(
         await Promise.all(records.map((record) => getSessionView(env, record)))
       );
@@ -80,6 +98,9 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     if (request.method === 'GET') {
       return json(await getSessionView(env, record));
     }
+    if (request.method === 'PATCH') {
+      return await patchSession(request, env, record);
+    }
     if (request.method === 'DELETE') {
       // Clearing the agent first stops a queued dispatch from waking a
       // container the Hub is about to destroy.
@@ -93,7 +114,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
         202
       );
     }
-    return methodNotAllowed('GET, DELETE');
+    return methodNotAllowed('GET, PATCH, DELETE');
   }
 
   if (action === 'messages') {
@@ -116,6 +137,18 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     return methodNotAllowed('GET, POST');
   }
 
+  if (action === 'changes') {
+    if (request.method !== 'GET') {
+      return methodNotAllowed('GET');
+    }
+    const { instance, runtimeEpoch } = await requireAwakeRuntime(
+      env,
+      record,
+      'read changes from'
+    );
+    return json(await resolveSandbox(env, instance).readSessionChanges(runtimeEpoch));
+  }
+
   if (action === 'events') {
     if (request.method !== 'GET') {
       return methodNotAllowed('GET');
@@ -129,6 +162,9 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   if (action === 'abort') {
     return await abortSession(env, record);
   }
+  if (action === 'publish') {
+    return await publishSession(request, env, record);
+  }
   if (action !== 'retry') {
     throw new HttpError(404, 'Session action not found');
   }
@@ -138,13 +174,15 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 
 async function createSession(request: Request, env: Env): Promise<Response> {
   const input = await readCreateSessionInput(request);
-  const repo = findRepo(input.repoKey);
+  // Resolved against GitHub's catalog once, here, and then pinned onto the
+  // records — so nothing this session does later needs the catalog again.
+  const repo = await getHub(env).findCatalogRepo(input.repoKey);
   if (!repo) {
     throw new HttpError(400, 'Unknown repository');
   }
 
   const record = await getHub(env).createSession({
-    repoKey: input.repoKey,
+    repo,
     model: input.model,
     title: deriveSessionTitle(input.prompt)
   });
@@ -153,7 +191,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
       sessionId: record.id,
       instanceId: record.instanceId,
       repoKey: record.repoKey,
-      directory: repoWorkspaceDirectory(repo),
+      directory: repoWorkspaceDirectory(repo.repoKey),
       model: record.model,
       title: record.title,
       prompt: input.prompt
@@ -200,7 +238,9 @@ async function readCreateSessionInput(
     model?: unknown;
     prompt?: unknown;
   };
-  if (!isRepoKey(repoKey)) {
+  // Only the shape is checked here; whether the key names a real repository is
+  // the catalog's answer, and the catalog is asynchronous now.
+  if (!isSafeRepoKey(repoKey)) {
     throw new HttpError(400, 'Unknown repository');
   }
   const modelRef = model === undefined ? DEFAULT_MODEL_REF : model;
@@ -212,6 +252,17 @@ async function readCreateSessionInput(
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
   return { repoKey, model: modelRef, prompt: text };
+}
+
+/**
+ * Where this session's checkout lives inside its container.
+ *
+ * Pinned on the record since the catalog became dynamic, and derivable from the
+ * key alone before that — which is what lets a session outlive the catalog
+ * entry it was created from, and the catalog being unreachable entirely.
+ */
+function sessionDirectory(record: SessionRecord): string {
+  return record.directory ?? repoWorkspaceDirectory(record.repoKey);
 }
 
 async function requireSession(env: Env, id: string): Promise<SessionRecord> {
@@ -241,18 +292,21 @@ async function getSessionView(
         updatedAt: record.updatedAt,
         runtime: unknownRuntimeStatus(true)
       };
+  // The summary rides along on the runtime status the list already reads, so
+  // knowing how much history a session has costs no extra round trip and no
+  // contact with the container.
+  const transcript =
+    view.runtime.transcript &&
+    view.runtime.transcript.opencodeSessionId === record.opencodeSessionId
+      ? view.runtime.transcript
+      : undefined;
   return {
     ...record,
     instance: view,
     status: deriveSessionStatus(record.phase, view.runtime),
     lastActivityAt: deriveLastActivityAt(record),
-    // The summary rides along on the runtime status the list already reads, so
-    // knowing how much history a session has costs no extra round trip and no
-    // contact with the container.
-    ...(view.runtime.transcript &&
-    view.runtime.transcript.opencodeSessionId === record.opencodeSessionId
-      ? { transcript: view.runtime.transcript }
-      : {})
+    displayTitle: deriveDisplayTitle(record, transcript),
+    ...(transcript ? { transcript } : {})
   };
 }
 
@@ -288,6 +342,11 @@ async function sendSessionPrompt(
     throw new HttpError(409, 'This session is not ready to receive messages');
   }
   await resolveSessionAgent(env, record.id).queuePrompt(input);
+  if (record.archivedAt) {
+    // Archiving says "I am done with this"; sending a message says otherwise.
+    // Making the user un-archive first would only be a step to click through.
+    await getHub(env).setSessionArchived(record.id, false);
+  }
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
 
@@ -296,10 +355,7 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
   if (!record.opencodeSessionId) {
     throw new HttpError(409, 'This session has not started working yet');
   }
-  const repo = findRepo(record.repoKey);
-  if (!repo) {
-    throw new HttpError(400, `Unknown repository ${record.repoKey}`);
-  }
+  const directory = sessionDirectory(record);
   const { instance, runtimeEpoch } = await requireAwakeRuntime(
     env,
     record,
@@ -310,13 +366,146 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
     runtimeEpoch,
     {
       opencodeSessionId: record.opencodeSessionId,
-      directory: repoWorkspaceDirectory(repo)
+      directory
     }
   );
   return json({
     aborted,
     session: await getSessionView(env, await requireSession(env, record.id))
   });
+}
+
+/**
+ * Rename or archive a session.
+ *
+ * Both are registry edits: neither touches the container, so they work whether
+ * the session is awake, asleep, or has never started. That is the point of
+ * archiving — it is the ending that keeps the work, next to deletion which
+ * destroys the workspace with it.
+ */
+async function patchSession(
+  request: Request,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object');
+  }
+  const { title, archived } = value as { title?: unknown; archived?: unknown };
+  if (title === undefined && archived === undefined) {
+    throw new HttpError(400, 'Nothing to change');
+  }
+
+  const hub = getHub(env);
+  if (title !== undefined) {
+    const trimmed = typeof title === 'string' ? title.trim() : '';
+    if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
+      throw new HttpError(
+        400,
+        `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
+      );
+    }
+    await hub.renameSession(record.id, trimmed);
+  }
+  if (archived !== undefined) {
+    if (typeof archived !== 'boolean') {
+      throw new HttpError(400, 'archived must be a boolean');
+    }
+    await hub.setSessionArchived(record.id, archived);
+  }
+  return json(await getSessionView(env, await requireSession(env, record.id)));
+}
+
+/**
+ * Commit, push and optionally open a pull request for what the agent changed.
+ *
+ * Like aborting, this needs a container that is already running: the working
+ * tree only exists inside one, and waking a session to publish would mean a cold
+ * start between the button and the commit. The session page reads the changes
+ * first, so by the time this is reachable the container is up.
+ */
+async function publishSession(
+  request: Request,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  const input = await readPublishInput(request);
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    'publish changes from'
+  );
+  const result = await resolveSandbox(env, instance).publishSessionChanges(
+    runtimeEpoch,
+    input
+  );
+  return json(result);
+}
+
+async function readPublishInput(
+  request: Request
+): Promise<PublishSessionChangesInput> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object');
+  }
+  const { message, branch, pullRequest } = value as {
+    message?: unknown;
+    branch?: unknown;
+    pullRequest?: unknown;
+  };
+  const commitMessage = normalizeCommitMessage(message);
+  if (!commitMessage) {
+    throw new HttpError(
+      400,
+      `A commit message of up to ${MAX_COMMIT_MESSAGE_LENGTH} characters is required`
+    );
+  }
+  if (branch !== undefined && !isSafeBranchName(branch)) {
+    throw new HttpError(400, 'Invalid branch name');
+  }
+  return {
+    message: commitMessage,
+    ...(branch === undefined ? {} : { branch }),
+    ...(pullRequest === undefined
+      ? {}
+      : { pullRequest: readPullRequestInput(pullRequest) })
+  };
+}
+
+function readPullRequestInput(value: unknown): {
+  title: string;
+  body?: string;
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'pullRequest must be a JSON object');
+  }
+  const { title, body } = value as { title?: unknown; body?: unknown };
+  const trimmed = typeof title === 'string' ? title.trim() : '';
+  if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH * 4) {
+    throw new HttpError(400, 'A pull request title is required');
+  }
+  if (
+    body !== undefined &&
+    (typeof body !== 'string' || body.length > MAX_PULL_REQUEST_BODY_LENGTH)
+  ) {
+    throw new HttpError(400, 'Invalid pull request body');
+  }
+  return {
+    title: trimmed,
+    ...(body === undefined ? {} : { body })
+  };
 }
 
 /**
@@ -410,15 +599,7 @@ async function streamSessionEvents(
   if (!record.opencodeSessionId) {
     return closedSessionEventStream({ ...state, state: 'pending' });
   }
-  const repo = findRepo(record.repoKey);
-  if (!repo) {
-    return closedSessionEventStream({
-      ...state,
-      state: 'error',
-      error: `Unknown repository ${record.repoKey}`
-    });
-  }
-
+  const directory = sessionDirectory(record);
   const instance = await getHub(env).getInstance(record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     return closedSessionEventStream({ ...state, state: 'sleeping' });
@@ -429,7 +610,7 @@ async function streamSessionEvents(
   }
 
   const target = new URL(`http://localhost:${OPENCODE_PORT}/event`);
-  target.searchParams.set('directory', repoWorkspaceDirectory(repo));
+  target.searchParams.set('directory', directory);
   const upstream = await resolveSandbox(env, instance).containerFetch(
     new Request(target.toString(), {
       headers: {
@@ -485,16 +666,7 @@ async function readSessionTranscript(
     return { ...base, state: 'pending', source: 'none' };
   }
 
-  const repo = findRepo(record.repoKey);
-  if (!repo) {
-    return {
-      ...base,
-      state: 'error',
-      source: 'none',
-      error: `Unknown repository ${record.repoKey}`
-    };
-  }
-
+  const directory = sessionDirectory(record);
   const instance = await getHub(env).getInstance(record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     return sleepingTranscript(env, record, base);
@@ -510,7 +682,7 @@ async function readSessionTranscript(
       runtimeEpoch,
       {
         opencodeSessionId: record.opencodeSessionId,
-        directory: repoWorkspaceDirectory(repo)
+        directory
       }
     );
     return { ...base, state: 'live', source: 'container', messages };

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import {
   deleteSession,
+  patchSession,
   retrySession,
   stopInstance,
   wakeInstance,
   type SessionView
 } from '../api';
-import { formatIdleShutdown, formatRelative } from '../format';
+import { formatIdleShutdown, formatRelative, formatUsage } from '../format';
 import { navigate, sessionPath } from '../router';
 import { StatusBadge } from './StatusBadge';
 
@@ -71,7 +72,7 @@ export function SessionCard({
                 navigate(sessionPath(session.id));
               }}
             >
-              {session.title}
+              {session.displayTitle}
             </a>
           </h3>
           <p className="muted mono">{session.id}</p>
@@ -111,6 +112,18 @@ export function SessionCard({
             </dd>
           </div>
         ) : null}
+        {/*
+          Usage comes from the mirror, which the container now refreshes within
+          seconds of each turn — so this is current whether the session is awake
+          or asleep, and costs no contact with the container either way.
+        */}
+        {session.transcript?.usage &&
+        session.transcript.usage.assistantMessages > 0 ? (
+          <div>
+            <dt>用量</dt>
+            <dd>{formatUsage(session.transcript.usage)}</dd>
+          </div>
+        ) : null}
       </dl>
 
       {session.lastError ? <p className="session-error">{session.lastError}</p> : null}
@@ -142,10 +155,25 @@ export function SessionCard({
           </button>
         ) : null}
         <button
+          className="button"
+          disabled={Boolean(busy)}
+          onClick={() =>
+            run('archive', () =>
+              patchSession(session.id, { archived: !session.archivedAt })
+            )
+          }
+        >
+          {session.archivedAt ? '取消归档' : '归档'}
+        </button>
+        <button
           className="button danger"
           disabled={Boolean(busy)}
           onClick={() => {
-            if (confirm(`删除会话「${session.title}」？容器与快照会一并删除，不可恢复。`)) {
+            if (
+              confirm(
+                `删除会话「${session.displayTitle}」？容器与快照会一并删除，不可恢复。归档只是移出列表，两者不同。`
+              )
+            ) {
               void run('delete', () => deleteSession(session.id));
             }
           }}

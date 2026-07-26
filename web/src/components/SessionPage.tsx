@@ -10,6 +10,7 @@ import {
 import {
   abortSession,
   getSession,
+  patchSession,
   retrySession,
   sendMessage,
   wakeInstance,
@@ -17,14 +18,16 @@ import {
   type RuntimeLifecycle,
   type SessionView
 } from '../api';
-import { formatTime } from '../format';
+import { formatTime, formatUsage } from '../format';
 import {
   lastMessageId,
   reconcileOptimisticPrompts,
   type OptimisticPrompt
 } from '../optimistic';
 import { navigate } from '../router';
+import { useCompletionNotice } from '../useCompletionNotice';
 import { useTranscript } from '../useTranscript';
+import { ChangesPanel } from './ChangesPanel';
 import { MessageList } from './MessageList';
 import { StatusBadge } from './StatusBadge';
 
@@ -91,6 +94,10 @@ export function SessionPage({
     addEventListener('resize', measure);
     return () => removeEventListener('resize', measure);
   });
+
+  // The same notice the list gives, for the page a user is most likely to be
+  // waiting on. One session is still a list as far as the hook is concerned.
+  useCompletionNotice(useMemo(() => (session ? [session] : undefined), [session]));
 
   const runtime = session?.instance.runtime.lifecycle;
   const attached = runtime !== undefined && ATTACHED.includes(runtime);
@@ -233,11 +240,39 @@ export function SessionPage({
 
       {session ? (
         <div className="session-heading">
-          <h1>{session.title}</h1>
+          <h1
+            onDoubleClick={() => {
+              // `prompt` is the composer's state here, so the browser dialog is named.
+              const next = window.prompt('会话标题', session.displayTitle);
+              if (next && next.trim() && next.trim() !== session.displayTitle) {
+                void run(() => patchSession(sessionId, { title: next.trim() }));
+              }
+            }}
+            title="双击重命名"
+          >
+            {session.displayTitle}
+          </h1>
           <p className="muted mono">
             /workspace/{session.repoKey} · {session.model}
+            {session.transcript?.usage &&
+            session.transcript.usage.assistantMessages > 0
+              ? ` · ${formatUsage(session.transcript.usage)}`
+              : ''}
           </p>
         </div>
+      ) : null}
+
+      {/*
+        Collapsed this is one row, so it can sit above the conversation without
+        pushing it down — and above is where it belongs: what the agent changed
+        is the point of the session, not a footnote to it.
+      */}
+      {session ? (
+        <ChangesPanel
+          sessionId={sessionId}
+          attached={attached}
+          sessionTitle={session.title}
+        />
       ) : null}
 
       {loadError ? (

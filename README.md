@@ -19,9 +19,14 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
   kept current by that session's event stream, and the composer continues the
   thread (optionally on a different model) or interrupts a running agent. A
   sleeping session still shows its full history, read from the R2 transcript
-  mirror rather than from a container. The
-  stock OpenCode IDE remains one click away for terminals, file browsing and
-  diffs until the self-built UI covers them.
+  mirror rather than from a container. A running container keeps that mirror
+  within seconds of the live conversation: the Sandbox subscribes to OpenCode's
+  own event stream and re-exports a few seconds after each burst, so a container
+  that dies without quiescing loses seconds rather than a probe interval. The
+  page also shows what the agent changed — branch, changed files, diff — and
+  commits, pushes and opens a pull request from there. The stock OpenCode IDE
+  remains one click away for terminals and file browsing until the self-built UI
+  covers them.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -73,16 +78,38 @@ There is one container image. It installs OpenCode, `gh`, Wrangler, and the
 bundled credentials, and leaves `/workspace` empty; repositories are never baked
 into the image.
 
-Every instance records a `repoKey` from the catalog in
-[`src/repos.ts`](src/repos.ts). The first wake shallow-clones the repository
-into `/workspace/<repoKey>` before the OpenCode server starts; later wakes
-restore the workspace snapshot and run a best-effort `git fetch origin` without
-touching the working tree. A clone failure fails the wake; a fetch failure only
-logs a warning.
+GitHub is the only source for the catalog a session can be started from: the Hub
+lists every repository the token can push to, sorted by recent activity, and
+caches the answer for ten minutes. Archived and read-only repositories are left
+out — a session that cannot push its work cannot finish. A failed refresh serves
+the last good answer; with nothing cached the dashboard shows the error rather
+than an empty picker, and no session can be started until it is fixed. The
+composer's *刷新仓库* button skips the cache (`GET /api/catalog?refresh=1`) for a
+repository created a minute ago.
 
-Adding a repository is a one-line change in `src/repos.ts` plus a deploy. Every
-entry clones over SSH, so the bundled image key must be authorized for it on
-GitHub — public repositories included.
+The token is committed in `src/github-catalog.ts` alongside this image's other
+bundled credentials, and is only ever used for `GET /user/repos`. Setting a
+`GITHUB_TOKEN` secret overrides it, which is where this should end up:
+
+```bash
+pnpm wrangler secret put GITHUB_TOKEN
+```
+
+The repository chosen for a session is copied onto the session, the instance and
+the Sandbox at creation, and everything afterwards asks the checkout rather than
+the catalog — its directory is `/workspace/<repoKey>`, its remote and default
+branch come from git. So a session survives its repository being renamed, leaving
+the account, or GitHub being unreachable; only *starting* one needs the catalog.
+
+The first wake shallow-clones into `/workspace/<repoKey>` before the OpenCode
+server starts; later wakes restore the workspace snapshot and run a best-effort
+`git fetch origin` without touching the working tree. A clone failure fails the
+wake; a fetch failure only logs a warning.
+
+Every entry clones over SSH regardless of where the catalog came from, so the
+bundled image key must be authorized for it on GitHub — public repositories
+included. The token decides what is *offered*; the key decides what can be
+*cloned*.
 
 All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.
@@ -216,7 +243,9 @@ snapshot alongside any checked-out repositories.
 ## Session API
 
 ```bash
-# Repository and model choices for the composer.
+# Repository and model choices for the composer. The repository list is
+# GitHub's, cached for ten minutes; `?refresh=1` skips that cache. A listing
+# failure with nothing cached answers 500 rather than an empty list.
 curl http://localhost:8787/api/catalog
 
 # List sessions with their dispatch phase and live instance state.
@@ -251,6 +280,28 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/messages \
   -H 'Content-Type: application/json' \
   --data '{"prompt":"Now add a test for it"}'
 
+# What the agent changed in the checkout: branch, changed files and the diff
+# against HEAD. Unlike every other read this one needs a running container —
+# the working tree only exists inside one — so it refuses on a sleeping session
+# rather than waking it.
+curl http://localhost:8787/api/sessions/<session-id>/changes
+
+# Commit, push, and optionally open a pull request. Never commits onto the
+# repository's default branch: work lands on `opencode/<session-id>`, created on
+# the first publish and reused afterwards, unless `branch` names another one.
+curl -X POST http://localhost:8787/api/sessions/<session-id>/publish \
+  -H 'Content-Type: application/json' \
+  --data '{"message":"Fix the lint errors","pullRequest":{"title":"Fix the lint errors"}}'
+
+# Rename or archive. Neither touches the container.
+curl -X PATCH http://localhost:8787/api/sessions/<session-id> \
+  -H 'Content-Type: application/json' \
+  --data '{"archived":true}'
+
+# The default list hides archived sessions; `?archived=1` shows only those and
+# `?archived=all` shows everything.
+curl 'http://localhost:8787/api/sessions?archived=1'
+
 # Interrupt a running agent, leaving the conversation intact.
 curl -X POST http://localhost:8787/api/sessions/<session-id>/abort
 
@@ -260,6 +311,16 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/retry
 # Delete the session together with its container and snapshots (HTTP 202).
 curl -X DELETE http://localhost:8787/api/sessions/<session-id>
 ```
+
+Sessions carry their own accounting and housekeeping. Tokens and cost are summed
+from the assistant messages OpenCode priced and ride along on the transcript
+mirror, so the list shows them without touching a container; OpenCode's own
+title for a conversation replaces the first line of the opening prompt once it
+has one, unless the session has been renamed by hand; and archiving takes a
+session out of the default list while keeping its container, history and mirror
+— sending it a message brings it straight back. The browser's own notification
+fires when an agent stops working, which needs no push service and no
+server-side subscription, and therefore only works while a tab is open.
 
 Reading a session — the list, the transcript, the event stream — never starts a
 container. Only creating a session, sending it a message, and opening the stock

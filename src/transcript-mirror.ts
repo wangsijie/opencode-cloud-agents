@@ -16,7 +16,7 @@
  * This module is shared by the writer (Sandbox DO) and the reader (Worker), so
  * it holds no bindings and reaches for nothing but the bucket it is handed.
  */
-import type { SessionMessage } from './sessions';
+import type { SessionMessage, SessionUsage } from './sessions';
 
 const TRANSCRIPT_MIRROR_SCHEMA_VERSION = 1;
 
@@ -29,8 +29,17 @@ export function transcriptMirrorKey(sessionId: string): string {
   return `${transcriptMirrorPrefix(sessionId)}latest.json`;
 }
 
-/** Why a mirror was written; useful when reasoning about a stale export. */
-export type TranscriptMirrorReason = 'idle-stop' | 'force-stop' | 'refresh';
+/**
+ * Why a mirror was written; useful when reasoning about a stale export.
+ *
+ * `live` is the event-driven export a running container writes seconds after the
+ * conversation moves; `refresh` is the slower probe-driven safety net behind it.
+ */
+export type TranscriptMirrorReason =
+  | 'idle-stop'
+  | 'force-stop'
+  | 'refresh'
+  | 'live';
 
 /**
  * The small part of a mirror: what the Sandbox keeps in Durable Object storage
@@ -45,6 +54,17 @@ export interface TranscriptMirrorSummary {
   messageCount: number;
   /** Timestamp of the newest mirrored message, when OpenCode reported one. */
   lastMessageAt?: string;
+  /**
+   * Tokens and cost across the whole conversation. Summed here rather than in
+   * the reader so the session list can show it without loading any messages.
+   */
+  usage?: SessionUsage;
+  /**
+   * The title OpenCode gave the conversation, when it has given one. It is
+   * usually a better label than the first line of the opening prompt, so the
+   * session view prefers it — unless a human named the session.
+   */
+  opencodeTitle?: string;
 }
 
 /** The full mirror, as stored in R2. */
@@ -64,6 +84,7 @@ export interface StoredTranscriptMirror extends TranscriptMirrorSummary {
 export function summarizeTranscriptMessages(messages: SessionMessage[]): {
   messageCount: number;
   lastMessageAt?: string;
+  usage: SessionUsage;
 } {
   const newest = messages[messages.length - 1];
   const time = newest?.info?.time as
@@ -74,8 +95,57 @@ export function summarizeTranscriptMessages(messages: SessionMessage[]): {
     messageCount: messages.length,
     ...(typeof at === 'number' && Number.isFinite(at)
       ? { lastMessageAt: new Date(at).toISOString() }
-      : {})
+      : {}),
+    usage: summarizeSessionUsage(messages)
   };
+}
+
+/**
+ * Total a conversation's tokens and cost.
+ *
+ * Only assistant messages carry either; a user message has neither, so anything
+ * that is not one is skipped rather than guessed at. The numbers are OpenCode's
+ * own — nothing here prices a model.
+ */
+export function summarizeSessionUsage(
+  messages: readonly SessionMessage[]
+): SessionUsage {
+  const usage: SessionUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+    assistantMessages: 0
+  };
+  for (const message of messages) {
+    const info = message.info as {
+      role?: string;
+      cost?: unknown;
+      tokens?: {
+        input?: unknown;
+        output?: unknown;
+        reasoning?: unknown;
+        cache?: { read?: unknown; write?: unknown };
+      };
+    };
+    if (info.role !== 'assistant') {
+      continue;
+    }
+    usage.assistantMessages += 1;
+    usage.cost += finite(info.cost);
+    usage.inputTokens += finite(info.tokens?.input);
+    usage.outputTokens += finite(info.tokens?.output);
+    usage.reasoningTokens += finite(info.tokens?.reasoning);
+    usage.cacheReadTokens += finite(info.tokens?.cache?.read);
+    usage.cacheWriteTokens += finite(info.tokens?.cache?.write);
+  }
+  return usage;
+}
+
+function finite(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 export function buildTranscriptMirror(input: {
@@ -84,6 +154,7 @@ export function buildTranscriptMirror(input: {
   reason: TranscriptMirrorReason;
   mirroredAt: string;
   messages: SessionMessage[];
+  opencodeTitle?: string;
 }): StoredTranscriptMirror {
   return {
     schemaVersion: TRANSCRIPT_MIRROR_SCHEMA_VERSION,
@@ -92,6 +163,7 @@ export function buildTranscriptMirror(input: {
     mirroredAt: input.mirroredAt,
     reason: input.reason,
     ...summarizeTranscriptMessages(input.messages),
+    ...(input.opencodeTitle ? { opencodeTitle: input.opencodeTitle } : {}),
     messages: input.messages
   };
 }
@@ -104,7 +176,9 @@ export function transcriptMirrorSummary(
     mirroredAt: mirror.mirroredAt,
     reason: mirror.reason,
     messageCount: mirror.messageCount,
-    ...(mirror.lastMessageAt ? { lastMessageAt: mirror.lastMessageAt } : {})
+    ...(mirror.lastMessageAt ? { lastMessageAt: mirror.lastMessageAt } : {}),
+    ...(mirror.usage ? { usage: mirror.usage } : {}),
+    ...(mirror.opencodeTitle ? { opencodeTitle: mirror.opencodeTitle } : {})
   };
 }
 
@@ -146,6 +220,9 @@ export function parseTranscriptMirror(
       ? candidate.reason
       : 'refresh',
     ...summarizeTranscriptMessages(messages),
+    ...(typeof candidate.opencodeTitle === 'string'
+      ? { opencodeTitle: candidate.opencodeTitle }
+      : {}),
     messages
   };
 }
@@ -153,7 +230,12 @@ export function parseTranscriptMirror(
 function isTranscriptMirrorReason(
   value: unknown
 ): value is TranscriptMirrorReason {
-  return value === 'idle-stop' || value === 'force-stop' || value === 'refresh';
+  return (
+    value === 'idle-stop' ||
+    value === 'force-stop' ||
+    value === 'refresh' ||
+    value === 'live'
+  );
 }
 
 export async function putTranscriptMirror(

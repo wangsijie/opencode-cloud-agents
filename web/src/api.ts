@@ -40,11 +40,25 @@ export interface InstanceView {
   runtime: InstanceRuntime;
 }
 
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  assistantMessages: number;
+}
+
 export interface SessionView {
   id: string;
   repoKey: string;
   model: string;
+  /** The record's own title: the first line of the opening prompt. */
   title: string;
+  /** What to show — OpenCode's own title once it has one. */
+  displayTitle: string;
+  archivedAt?: string;
   phase: 'queued' | 'starting' | 'working' | 'failed';
   status: SessionStatus;
   lastActivityAt: string;
@@ -131,9 +145,61 @@ export interface TranscriptSummary {
   mirroredAt: string;
   messageCount: number;
   lastMessageAt?: string;
+  usage?: SessionUsage;
+  opencodeTitle?: string;
 }
 
-export const listSessions = () => call<SessionView[]>('/api/sessions');
+/** Mirrors `SessionChanges` in the Worker's `src/session-changes.ts`. */
+export interface ChangedFile {
+  path: string;
+  status:
+    | 'added'
+    | 'modified'
+    | 'deleted'
+    | 'renamed'
+    | 'untracked'
+    | 'conflicted';
+  renamedFrom?: string;
+}
+
+export interface SessionChanges {
+  observedAt: string;
+  repoKey: string;
+  branch: string;
+  defaultBranch: string;
+  onDefaultBranch: boolean;
+  head?: { sha: string; subject: string };
+  files: ChangedFile[];
+  diff: string;
+  diffTruncated: boolean;
+  unpushedCommits: number;
+  publishBranch: string;
+  remoteBranch?: string;
+}
+
+export interface PublishResult {
+  branch: string;
+  commit?: { sha: string; subject: string };
+  pushed: boolean;
+  nothingToCommit: boolean;
+  pullRequestUrl?: string;
+}
+
+/** `archived`: the default list hides archived sessions. */
+export const listSessions = (archived?: '1' | 'all') =>
+  call<SessionView[]>(
+    archived ? `/api/sessions?archived=${archived}` : '/api/sessions'
+  );
+
+/** Rename or archive a session. Neither touches the container. */
+export const patchSession = (
+  id: string,
+  input: { title?: string; archived?: boolean }
+) =>
+  call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input)
+  });
 
 export const getSession = (id: string) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`);
@@ -154,7 +220,37 @@ export const abortSession = (id: string) =>
   call<{ aborted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/abort`, {
     method: 'POST'
   });
-export const fetchCatalog = () => call<Catalog>('/api/catalog');
+/**
+ * What the agent changed in the checkout.
+ *
+ * Unlike every other read here this one needs a running container — the working
+ * tree only exists inside one — so it is requested on demand rather than polled.
+ */
+export const fetchChanges = (id: string) =>
+  call<SessionChanges>(`/api/sessions/${encodeURIComponent(id)}/changes`);
+
+export const publishChanges = (
+  id: string,
+  input: {
+    message: string;
+    branch?: string;
+    pullRequest?: { title: string; body?: string };
+  }
+) =>
+  call<PublishResult>(`/api/sessions/${encodeURIComponent(id)}/publish`, {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+
+/**
+ * Repository and model choices.
+ *
+ * The repository list is GitHub's, cached by the Hub for ten minutes, so this
+ * normally costs nothing. `refresh` skips that cache — for a repository created
+ * a minute ago.
+ */
+export const fetchCatalog = (refresh = false) =>
+  call<Catalog>(refresh ? '/api/catalog?refresh=1' : '/api/catalog');
 
 export const createSession = (input: {
   repoKey: string;

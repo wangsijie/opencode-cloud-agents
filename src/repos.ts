@@ -1,15 +1,19 @@
 /**
- * Repository catalog for runtime workspace provisioning.
+ * What a repository is, and where it lives inside a container.
  *
- * An instance created with a `repoKey` uses the base image and provisions the
- * repository at wake time instead of baking it into a template image: the
- * first wake clones into `/workspace/<repoKey>`; later wakes restore the
- * workspace snapshot and run a best-effort `git fetch`.
+ * The catalog itself is no longer here: it comes from GitHub (see
+ * [github-catalog.ts](github-catalog.ts)), so this module is only the shape of
+ * an entry, the rules that make one safe to interpolate into a container shell
+ * command, and the one path convention every checkout follows.
  *
- * Adding a repository is a one-line change here followed by a deploy. Every
- * entry clones over SSH, so the bundled image key
- * (`docker/ssh/id_ed25519.pub`) must be authorized for it on GitHub — public
- * repositories included.
+ * An instance created with a repository provisions it at wake time rather than
+ * baking it into an image: the first wake shallow-clones into
+ * `/workspace/<repoKey>`; later wakes restore the workspace snapshot and run a
+ * best-effort `git fetch`.
+ *
+ * The chosen entry is copied onto the session, instance and Sandbox records when
+ * a session is created, so nothing an existing container does depends on the
+ * catalog still listing it — or on the catalog being reachable at all.
  */
 export interface RepoDefinition {
   /** Directory name below /workspace and the stable API identifier. */
@@ -20,70 +24,54 @@ export interface RepoDefinition {
   defaultBranch: string;
 }
 
-export const REPOS: readonly RepoDefinition[] = [
-  {
-    repoKey: 'logto',
-    displayName: 'logto-io/logto',
-    cloneUrl: 'git@github.com:logto-io/logto.git',
-    defaultBranch: 'master'
-  },
-  {
-    repoKey: 'logto-cloud',
-    displayName: 'logto-io/cloud',
-    cloneUrl: 'git@github.com:logto-io/cloud.git',
-    defaultBranch: 'master'
-  },
-  {
-    repoKey: 'v2ray-docker',
-    displayName: 'wangsijie/v2ray-docker',
-    cloneUrl: 'git@github.com:wangsijie/v2ray-docker.git',
-    defaultBranch: 'master'
-  },
-  {
-    repoKey: 'senmart',
-    displayName: 'wangsijie/senmart',
-    cloneUrl: 'git@github.com:wangsijie/senmart.git',
-    defaultBranch: 'master'
-  }
-];
-
 /** Root of the snapshotted container workspace shared by every instance. */
 export const WORKSPACE_ROOT = '/workspace';
 
-/** Absolute container path a repository is provisioned into. */
-export function repoWorkspaceDirectory(repo: RepoDefinition): string {
-  return `${WORKSPACE_ROOT}/${repo.repoKey}`;
-}
-
-export function findRepo(repoKey: string): RepoDefinition | undefined {
-  return REPOS.find((repo) => repo.repoKey === repoKey);
-}
-
-export function isRepoKey(value: unknown): value is string {
-  return (
-    typeof value === 'string' && REPOS.some((repo) => repo.repoKey === value)
-  );
+/**
+ * Absolute container path a repository is provisioned into.
+ *
+ * Derived from the key alone, so an existing session can always locate its own
+ * checkout without asking GitHub anything.
+ */
+export function repoWorkspaceDirectory(repoKey: string): string {
+  return `${WORKSPACE_ROOT}/${repoKey}`;
 }
 
 /**
- * Catalog entries are interpolated into container shell commands and instance
- * URLs, so reject unsafe definitions at module load instead of at wake time.
+ * Repository keys become directory names and reach container shell commands, so
+ * they are constrained rather than escaped.
  */
 const SAFE_REPO_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_GIT_REF = /^[A-Za-z0-9._/-]{1,255}$/;
 const SAFE_CLONE_URL = /^(?:https:\/\/|git@)[A-Za-z0-9._/:@-]+$/;
 
-for (const repo of REPOS) {
-  if (!SAFE_REPO_KEY.test(repo.repoKey)) {
-    throw new Error(`Unsafe repoKey in catalog: ${repo.repoKey}`);
-  }
-  if (!SAFE_GIT_REF.test(repo.defaultBranch)) {
-    throw new Error(`Unsafe defaultBranch for ${repo.repoKey}`);
-  }
-  if (!SAFE_CLONE_URL.test(repo.cloneUrl)) {
-    throw new Error(`Unsafe cloneUrl for ${repo.repoKey}`);
-  }
+export function isSafeRepoKey(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    SAFE_REPO_KEY.test(value) &&
+    !value.includes('..')
+  );
 }
-if (new Set(REPOS.map((repo) => repo.repoKey)).size !== REPOS.length) {
-  throw new Error('Duplicate repoKey in catalog');
+
+/**
+ * Whether an entry is safe to store and act on.
+ *
+ * Applied to every entry that arrives from GitHub, where neither the names nor
+ * the URLs are ours to trust.
+ */
+export function isSafeRepoDefinition(value: unknown): value is RepoDefinition {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const repo = value as Partial<RepoDefinition>;
+  return (
+    isSafeRepoKey(repo.repoKey) &&
+    typeof repo.displayName === 'string' &&
+    repo.displayName.length > 0 &&
+    repo.displayName.length <= 200 &&
+    typeof repo.defaultBranch === 'string' &&
+    SAFE_GIT_REF.test(repo.defaultBranch) &&
+    typeof repo.cloneUrl === 'string' &&
+    SAFE_CLONE_URL.test(repo.cloneUrl)
+  );
 }

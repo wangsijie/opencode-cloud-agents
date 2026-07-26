@@ -10,15 +10,18 @@ import { createSession, type Catalog } from '../api';
  */
 export function Composer({
   catalog,
-  onCreated
+  onCreated,
+  onRefreshRepos
 }: {
   catalog: Catalog;
   onCreated: () => Promise<void>;
+  onRefreshRepos: () => Promise<void>;
 }) {
   const [repoKey, setRepoKey] = useState(catalog.repos[0]?.repoKey ?? '');
   const [model, setModel] = useState(catalog.models[0]?.id ?? '');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
 
   async function submit(event: FormEvent) {
@@ -76,6 +79,29 @@ export function Composer({
             </option>
           ))}
         </select>
+        {/*
+          The repository list is GitHub's, cached for ten minutes, so a
+          repository created just now would otherwise be missing for a while.
+        */}
+        <button
+          className="button"
+          type="button"
+          disabled={busy || refreshing}
+          title="重新从 GitHub 读取仓库列表"
+          onClick={async () => {
+            setRefreshing(true);
+            setError(undefined);
+            try {
+              await onRefreshRepos();
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+              setRefreshing(false);
+            }
+          }}
+        >
+          {refreshing ? '正在刷新…' : '刷新仓库'}
+        </button>
         <button className="button primary" type="submit" disabled={busy}>
           {busy ? '正在开工…' : '开工'}
         </button>

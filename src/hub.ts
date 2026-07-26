@@ -3,14 +3,29 @@ import { getSandbox } from '@cloudflare/sandbox';
 import type { InstanceRecord } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
 import { isModelRef } from './opencode-config';
-import { isRepoKey } from './repos';
+import {
+  isSafeRepoDefinition,
+  repoWorkspaceDirectory,
+  type RepoDefinition
+} from './repos';
+import {
+  BUNDLED_GITHUB_TOKEN,
+  REPO_CATALOG_TTL_MS,
+  fetchGithubRepoCatalog
+} from './github-catalog';
 import type { SessionRecord, SessionStatePatch } from './sessions';
 
 const SCHEMA_VERSION_KEY = 'hub:schema-version';
 const SCHEMA_VERSION = 3;
 const INSTANCE_KEY_PREFIX = 'instance:';
 const SESSION_KEY_PREFIX = 'session:';
+const REPO_CATALOG_KEY = 'hub:repo-catalog';
 const DELETE_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000;
+
+interface CachedRepoCatalog {
+  fetchedAt: string;
+  repos: RepoDefinition[];
+}
 
 class DeleteAttemptTimeoutError extends Error {}
 
@@ -77,6 +92,71 @@ export class Hub extends DurableObject<Env> {
     });
   }
 
+  /**
+   * The repositories a new session may choose from.
+   *
+   * GitHub is the only source. Cached in the Hub rather than fetched per
+   * request: the composer asks on every page load and GitHub's answer does not
+   * change between two of them, so this costs two API calls per `TTL` no matter
+   * how many people are looking.
+   *
+   * A failed refresh serves the last good answer, because a GitHub outage
+   * should not stop somebody starting a session on a repository that has been
+   * there all along. With nothing cached it raises: an empty picker that looks
+   * like "you have no repositories" would be worse than an error saying the
+   * listing failed.
+   *
+   * `force` skips the cache — the composer's refresh, for a repository created
+   * a minute ago.
+   */
+  async listRepoCatalog(force = false): Promise<RepoDefinition[]> {
+    await this.initialized;
+    const cached = await this.ctx.storage.get<CachedRepoCatalog>(
+      REPO_CATALOG_KEY
+    );
+    if (
+      !force &&
+      cached &&
+      Date.now() - Date.parse(cached.fetchedAt) < REPO_CATALOG_TTL_MS
+    ) {
+      return cached.repos;
+    }
+    // The secret is not declared in wrangler.jsonc, because it exists only
+    // where somebody has set one; the bundled token is what this deployment
+    // runs on until that happens.
+    const token =
+      (this.env as Env & { GITHUB_TOKEN?: string }).GITHUB_TOKEN ||
+      BUNDLED_GITHUB_TOKEN;
+    try {
+      if (!token) {
+        throw new Error('No GitHub token is configured');
+      }
+      const repos = await fetchGithubRepoCatalog(token);
+      if (repos.length === 0) {
+        throw new Error('GitHub returned no repositories this token can push to');
+      }
+      await this.ctx.storage.put(REPO_CATALOG_KEY, {
+        fetchedAt: new Date().toISOString(),
+        repos
+      } satisfies CachedRepoCatalog);
+      return repos;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (cached) {
+        console.warn('Serving a stale repository catalog', message);
+        return cached.repos;
+      }
+      throw new Error(`Failed to read the repository catalog: ${message}`);
+    }
+  }
+
+  /** Resolve a repository key against the catalog a session may be created from. */
+  async findCatalogRepo(repoKey: string): Promise<RepoDefinition | undefined> {
+    return (await this.listRepoCatalog()).find(
+      (repo) => repo.repoKey === repoKey
+    );
+  }
+
   async listInstances(): Promise<InstanceRecord[]> {
     await this.initialized;
     const stored = await this.ctx.storage.list<InstanceRecord>({
@@ -93,16 +173,23 @@ export class Hub extends DurableObject<Env> {
     return this.ctx.storage.get<InstanceRecord>(instanceStorageKey(id));
   }
 
-  /** Instances exist only to run a session, so a repository is mandatory. */
-  private async createInstance(repoKey: string): Promise<InstanceRecord> {
-    if (!isRepoKey(repoKey)) {
-      throw new Error(`Unknown repository: ${String(repoKey)}`);
+  /**
+   * Instances exist only to run a session, so a repository is mandatory.
+   *
+   * The whole definition is stored, not just the key: the catalog is dynamic
+   * now, and an instance whose clone URL had to be looked up again at wake time
+   * would break the day a repository is renamed or leaves the account.
+   */
+  private async createInstance(repo: RepoDefinition): Promise<InstanceRecord> {
+    if (!isSafeRepoDefinition(repo)) {
+      throw new Error('Unsafe repository definition');
     }
     const now = new Date().toISOString();
     const record: InstanceRecord = {
       id: `inst-${crypto.randomUUID()}`,
       name: randomInstanceName(),
-      repoKey,
+      repoKey: repo.repoKey,
+      repo,
       lifecycle: 'ready',
       createdAt: now,
       updatedAt: now
@@ -110,7 +197,7 @@ export class Hub extends DurableObject<Env> {
 
     const sandbox = resolveSandbox(this.env, record.id);
     const lifecycle = resolveLifecycle(this.env, record.id);
-    await sandbox.initializeInstance(record.id, record.repoKey);
+    await sandbox.initializeInstance(record.id, record.repoKey, repo);
     try {
       await lifecycle.initializeInstance({ instanceId: record.id });
       await this.ctx.storage.put(instanceStorageKey(record.id), record);
@@ -145,24 +232,27 @@ export class Hub extends DurableObject<Env> {
    * caller then hands it to the session's SessionAgent for dispatch.
    */
   async createSession(input: {
-    repoKey: string;
+    repo: RepoDefinition;
     model: string;
     title: string;
   }): Promise<SessionRecord> {
     await this.initialized;
-    if (!isRepoKey(input.repoKey)) {
-      throw new Error(`Unknown repository: ${String(input.repoKey)}`);
+    if (!isSafeRepoDefinition(input.repo)) {
+      throw new Error('Unknown repository');
     }
     if (!isModelRef(input.model)) {
       throw new Error(`Unknown model: ${String(input.model)}`);
     }
 
-    const instance = await this.createInstance(input.repoKey);
+    const instance = await this.createInstance(input.repo);
     const now = new Date().toISOString();
     const record: SessionRecord = {
       id: instance.id,
       instanceId: instance.id,
-      repoKey: input.repoKey,
+      repoKey: input.repo.repoKey,
+      // Pinned with the instance, so nothing this session does later depends on
+      // the catalog still containing the repository it started from.
+      directory: repoWorkspaceDirectory(input.repo.repoKey),
       model: input.model,
       title: input.title,
       phase: 'queued',
@@ -205,6 +295,68 @@ export class Hub extends DurableObject<Env> {
       } else if (patch.lastError !== undefined) {
         updated.lastError = patch.lastError;
       }
+      await transaction.put(sessionStorageKey(id), updated);
+      return updated;
+    });
+  }
+
+  /**
+   * Archive or restore a session.
+   *
+   * Archiving is a list-level decision and nothing more: the container, the
+   * history and the mirror are untouched, so an archived session can be read and
+   * continued exactly as before. That is what makes it the safe alternative to
+   * deleting, which destroys the workspace.
+   */
+  async setSessionArchived(
+    id: string,
+    archived: boolean
+  ): Promise<SessionRecord | undefined> {
+    await this.initialized;
+    return this.ctx.storage.transaction(async (transaction) => {
+      const record = await transaction.get<SessionRecord>(sessionStorageKey(id));
+      if (!record) {
+        return undefined;
+      }
+      if (Boolean(record.archivedAt) === archived) {
+        return record;
+      }
+      const updated: SessionRecord = {
+        ...record,
+        updatedAt: new Date().toISOString()
+      };
+      if (archived) {
+        updated.archivedAt = updated.updatedAt;
+      } else {
+        delete updated.archivedAt;
+      }
+      await transaction.put(sessionStorageKey(id), updated);
+      return updated;
+    });
+  }
+
+  /**
+   * Name a session by hand.
+   *
+   * This also stops the automatic title from applying: a session OpenCode would
+   * have called something else keeps the name it was given.
+   */
+  async renameSession(
+    id: string,
+    title: string
+  ): Promise<SessionRecord | undefined> {
+    await this.initialized;
+    return this.ctx.storage.transaction(async (transaction) => {
+      const record = await transaction.get<SessionRecord>(sessionStorageKey(id));
+      if (!record) {
+        return undefined;
+      }
+      const updated: SessionRecord = {
+        ...record,
+        title,
+        titleLocked: true,
+        updatedAt: new Date().toISOString()
+      };
       await transaction.put(sessionStorageKey(id), updated);
       return updated;
     });

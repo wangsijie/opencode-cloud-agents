@@ -15,6 +15,28 @@ When changing an OpenCode provider, model, capability or version:
 2. Remember the Hub's session model picker derives from the same file: removing a model drops it from the composer and breaks any session still pinned to it.
 3. Keep OpenCode and SDK versions aligned unless a documented platform constraint requires otherwise.
 
+## Repository catalog
+
+GitHub is the only catalog. The Hub lists the account's pushable repositories
+(`src/github-catalog.ts`) and caches them for ten minutes, using the token
+committed in that file — a `GITHUB_TOKEN` secret overrides it. That token only
+ever lists repositories; pushes and pull requests use the image's own `gh` login.
+`src/repos.ts` is no longer a catalog: it is the entry shape, the safety rules,
+and the `/workspace/<repoKey>` path convention.
+
+The catalog is needed only to *start* a session. The chosen entry is copied onto
+the session, instance and Sandbox records, and everything afterwards reads the
+checkout instead — directory from `repoKey`, default branch from `origin/HEAD`.
+Do not reintroduce catalog lookups on paths that serve existing sessions: they
+would make a rename, a revoked grant or a GitHub outage break running work.
+
+## Publishing a session's work
+
+`POST /api/sessions/:id/publish` commits and pushes onto `opencode/<session-id>`
+and never onto the repository's default branch. Anything interpolated into a
+container shell command goes through `shellQuote`/`isSafeBranchName` in
+`src/session-changes.ts`; commit messages and pull request bodies are user text.
+
 ## Local development
 
 `pnpm dev` starts `wrangler dev` with a real container. It hangs after

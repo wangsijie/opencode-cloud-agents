@@ -11,13 +11,13 @@ import {
 import {
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
+  deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
   deriveSessionTitle,
   isSessionPhase,
   normalizeSessionPrompt
 } from '../src/sessions.ts'
-import { REPOS, repoWorkspaceDirectory } from '../src/repos.ts'
 
 test('model catalog exposes every configured provider model', () => {
   assert.ok(MODEL_OPTIONS.length > 0)
@@ -131,8 +131,19 @@ test('last activity is the newest timestamp on the record', () => {
   )
 })
 
-test('session working directories are the catalog checkout paths', () => {
-  for (const repo of REPOS) {
-    assert.equal(repoWorkspaceDirectory(repo), '/workspace/' + repo.repoKey)
-  }
+test('OpenCode may rename a session, a human outranks it', () => {
+  const record = { title: '把登录页的报错文案改一下', createdAt: 'x', updatedAt: 'x' }
+  // Nothing mirrored yet: the opening prompt is all there is to go on.
+  assert.equal(deriveDisplayTitle(record), record.title)
+  assert.equal(
+    deriveDisplayTitle(record, { opencodeTitle: 'Fix login error copy' }),
+    'Fix login error copy'
+  )
+  assert.equal(
+    deriveDisplayTitle(
+      { ...record, titleLocked: true },
+      { opencodeTitle: 'Fix login error copy' }
+    ),
+    record.title
+  )
 })

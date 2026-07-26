@@ -1,3 +1,4 @@
+import type { RepoDefinition } from './repos';
 import type { TranscriptMirrorSummary } from './transcript-mirror';
 
 export const HUB_DURABLE_OBJECT_ID = 'opencode-hub';
@@ -22,6 +23,12 @@ export interface InstanceRecord {
   name: string;
   /** Catalog repository cloned into `/workspace/<repoKey>` on first wake. */
   repoKey: string;
+  /**
+   * The catalog entry this instance was created from, pinned at creation.
+   * Absent on instances created before the catalog became dynamic; those fall
+   * back to looking `repoKey` up in the static list.
+   */
+  repo?: RepoDefinition;
   lifecycle: InstanceLifecycle;
   createdAt: string;
   updatedAt: string;

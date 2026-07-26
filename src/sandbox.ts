@@ -49,11 +49,25 @@ import {
   type OpenCodeLocation
 } from './opencode-activity';
 import {
-  findRepo,
-  isRepoKey,
+  isSafeRepoDefinition,
   repoWorkspaceDirectory,
-  WORKSPACE_ROOT
+  WORKSPACE_ROOT,
+  type RepoDefinition
 } from './repos';
+import {
+  isSafeBranchName,
+  limitDiff,
+  normalizeCommitMessage,
+  parseGitStatus,
+  parsePullRequestUrl,
+  resolvePublishBranch,
+  shellQuote,
+  type PublishSessionChangesInput,
+  type PublishSessionChangesResult,
+  type SessionChanges,
+  type SessionChangesHead
+} from './session-changes';
+import { frameBelongsToSession, SseFrameBuffer } from './session-events';
 import type { SessionMessage } from './sessions';
 import {
   buildTranscriptMirror,
@@ -83,6 +97,8 @@ const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
 const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
+const GIT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+const GH_COMMAND_TIMEOUT_MS = 60 * 1000;
 const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
 
 /**
@@ -95,6 +111,17 @@ const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
  * changed to export.
  */
 const TRANSCRIPT_MIRROR_REFRESH_MS = 60 * 1000;
+
+/**
+ * How long the live mirror waits after an event before exporting.
+ *
+ * The container's own event stream is what tells this object the conversation
+ * moved, so the crash window above is no longer the probe interval — it is this
+ * debounce. It is a trailing delay rather than a rate limit: a burst of part
+ * updates during one generation costs a single export, and the last event of a
+ * turn is always followed by one more.
+ */
+const TRANSCRIPT_MIRROR_LIVE_MS = 3 * 1000;
 
 const OPENCODE_ENV = {
   // Keep OpenCode sessions and caches inside the snapshotted directory.
@@ -132,6 +159,12 @@ interface InstanceIdentity {
   id: string;
   /** Catalog repository provisioned during wake. */
   repoKey: string;
+  /**
+   * The catalog entry, pinned when the instance was created. Absent on
+   * instances created before the catalog became dynamic, which resolve their
+   * key against the static list instead.
+   */
+  repo?: RepoDefinition;
   state: 'active' | 'deleting';
   initializedAt: string;
 }
@@ -146,6 +179,17 @@ interface InstanceIdentity {
 interface TranscriptTarget {
   opencodeSessionId: string;
   directory: string;
+}
+
+/**
+ * An attached read of the container's event stream, bound to one runtime
+ * generation. Both handles are kept because cancelling the reader is what
+ * actually ends the read; the signal only covers the request that opened it.
+ */
+interface LiveEventSubscription {
+  runtimeEpoch: string;
+  abort: AbortController;
+  reader?: ReadableStreamDefaultReader<Uint8Array>;
 }
 
 type RuntimeGatePhase =
@@ -238,6 +282,10 @@ export class Sandbox extends BaseSandbox<Env> {
    * a watermark it did not write.
    */
   private transcriptDirty = true;
+  /** The container event subscription that drives the live mirror, if attached. */
+  private liveEvents: LiveEventSubscription | undefined;
+  /** Whether a debounced live export is already scheduled. */
+  private liveMirrorPending = false;
   private instanceActive = false;
   private activeOperations = 0;
   private operationDrainWaiters = new Set<() => void>();
@@ -281,14 +329,15 @@ export class Sandbox extends BaseSandbox<Env> {
     });
   }
 
-  async initializeInstance(id: string, repoKey: string): Promise<void> {
+  async initializeInstance(
+    id: string,
+    repoKey: string,
+    repo?: RepoDefinition
+  ): Promise<void> {
     await this.lifecycleReady;
     await this.setKeepAlive(true);
     if (this.purgeRequested) {
       throw new Error('A deleting instance cannot be initialized');
-    }
-    if (!isRepoKey(repoKey)) {
-      throw new Error(`Unknown repository: ${String(repoKey)}`);
     }
     if (this.instanceIdentity) {
       if (
@@ -307,9 +356,15 @@ export class Sandbox extends BaseSandbox<Env> {
       return;
     }
 
+    // A new instance must arrive with its whole catalog entry: the clone URL is
+    // needed at wake time, and nothing here can look one up.
+    if (!isSafeRepoDefinition(repo) || repo.repoKey !== repoKey) {
+      throw new Error(`Unknown repository: ${String(repoKey)}`);
+    }
     const identity: InstanceIdentity = {
       id,
       repoKey,
+      repo,
       state: 'active',
       initializedAt: new Date().toISOString()
     };
@@ -401,24 +456,22 @@ export class Sandbox extends BaseSandbox<Env> {
    * only run a best-effort fetch, never touching the working tree.
    */
   private async ensureRepoProvisioned(): Promise<void> {
-    const repoKey = this.instanceIdentity?.repoKey;
-    if (!repoKey) {
+    const identity = this.instanceIdentity;
+    if (!identity) {
       return;
     }
-    const repo = findRepo(repoKey);
-    if (!repo) {
-      throw new Error(
-        `Repository ${repoKey} is no longer in the catalog; wake refused`
-      );
-    }
-
-    const directory = repoWorkspaceDirectory(repo);
+    const { repo, repoKey, directory } = this.requireCheckout();
     const checkout = await this.exists(`${directory}/.git`);
     if (checkout.exists) {
+      // A restored checkout knows its own remote, so resuming one needs nothing
+      // from the catalog. That is what keeps an instance created before the
+      // catalog was dynamic — or one whose repository has since left it —
+      // working exactly as it did.
+      //
       // A fetch failure (offline remote, revoked key) must not block resuming
       // the already-restored workspace.
       const fetched = await this.exec(
-        `git -C '${directory}' fetch origin --prune`,
+        `git -C ${shellQuote(directory)} fetch origin --prune`,
         { timeout: REPO_FETCH_TIMEOUT_MS }
       );
       if (!fetched.success) {
@@ -429,8 +482,15 @@ export class Sandbox extends BaseSandbox<Env> {
       return;
     }
 
+    if (!repo) {
+      throw new Error(
+        `Instance ${identity.id} has no checkout and no pinned repository for ${repoKey}; wake refused`
+      );
+    }
     const cloned = await this.exec(
-      `git clone --depth 1 --branch '${repo.defaultBranch}' '${repo.cloneUrl}' '${directory}'`,
+      `git clone --depth 1 --branch ${shellQuote(repo.defaultBranch)} ${shellQuote(
+        repo.cloneUrl
+      )} ${shellQuote(directory)}`,
       { timeout: REPO_CLONE_TIMEOUT_MS }
     );
     if (!cloned.success) {
@@ -456,7 +516,11 @@ export class Sandbox extends BaseSandbox<Env> {
       if (snapshot.active) {
         this.transcriptDirty = true;
       }
-      // The probe is the beat the mirror rides on, but it must not wait for it:
+      // The live subscription is what normally keeps the mirror current, but it
+      // does not survive a Durable Object restart. The probe is the beat that
+      // notices and re-attaches it.
+      this.startLiveTranscriptEvents();
+      // The probe is also the mirror's safety net, and it must not wait for it:
       // the coordinator's idle accounting depends on this call staying quick,
       // and an export that fails is not a probe failure.
       this.scheduleTranscriptRefresh(runtimeEpoch);
@@ -976,6 +1040,331 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
+  /**
+   * Read what the agent changed in the session's checkout.
+   *
+   * This is a git read and not an OpenCode one: the diff the user cares about is
+   * the working tree, including edits an agent made through a shell rather than
+   * through the edit tool. Untracked files are listed but not diffed — showing
+   * their content would mean staging them, and a read must not move the index.
+   */
+  async readSessionChanges(runtimeEpoch: string): Promise<SessionChanges> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Reading session changes');
+    this.beginActiveOperation();
+    try {
+      const { repo, repoKey, directory, sessionId } = this.requireCheckout();
+      const defaultBranch = await this.resolveDefaultBranch(directory, repo);
+      const at = shellQuote(directory);
+      const [branchOut, headOut, statusOut, diffOut, remoteOut] =
+        await this.withControlPlaneAccess(() =>
+          Promise.all([
+            this.exec(`git -C ${at} rev-parse --abbrev-ref HEAD`),
+            this.exec(`git -C ${at} log -1 --format='%H%x09%s'`),
+            this.exec(`git -C ${at} status --porcelain=v1 -z`),
+            this.exec(`git -C ${at} diff HEAD --no-color`),
+            this.exec(`git -C ${at} branch --remotes --list 'origin/*'`)
+          ])
+        );
+      if (!branchOut.success) {
+        throw new Error(
+          `git rev-parse failed: ${truncateOutput(branchOut.stderr)}`
+        );
+      }
+      if (!statusOut.success) {
+        throw new Error(
+          `git status failed: ${truncateOutput(statusOut.stderr)}`
+        );
+      }
+
+      const branch = branchOut.stdout.trim();
+      const remoteBranches = new Set(
+        remoteOut.success
+          ? remoteOut.stdout
+              .split('\n')
+              .map((line) => line.trim().replace(/^origin\//, ''))
+              .filter(Boolean)
+          : []
+      );
+      const publishBranch = resolvePublishBranch({
+        sessionId,
+        currentBranch: branch,
+        defaultBranch
+      });
+      return {
+        observedAt: new Date().toISOString(),
+        repoKey,
+        branch,
+        defaultBranch,
+        onDefaultBranch: branch === defaultBranch,
+        ...(headOut.success && headOut.stdout.trim()
+          ? { head: parseHeadLine(headOut.stdout) }
+          : {}),
+        files: parseGitStatus(statusOut.stdout),
+        // A diff that fails on a repository whose status read worked is an empty
+        // diff as far as the user is concerned; the file list is the part that
+        // must be right.
+        ...limitDiff(diffOut.success ? diffOut.stdout : ''),
+        unpushedCommits: await this.countUnpushedCommits(
+          directory,
+          branch,
+          defaultBranch,
+          remoteBranches.has(branch)
+        ),
+        publishBranch,
+        ...(remoteBranches.has(publishBranch)
+          ? { remoteBranch: publishBranch }
+          : {})
+      };
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * How far this branch is ahead of what the remote already has.
+   *
+   * A branch that has been pushed is measured against its own remote; one that
+   * has not is measured against the default branch, because "5 commits nobody
+   * else has" is the useful answer either way.
+   */
+  private async countUnpushedCommits(
+    directory: string,
+    branch: string,
+    defaultBranch: string,
+    hasRemoteBranch: boolean
+  ): Promise<number> {
+    const base = hasRemoteBranch ? branch : defaultBranch;
+    const result = await this.withControlPlaneAccess(() =>
+      this.exec(
+        `git -C ${shellQuote(directory)} rev-list --count ${shellQuote(
+          `origin/${base}..HEAD`
+        )}`
+      )
+    );
+    const count = Number.parseInt(result.stdout.trim(), 10);
+    return result.success && Number.isFinite(count) ? count : 0;
+  }
+
+  /**
+   * Commit the working tree onto the session branch, push it, and optionally
+   * open a pull request.
+   *
+   * Every step is sequential and stops at the first failure, so a push that
+   * cannot reach the remote leaves a real commit behind rather than an unclear
+   * half-state — the commit is in the workspace snapshot and the next publish
+   * pushes it.
+   */
+  async publishSessionChanges(
+    runtimeEpoch: string,
+    input: PublishSessionChangesInput
+  ): Promise<PublishSessionChangesResult> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Publishing session changes');
+    const message = normalizeCommitMessage(input.message);
+    if (!message) {
+      throw new Error('A commit message of up to 4000 characters is required');
+    }
+    if (input.branch !== undefined && !isSafeBranchName(input.branch)) {
+      throw new Error('Invalid branch name');
+    }
+
+    this.beginActiveOperation();
+    try {
+      const { repo, directory, sessionId } = this.requireCheckout();
+      const defaultBranch = await this.resolveDefaultBranch(directory, repo);
+      const at = shellQuote(directory);
+      const current = await this.runGit(
+        directory,
+        'rev-parse --abbrev-ref HEAD',
+        'read the current branch'
+      );
+      const branch = resolvePublishBranch({
+        sessionId,
+        currentBranch: current.trim(),
+        defaultBranch,
+        ...(input.branch === undefined ? {} : { requested: input.branch })
+      });
+      if (branch === defaultBranch) {
+        throw new Error(
+          `Publishing to the default branch (${defaultBranch}) is not supported; use a branch of its own`
+        );
+      }
+
+      if (current.trim() !== branch) {
+        // `switch -c` refuses an existing branch, which is the safe order: a
+        // second publish reuses the branch instead of resetting it to HEAD.
+        const created = await this.exec(
+          `git -C ${at} switch -c ${shellQuote(branch)}`
+        );
+        if (!created.success) {
+          await this.runGit(
+            directory,
+            `switch ${shellQuote(branch)}`,
+            `switch to branch ${branch}`
+          );
+        }
+      }
+
+      await this.runGit(directory, 'add -A', 'stage the working tree');
+      const staged = await this.withControlPlaneAccess(() =>
+        this.exec(`git -C ${at} diff --cached --quiet`)
+      );
+      // `--quiet` exits non-zero when there *is* a difference, so a successful
+      // run means the tree was already clean.
+      const nothingToCommit = staged.success;
+      if (!nothingToCommit) {
+        await this.runGit(
+          directory,
+          `commit -m ${shellQuote(message)}`,
+          'commit the working tree'
+        );
+      }
+
+      const head = parseHeadLine(
+        await this.runGit(
+          directory,
+          `log -1 --format='%H%x09%s'`,
+          'read the new commit'
+        )
+      );
+      await this.runGit(
+        directory,
+        `push --set-upstream origin ${shellQuote(branch)}`,
+        `push ${branch}`
+      );
+
+      return {
+        branch,
+        ...(nothingToCommit ? {} : { commit: head }),
+        pushed: true,
+        nothingToCommit,
+        ...(input.pullRequest
+          ? await this.openPullRequest(directory, {
+              branch,
+              base: defaultBranch,
+              title: input.pullRequest.title,
+              ...(input.pullRequest.body === undefined
+                ? {}
+                : { body: input.pullRequest.body })
+            })
+          : {})
+      };
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Open a pull request for a branch that was just pushed.
+   *
+   * An existing pull request is not an error: `gh` refuses to create a second
+   * one and names the existing URL in the refusal, which is the answer the
+   * caller wanted anyway.
+   */
+  private async openPullRequest(
+    directory: string,
+    input: { branch: string; base: string; title: string; body?: string }
+  ): Promise<{ pullRequestUrl?: string }> {
+    const result = await this.withControlPlaneAccess(() =>
+      this.exec(
+        [
+          `cd ${shellQuote(directory)} &&`,
+          'gh pr create',
+          `--base ${shellQuote(input.base)}`,
+          `--head ${shellQuote(input.branch)}`,
+          `--title ${shellQuote(input.title)}`,
+          `--body ${shellQuote(input.body ?? '')}`
+        ].join(' '),
+        { timeout: GH_COMMAND_TIMEOUT_MS }
+      )
+    );
+    const url =
+      parsePullRequestUrl(result.stdout) ?? parsePullRequestUrl(result.stderr);
+    if (!result.success && !url) {
+      throw new Error(
+        `gh pr create failed: ${truncateOutput(result.stderr || result.stdout)}`
+      );
+    }
+    return url ? { pullRequestUrl: url } : {};
+  }
+
+  /** Run one git command in a checkout, raising its stderr on failure. */
+  private async runGit(
+    directory: string,
+    args: string,
+    intent: string
+  ): Promise<string> {
+    const result = await this.withControlPlaneAccess(() =>
+      this.exec(`git -C ${shellQuote(directory)} ${args}`, {
+        timeout: GIT_COMMAND_TIMEOUT_MS
+      })
+    );
+    if (!result.success) {
+      throw new Error(
+        `Failed to ${intent}: ${truncateOutput(result.stderr || result.stdout)}`
+      );
+    }
+    return result.stdout;
+  }
+
+  /**
+   * The checkout this instance owns.
+   *
+   * The directory comes from the key alone, so it is always known. The catalog
+   * entry is only pinned on instances created since the catalog became dynamic,
+   * and is only needed for the initial clone — everything afterwards asks the
+   * checkout itself, which is both more available and more truthful.
+   */
+  private requireCheckout(): {
+    repo?: RepoDefinition;
+    repoKey: string;
+    directory: string;
+    sessionId: string;
+  } {
+    const identity = this.instanceIdentity;
+    if (!identity) {
+      throw new Error('This instance has no repository checkout');
+    }
+    return {
+      ...(identity.repo ? { repo: identity.repo } : {}),
+      repoKey: identity.repoKey,
+      directory: repoWorkspaceDirectory(identity.repoKey),
+      sessionId: identity.id
+    };
+  }
+
+  /**
+   * The branch this checkout treats as its trunk.
+   *
+   * Read from `origin/HEAD` rather than from the pinned catalog entry: the
+   * remote's own answer is the correct one, it is available to instances that
+   * predate pinning, and it stays right if the repository's default branch is
+   * renamed. The pinned value is the fallback for a checkout whose `origin/HEAD`
+   * was never set — a shallow clone that has not fetched since.
+   */
+  private async resolveDefaultBranch(
+    directory: string,
+    repo?: RepoDefinition
+  ): Promise<string> {
+    const result = await this.withControlPlaneAccess(() =>
+      this.exec(
+        `git -C ${shellQuote(directory)} symbolic-ref --short refs/remotes/origin/HEAD`
+      )
+    );
+    const branch = result.stdout.trim().replace(/^origin\//, '');
+    return (result.success && branch) || repo?.defaultBranch || 'main';
+  }
+
+  private assertCurrentRuntime(runtimeEpoch: string, intent: string): void {
+    if (
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch
+    ) {
+      throw new Error(`${intent} requires the current runtime epoch`);
+    }
+  }
+
   private async setTranscriptTarget(target: TranscriptTarget): Promise<void> {
     if (
       this.transcriptTarget?.opencodeSessionId === target.opencodeSessionId &&
@@ -989,6 +1378,145 @@ export class Sandbox extends BaseSandbox<Env> {
     );
     this.transcriptTarget = target;
     this.transcriptDirty = true;
+    // The subscription needs a target to filter by, so a container that only
+    // learns its conversation now is where the live mirror starts.
+    this.startLiveTranscriptEvents();
+  }
+
+  /**
+   * Attach to the container's event stream so the mirror follows the
+   * conversation instead of the probe.
+   *
+   * OpenCode publishes every message and part update on one server-wide stream.
+   * Reading it here — inside the object that owns the container — is what makes
+   * the mirror current within seconds, so a container that dies without
+   * quiescing loses seconds of history rather than a probe interval, and the
+   * session list sees a conversation move while it is still moving.
+   *
+   * This deliberately takes no work lease and no operation lease: it observes
+   * work rather than performing it, so it neither holds off the idle deadline
+   * nor blocks the drain that quiesce waits on.
+   */
+  private startLiveTranscriptEvents(): void {
+    const runtimeEpoch = this.runtimeGate?.runtimeEpoch;
+    if (
+      this.runtimeGate?.phase !== 'running' ||
+      !runtimeEpoch ||
+      !this.transcriptTarget ||
+      this.purgeRequested ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return;
+    }
+    if (this.liveEvents?.runtimeEpoch === runtimeEpoch) {
+      return;
+    }
+    this.stopLiveTranscriptEvents();
+
+    const subscription: LiveEventSubscription = {
+      runtimeEpoch,
+      abort: new AbortController()
+    };
+    this.liveEvents = subscription;
+    this.persistenceState.waitUntil(
+      this.consumeLiveTranscriptEvents(subscription, this.transcriptTarget)
+        .catch((error) => {
+          // A dropped subscription degrades to the probe-driven refresh, which
+          // is the behaviour that existed before it. It is not worth failing
+          // anything over, but it is worth knowing about.
+          console.warn('Live transcript event subscription ended', {
+            instanceId: this.instanceIdentity?.id,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        })
+        .finally(() => {
+          if (this.liveEvents === subscription) {
+            this.liveEvents = undefined;
+          }
+        })
+    );
+  }
+
+  private stopLiveTranscriptEvents(): void {
+    const subscription = this.liveEvents;
+    if (!subscription) {
+      return;
+    }
+    this.liveEvents = undefined;
+    subscription.abort.abort();
+    void subscription.reader?.cancel().catch(() => undefined);
+  }
+
+  private async consumeLiveTranscriptEvents(
+    subscription: LiveEventSubscription,
+    target: TranscriptTarget
+  ): Promise<void> {
+    const container = this.persistenceState.container;
+    if (container?.running !== true) {
+      return;
+    }
+    const url = new URL(`http://localhost:${OPENCODE_PORT}/event`);
+    url.searchParams.set('directory', target.directory);
+    // Straight to the port, like the mirror client: this read outlives the
+    // runtime gate's `running` phase by design, ending when the stream ends
+    // rather than when the gate closes to outside requests.
+    const response = await container.getTcpPort(OPENCODE_PORT).fetch(
+      url.toString(),
+      {
+        headers: { accept: 'text/event-stream' },
+        signal: subscription.abort.signal
+      }
+    );
+    if (!response.ok || !response.body) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Event stream unavailable (${response.status})`);
+    }
+
+    const reader = response.body.getReader();
+    subscription.reader = reader;
+    const decoder = new TextDecoder();
+    const frames = new SseFrameBuffer();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || this.liveEvents !== subscription) {
+          return;
+        }
+        for (const frame of frames.push(
+          decoder.decode(value, { stream: true })
+        )) {
+          if (frameBelongsToSession(frame, target.opencodeSessionId)) {
+            this.noteLiveTranscriptEvent(subscription.runtimeEpoch);
+          }
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Record that the conversation moved and schedule one export for the burst.
+   *
+   * The delay is trailing, so the export that runs after a quiet moment always
+   * includes the event that started the timer and everything that followed it.
+   */
+  private noteLiveTranscriptEvent(runtimeEpoch: string): void {
+    this.transcriptDirty = true;
+    if (this.liveMirrorPending) {
+      return;
+    }
+    this.liveMirrorPending = true;
+    this.persistenceState.waitUntil(
+      (async () => {
+        try {
+          await scheduler.wait(TRANSCRIPT_MIRROR_LIVE_MS);
+        } finally {
+          this.liveMirrorPending = false;
+        }
+        await this.mirrorTranscript('live', runtimeEpoch);
+      })().catch(() => undefined)
+    );
   }
 
   /**
@@ -1104,12 +1632,14 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to read OpenCode session messages: ${describeSdkFailure(result)}`
         );
       }
+      const opencodeTitle = await this.readOpencodeTitle(target, reason);
       const mirror = buildTranscriptMirror({
         sessionId,
         opencodeSessionId: target.opencodeSessionId,
         reason,
         mirroredAt,
-        messages: result.data ?? []
+        messages: result.data ?? [],
+        ...(opencodeTitle ? { opencodeTitle } : {})
       });
       await putTranscriptMirror(this.persistenceEnv.BACKUP_BUCKET, mirror);
 
@@ -1123,6 +1653,35 @@ export class Sandbox extends BaseSandbox<Env> {
     } catch (error) {
       this.transcriptDirty = true;
       throw error;
+    }
+  }
+
+  /**
+   * The title OpenCode gave this conversation, for the mirror to carry.
+   *
+   * Not read on every live export: OpenCode names a session once, shortly after
+   * the first message, so a live export that already has a title skips the call
+   * and the slower exports pick up a later rename. A failure returns the title
+   * already known rather than dropping it, because losing a good title to a
+   * transient read would rename the session in the list.
+   */
+  private async readOpencodeTitle(
+    target: TranscriptTarget,
+    reason: TranscriptMirrorReason
+  ): Promise<string | undefined> {
+    const known = this.transcriptMirror?.opencodeTitle;
+    if (known && reason === 'live') {
+      return known;
+    }
+    try {
+      const result = await this.createTranscriptClient().session.get({
+        sessionID: target.opencodeSessionId,
+        directory: target.directory
+      });
+      const title = result.data?.title;
+      return typeof title === 'string' && title.trim() ? title.trim() : known;
+    } catch {
+      return known;
     }
   }
 
@@ -1155,12 +1714,7 @@ export class Sandbox extends BaseSandbox<Env> {
     runtimeEpoch: string,
     intent: string
   ): OpencodeClient {
-    if (
-      this.runtimeGate?.phase !== 'running' ||
-      this.runtimeGate.runtimeEpoch !== runtimeEpoch
-    ) {
-      throw new Error(`${intent} requires the current runtime epoch`);
-    }
+    this.assertCurrentRuntime(runtimeEpoch, intent);
     return createOpencodeClient({
       baseUrl: `http://localhost:${OPENCODE_PORT}`,
       fetch: (input, init) => {
@@ -1289,6 +1843,9 @@ export class Sandbox extends BaseSandbox<Env> {
   private async doPurgeInstance(): Promise<PurgeInstanceResult> {
     this.purgeRequested = true;
     this.instanceActive = false;
+    // Nothing about a deleted instance is worth mirroring, and the stream would
+    // otherwise hold a read open against a container being destroyed.
+    this.stopLiveTranscriptEvents();
     const deletingIdentity = this.instanceIdentity
       ? { ...this.instanceIdentity, state: 'deleting' as const }
       : undefined;
@@ -1725,6 +2282,18 @@ export class Sandbox extends BaseSandbox<Env> {
     };
     await this.persistenceState.storage.put(RUNTIME_GATE_STORAGE_KEY, stored);
     this.runtimeGate = stored;
+    // The gate is the one place every runtime transition passes through, so it
+    // is where the live subscription is bound to a generation: it follows a
+    // container that starts running and is dropped the moment one stops being
+    // the current one.
+    if (stored.phase === 'running') {
+      this.startLiveTranscriptEvents();
+    } else {
+      // Every other phase is on the way down (or already there). The shutdown
+      // export reads the whole history anyway, so nothing is lost by letting go
+      // of the stream first.
+      this.stopLiveTranscriptEvents();
+    }
   }
 
   private async withControlPlaneAccess<T>(operation: () => Promise<T>): Promise<T> {
@@ -1899,6 +2468,18 @@ function notRunningExecutionSnapshot(
     retrySessionCount: 0,
     locations: []
   };
+}
+
+/**
+ * Split `git log -1 --format='%H<tab>%s'`. A subject may contain anything but a
+ * newline, so only the first tab separates the two fields.
+ */
+function parseHeadLine(output: string): SessionChangesHead {
+  const line = output.split('\n')[0] ?? '';
+  const tab = line.indexOf('\t');
+  return tab === -1
+    ? { sha: line.trim(), subject: '' }
+    : { sha: line.slice(0, tab).trim(), subject: line.slice(tab + 1).trim() };
 }
 
 function runtimeUnavailableResponse(phase: RuntimeGatePhase): Response {
