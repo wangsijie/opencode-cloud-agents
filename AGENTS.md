@@ -50,6 +50,23 @@ and never onto the repository's default branch. Anything interpolated into a
 container shell command goes through `shellQuote`/`isSafeBranchName` in
 `src/session-changes.ts`; commit messages and pull request bodies are user text.
 
+## A session can be lost, and that is terminal
+
+OpenCode keeps its whole state inside `/workspace` (`OPENCODE_ENV` in
+`src/sandbox.ts` points `XDG_DATA_HOME` and friends there), so a container that
+dies without checkpointing takes the conversation with it. The restore path
+notices it came up on an empty workspace with no snapshot to put back, records
+the loss against the OpenCode session id it invalidates, and reports it on the
+runtime status. The session then moves to phase `lost` — from the session view
+on the next read, or from the dispatcher before it spends a wake and a prompt on
+it — and stays there.
+
+`lost` is terminal on purpose. Retry and send both refuse with 409, the agent
+sets no alarm, and the UI offers a new session rather than a retry button: the
+history the Hub mirrored stays readable, but there is nothing left to continue.
+Do not "recover" a lost session by creating a fresh OpenCode session under the
+old record — that is a different conversation wearing this one's name.
+
 ## No public route into a container
 
 Since M6 the stock OpenCode UI and its proxies (`/ui/`, `/assets/`, `/gateway/`,

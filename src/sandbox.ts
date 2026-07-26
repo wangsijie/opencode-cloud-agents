@@ -26,7 +26,8 @@ import {
 import type {
   InstanceRuntimeStatus,
   WakeStageTimings,
-  WakeTimings
+  WakeTimings,
+  WorkspaceLoss
 } from './instances';
 import {
   OPENCODE_PORT,
@@ -105,6 +106,7 @@ const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
 const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
 const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
 const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
+const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
 
 /**
  * Paths left out of the workspace snapshot.
@@ -864,9 +866,12 @@ export class Sandbox extends BaseSandbox<Env> {
 
   async getInstanceRuntimeStatus(): Promise<InstanceRuntimeStatus> {
     await this.lifecycleReady;
-    const [state, persistence] = await Promise.all([
+    const [state, persistence, workspaceLost] = await Promise.all([
       this.getState(),
-      this.getPersistenceStatus()
+      this.getPersistenceStatus(),
+      this.persistenceState.storage.get<WorkspaceLoss>(
+        WORKSPACE_LOST_STORAGE_KEY
+      )
     ]);
 
     return {
@@ -888,6 +893,7 @@ export class Sandbox extends BaseSandbox<Env> {
             this.persistenceState.container?.running === true
           ),
       persistence,
+      ...(workspaceLost ? { workspaceLost } : {}),
       ...(this.lastWake ? { lastWake: this.lastWake } : {}),
       ...(this.transcriptMirror ? { transcript: this.transcriptMirror } : {})
     };
@@ -2184,6 +2190,16 @@ export class Sandbox extends BaseSandbox<Env> {
     const storedBackup =
       await this.persistenceState.storage.get<StoredBackup>(BACKUP_STORAGE_KEY);
 
+    // A fresh writable filesystem with no snapshot to put back means the
+    // previous container died without checkpointing. OpenCode keeps its whole
+    // state under /workspace (see OPENCODE_ENV), so the conversation this
+    // instance was running no longer exists anywhere the container can reach.
+    // Record it here, at the first moment it is knowable, rather than letting
+    // the session discover it a wake and a 404 later.
+    if (!storedBackup) {
+      await this.recordWorkspaceLoss();
+    }
+
     try {
       if (storedBackup) {
         await this.restoreBackup(storedBackup.backup);
@@ -2204,6 +2220,38 @@ export class Sandbox extends BaseSandbox<Env> {
       await this.recordPersistenceError('restore', error);
       throw error;
     }
+  }
+
+  /**
+   * Remember that this instance came up on an empty workspace while it owned an
+   * OpenCode session.
+   *
+   * Only recorded when there is a session to lose: an instance that has never
+   * created one has nothing to restore, which is the ordinary first wake. The
+   * record is keyed by the session id it invalidates so a later session on the
+   * same instance is not condemned by an older loss.
+   */
+  private async recordWorkspaceLoss(): Promise<void> {
+    const opencodeSessionId = this.transcriptTarget?.opencodeSessionId;
+    if (!opencodeSessionId) {
+      return;
+    }
+    const existing =
+      await this.persistenceState.storage.get<WorkspaceLoss>(
+        WORKSPACE_LOST_STORAGE_KEY
+      );
+    if (existing?.opencodeSessionId === opencodeSessionId) {
+      return;
+    }
+    const loss: WorkspaceLoss = {
+      at: new Date().toISOString(),
+      opencodeSessionId
+    };
+    await this.persistenceState.storage.put(WORKSPACE_LOST_STORAGE_KEY, loss);
+    console.warn('Workspace lost without a checkpoint', {
+      instanceId: this.instanceIdentity?.id,
+      opencodeSessionId
+    });
   }
 
   private async createCheckpoint(

@@ -22,6 +22,7 @@ import {
   reconcileOptimisticPrompts,
   type OptimisticPrompt
 } from '../optimistic';
+import { isPlainClick, navigate } from '../router';
 import { useTranscript } from '../useTranscript';
 import { ArrowUpIcon, MenuIcon, PanelIcon, StopIcon } from './icons';
 import { MessageList } from './MessageList';
@@ -130,7 +131,9 @@ export function SessionPage({
   }, [messages]);
 
   const ready = session?.instance.lifecycle === 'ready';
-  const canSend = Boolean(session) && ready && session?.status !== 'deleting';
+  const lost = session?.phase === 'lost';
+  const canSend =
+    Boolean(session) && ready && session?.status !== 'deleting' && !lost;
   // Keyed to the container, not the folded status. Sending a message puts the
   // session back through queued/starting while the agent is already generating,
   // and the badge reports that dispatch — but there is plainly something to
@@ -301,6 +304,40 @@ export function SessionPage({
                 <p className="muted">No messages yet.</p>
               ) : null}
 
+              {/*
+                A lost session is not a failure to retry: the container came
+                back without the conversation, so there is nothing left to send
+                to. The history above is the mirror, and it stays readable.
+              */}
+              {lost ? (
+                <section className="card">
+                  <h2>This session was lost</h2>
+                  <p className="muted">
+                    Its container restarted without a workspace checkpoint, so
+                    OpenCode no longer has this conversation. The history above
+                    is the last mirror the Hub exported; it cannot be continued.
+                  </p>
+                  {session?.lastError ? (
+                    <p className="muted mono">{session.lastError}</p>
+                  ) : null}
+                  <div className="actions">
+                    <a
+                      className="button"
+                      href="/"
+                      onClick={(event) => {
+                        if (!isPlainClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigate('/');
+                      }}
+                    >
+                      Start a new session
+                    </a>
+                  </div>
+                </section>
+              ) : null}
+
               {session?.phase === 'failed' ? (
                 <section className="card error">
                   <h2>Failed to start</h2>
@@ -332,7 +369,7 @@ export function SessionPage({
               asleep. Once a message has queued a wake, the progress banner says
               everything this one would, and more usefully.
             */}
-            {state === 'sleeping' && !dispatching ? (
+            {state === 'sleeping' && !dispatching && !lost ? (
               <p className="banner">
                 {mirroredAt
                   ? `This session is asleep. Above is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
@@ -360,9 +397,11 @@ export function SessionPage({
                 className="prompt"
                 rows={2}
                 placeholder={
-                  attached
-                    ? 'Say something…'
-                    : 'Session is asleep — sending wakes it and continues'
+                  lost
+                    ? 'This session was lost and cannot be continued'
+                    : attached
+                      ? 'Say something…'
+                      : 'Session is asleep — sending wakes it and continues'
                 }
                 value={prompt}
                 disabled={busy || !canSend}

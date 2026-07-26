@@ -14,6 +14,7 @@ export type SessionStatus =
   | 'idle'
   | 'sleeping'
   | 'failed'
+  | 'lost'
   | 'error'
   | 'deleting';
 
@@ -72,7 +73,7 @@ export interface SessionView {
   /** What to show — OpenCode's own title once it has one. */
   displayTitle: string;
   archivedAt?: string;
-  phase: 'queued' | 'starting' | 'working' | 'failed';
+  phase: 'queued' | 'starting' | 'working' | 'failed' | 'lost';
   status: SessionStatus;
   lastActivityAt: string;
   lastError?: string;

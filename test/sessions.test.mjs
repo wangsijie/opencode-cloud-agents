@@ -72,7 +72,7 @@ test('prompts are trimmed, required and bounded', () => {
 })
 
 test('session phases are a closed set', () => {
-  for (const phase of ['queued', 'starting', 'working', 'failed']) {
+  for (const phase of ['queued', 'starting', 'working', 'failed', 'lost']) {
     assert.ok(isSessionPhase(phase))
   }
   assert.equal(isSessionPhase('running'), false)
@@ -112,6 +112,17 @@ test('failures and deletion outrank every other badge', () => {
   assert.equal(deriveSessionStatus('working', runtime('error')), 'error')
   assert.equal(deriveSessionStatus('failed', runtime('busy', true)), 'deleting')
   assert.equal(deriveSessionStatus('working', runtime('idle', true)), 'deleting')
+})
+
+test('a lost conversation outranks whatever the container is doing', () => {
+  // The container is fine — it just no longer holds this conversation, so its
+  // own state says nothing worth showing.
+  assert.equal(deriveSessionStatus('lost', runtime('idle')), 'lost')
+  assert.equal(deriveSessionStatus('lost', runtime('busy')), 'lost')
+  assert.equal(deriveSessionStatus('lost', runtime('sleeping')), 'lost')
+  assert.equal(deriveSessionStatus('lost', runtime('error')), 'lost')
+  // Deletion still wins: the session is about to stop existing either way.
+  assert.equal(deriveSessionStatus('lost', runtime('idle', true)), 'deleting')
 })
 
 test('last activity is the newest timestamp on the record', () => {

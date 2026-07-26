@@ -13,6 +13,16 @@ export function parseRoute(pathname: string): Route {
   return match ? { name: 'session', id: decodeURIComponent(match[1]) } : { name: 'list' };
 }
 
+/** Let a modifier-click or middle-click behave like the link it is. */
+export function isPlainClick(event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  button: number;
+}): boolean {
+  return !(event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0);
+}
+
 export function navigate(path: string): void {
   if (path !== location.pathname) {
     history.pushState(null, '', path);

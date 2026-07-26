@@ -136,6 +136,20 @@ export interface QueuePromptInput {
   promptId?: string;
 }
 
+/**
+ * Raised when the conversation this session names is gone for good.
+ *
+ * It is not a dispatch failure: no number of retries reaches a session the
+ * container cannot produce, so this ends the state machine at `lost` instead of
+ * entering the retry ladder.
+ */
+class SessionStateLostError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionStateLostError';
+  }
+}
+
 export interface SessionAgentSnapshot {
   sessionId: string;
   phase: SessionPhase;
@@ -233,6 +247,12 @@ export class SessionAgent extends DurableObject<Env> {
   async queuePrompt(input: QueuePromptInput): Promise<SessionAgentSnapshot> {
     await this.ready;
     const state = this.requireState();
+    if (state.phase === 'lost') {
+      throw new SessionStateLostError(
+        state.lastError ??
+          'This session is lost: the container no longer holds its conversation.'
+      );
+    }
     const model = input.model ?? state.model;
     if (!isModelRef(model)) {
       throw new Error(`Unknown model: ${model}`);
@@ -268,6 +288,12 @@ export class SessionAgent extends DurableObject<Env> {
   async retrySession(): Promise<SessionAgentSnapshot> {
     await this.ready;
     const state = this.requireState();
+    if (state.phase === 'lost') {
+      // Nothing to retry into. Leaving the phase alone is the whole point: a
+      // retry that silently re-queued would put the session back on the ladder
+      // that already established the conversation is gone.
+      return this.snapshot();
+    }
     this.state = {
       ...state,
       phase: state.pending.length > 0 ? 'queued' : 'working',
@@ -287,6 +313,25 @@ export class SessionAgent extends DurableObject<Env> {
   async getSnapshot(): Promise<SessionAgentSnapshot | undefined> {
     await this.ready;
     return this.state ? this.snapshot() : undefined;
+  }
+
+  /**
+   * Record that the conversation is gone, from outside the dispatch path.
+   *
+   * The session view is normally what notices first — it reads the container's
+   * runtime status on every poll — and the agent has to agree, or its alarm
+   * would go on dispatching into a session the container cannot produce.
+   */
+  async markLost(lastError: string): Promise<SessionAgentSnapshot | undefined> {
+    await this.ready;
+    if (!this.state) {
+      return undefined;
+    }
+    if (this.state.phase !== 'lost') {
+      await this.agentState.storage.deleteAlarm();
+      await this.update({ phase: 'lost', attempt: 0, lastError });
+    }
+    return this.snapshot();
   }
 
   /** Drop persisted state when the owning instance is deleted. */
@@ -324,9 +369,31 @@ export class SessionAgent extends DurableObject<Env> {
       }
       const message = error instanceof Error ? error.message : String(error);
       const attempt = this.state.attempt + 1;
+      const exhausted = attempt > RETRY_BACKOFF_MS.length;
+      // Two routes to the same verdict, and they are not equally certain. The
+      // container reporting an unrestored workspace is a fact about storage:
+      // act on it at once, before the retry ladder wastes three more wakes. A
+      // 404 from OpenCode is only evidence — a session can also read as missing
+      // while the checkout it belongs to is still being provisioned — so it
+      // ends the ladder rather than skipping it, and only decides the verdict
+      // once the retries have failed to disagree.
+      if (
+        error instanceof SessionStateLostError ||
+        (exhausted && isMissingOpencodeSession(message))
+      ) {
+        // Terminal: no alarm, no further retries. The queued prompts stay on
+        // the record so the user can see what never made it, and the Hub
+        // renders the session as lost rather than as one more thing to retry.
+        await this.update({ phase: 'lost', attempt: 0, lastError: message });
+        console.warn('Session state lost', {
+          sessionId: state.sessionId,
+          error: message
+        });
+        return;
+      }
       const backoff = RETRY_BACKOFF_MS[attempt - 1];
       await this.update({
-        phase: attempt > RETRY_BACKOFF_MS.length ? 'failed' : 'queued',
+        phase: exhausted ? 'failed' : 'queued',
         attempt,
         lastError: message
       });
@@ -350,6 +417,11 @@ export class SessionAgent extends DurableObject<Env> {
       state.instanceId,
       lifecycle
     );
+
+    // The container reports an unrestored workspace as soon as it comes up, so
+    // ask before spending a lease and a prompt on a conversation that cannot
+    // exist any more.
+    await this.assertSessionStateSurvived(sandbox);
 
     const lease = await lifecycle.beginWork(
       wake.runtimeEpoch,
@@ -422,6 +494,29 @@ export class SessionAgent extends DurableObject<Env> {
     if (confirmed) {
       await lifecycle.endWork(wake.runtimeEpoch, lease.leaseId);
     }
+  }
+
+  /**
+   * Stop the dispatch when the container has lost this session's state.
+   *
+   * Only a session that already exists can be lost: before the first dispatch
+   * has created one there is nothing in the container to miss, and an empty
+   * workspace is simply the first wake.
+   */
+  private async assertSessionStateSurvived(
+    sandbox: InstanceSandboxRpc
+  ): Promise<void> {
+    const opencodeSessionId = this.state?.opencodeSessionId;
+    if (!opencodeSessionId) {
+      return;
+    }
+    const runtime = await sandbox.getInstanceRuntimeStatus();
+    if (runtime.workspaceLost?.opencodeSessionId !== opencodeSessionId) {
+      return;
+    }
+    throw new SessionStateLostError(
+      `The container restarted without a workspace checkpoint, so OpenCode session ${opencodeSessionId} no longer exists (lost at ${runtime.workspaceLost.at}).`
+    );
   }
 
   /**
@@ -559,5 +654,21 @@ export class SessionAgent extends DurableObject<Env> {
 }
 
 function needsDispatch(state: StoredSessionAgentState): boolean {
-  return state.pending.length > 0 && state.phase !== 'failed';
+  return (
+    state.pending.length > 0 &&
+    state.phase !== 'failed' &&
+    state.phase !== 'lost'
+  );
+}
+
+/**
+ * Whether the container is telling us the OpenCode session no longer exists.
+ *
+ * The Sandbox reports the loss up front once it has seen an empty workspace,
+ * but a container can also lose its state in ways nothing observed — so the
+ * 404 that comes back from a prompt is treated as the same fact rather than as
+ * one more transient dispatch failure to retry.
+ */
+function isMissingOpencodeSession(message: string): boolean {
+  return /session not found/i.test(message);
 }

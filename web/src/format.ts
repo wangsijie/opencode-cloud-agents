@@ -141,6 +141,7 @@ export const STATUS_LABELS: Record<SessionStatus, string> = {
   idle: 'Idle',
   sleeping: 'Sleeping',
   failed: 'Failed to start',
+  lost: 'Lost',
   error: 'Error',
   deleting: 'Deleting'
 };

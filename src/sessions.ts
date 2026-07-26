@@ -21,13 +21,21 @@ export type SessionPhase =
   /** Every queued prompt has been handed to the container's agent loop. */
   | 'working'
   /** Dispatch failed after the automatic retries; retryable from the Hub. */
-  | 'failed';
+  | 'failed'
+  /**
+   * The container lost the conversation: it came up on an empty workspace, so
+   * the OpenCode session this record points at no longer exists anywhere.
+   * Terminal — retrying cannot reach a session that is gone, and starting a new
+   * one would be a different conversation wearing this one's name.
+   */
+  | 'lost';
 
 export const SESSION_PHASES: readonly SessionPhase[] = [
   'queued',
   'starting',
   'working',
-  'failed'
+  'failed',
+  'lost'
 ];
 
 export interface SessionRecord {
@@ -89,6 +97,7 @@ export type SessionStatus =
   | 'idle'
   | 'sleeping'
   | 'failed'
+  | 'lost'
   | 'error'
   | 'deleting';
 
@@ -130,7 +139,9 @@ export function deriveDisplayTitle(
 /**
  * Fold the dispatch phase and the runtime lifecycle into one badge.
  *
- * Dispatch failures and deletion outrank everything: they need a human either
+ * Deletion and a lost conversation outrank everything: once either is true the
+ * container's own state says nothing worth showing. A dispatch failure comes
+ * next, because it needs a human either
  * way. Below those, an unfinished dispatch (`queued`/`starting`) describes the
  * session better than the container does, because the container is only being
  * woken in service of that dispatch. Once every prompt has been handed over,
@@ -142,6 +153,9 @@ export function deriveSessionStatus(
 ): SessionStatus {
   if (runtime.deleting) {
     return 'deleting';
+  }
+  if (phase === 'lost') {
+    return 'lost';
   }
   if (phase === 'failed') {
     return 'failed';

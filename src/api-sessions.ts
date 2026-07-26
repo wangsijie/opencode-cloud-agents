@@ -188,6 +188,12 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   if (action !== 'retry') {
     throw new HttpError(404, 'Session action not found');
   }
+  if (record.phase === 'lost') {
+    throw new HttpError(
+      409,
+      'This session was lost when its container restarted without a checkpoint. There is nothing left to retry into.'
+    );
+  }
   await resolveSessionAgent(env, record.id).retrySession();
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
@@ -312,6 +318,17 @@ async function getSessionView(
         updatedAt: record.updatedAt,
         runtime: unknownRuntimeStatus(true)
       };
+  // A loss the container has already reported outranks whatever the record
+  // still says. Reading the list is often the first thing that happens after a
+  // container came back empty, so this is where the session usually learns it —
+  // ahead of the next dispatch, and without waiting for one.
+  if (
+    record.phase !== 'lost' &&
+    record.opencodeSessionId &&
+    view.runtime.workspaceLost?.opencodeSessionId === record.opencodeSessionId
+  ) {
+    record = await markSessionLost(env, record, view.runtime.workspaceLost.at);
+  }
   // The summary rides along on the runtime status the list already reads, so
   // knowing how much history a session has costs no extra round trip and no
   // contact with the container.
@@ -328,6 +345,33 @@ async function getSessionView(
     displayTitle: deriveDisplayTitle(record, transcript),
     ...(transcript ? { transcript } : {})
   };
+}
+
+/**
+ * Write the loss onto the record, once.
+ *
+ * The agent is told as well as the registry: it owns the phase, and leaving it
+ * on `queued` would let its alarm keep dispatching into a conversation that no
+ * longer exists.
+ */
+async function markSessionLost(
+  env: Env,
+  record: SessionRecord,
+  at: string
+): Promise<SessionRecord> {
+  const lastError = `The container restarted without a workspace checkpoint at ${at}, so this conversation no longer exists.`;
+  await resolveSessionAgent(env, record.id)
+    .markLost(lastError)
+    .catch((error: unknown) => {
+      console.warn('Failed to mark the session agent lost', {
+        sessionId: record.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  const updated = await getHub(env)
+    .updateSession(record.id, { phase: 'lost', lastError })
+    .catch(() => undefined);
+  return updated ?? { ...record, phase: 'lost', lastError };
 }
 
 /**
@@ -356,6 +400,15 @@ async function sendSessionPrompt(
   record: SessionRecord
 ): Promise<Response> {
   const input = await readSendPromptInput(request);
+  if (record.phase === 'lost') {
+    // The conversation this session names is gone from the container. A message
+    // sent here would either 404 or open a different conversation under this
+    // session's name; both are worse than saying so.
+    throw new HttpError(
+      409,
+      'This session was lost when its container restarted without a checkpoint. Start a new session to continue.'
+    );
+  }
   const instance = await getHub(env).getInstance(record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     // A container being deleted is the one state no amount of waking fixes.

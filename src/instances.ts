@@ -59,6 +59,21 @@ export interface WakeTimings extends WakeStageTimings {
   cold: boolean;
 }
 
+/**
+ * A container that came back up on an empty workspace while it still owned an
+ * OpenCode session.
+ *
+ * OpenCode's own state lives inside `/workspace`, so a container that dies
+ * without checkpointing takes the conversation with it. Nothing can bring that
+ * session back — the record exists so the loss is reported once, immediately,
+ * instead of being rediscovered as a 404 on every later prompt.
+ */
+export interface WorkspaceLoss {
+  at: string;
+  /** The OpenCode session the lost workspace held. */
+  opencodeSessionId: string;
+}
+
 export interface InstanceRuntimeStatus {
   container: 'running' | 'stopping' | 'stopped' | 'healthy' | 'stopped_with_code' | 'unknown';
   containerLastChangedAt?: string;
@@ -84,6 +99,11 @@ export interface InstanceRuntimeStatus {
       message: string;
     };
   };
+  /**
+   * Set once this instance has woken to an empty workspace it should have
+   * restored. The session it names is unrecoverable.
+   */
+  workspaceLost?: WorkspaceLoss;
   /**
    * How long the last wake took, per stage. Present once this instance has
    * woken at least once since wakes started being measured.

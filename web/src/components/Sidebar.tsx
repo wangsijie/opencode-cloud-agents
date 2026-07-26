@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   deleteSession,
   patchSession,
@@ -6,17 +6,12 @@ import {
   type SessionView
 } from '../api';
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
-import { navigate, sessionPath } from '../router';
+import { isPlainClick, navigate, sessionPath } from '../router';
 import { DotsIcon, PlusIcon } from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
 
 const BUCKET_ORDER: RecencyBucket[] = ['today', 'yesterday', 'week', 'older'];
-
-/** Let a modifier-click or middle-click behave like the link it is. */
-function isPlainClick(event: MouseEvent): boolean {
-  return !(event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0);
-}
 
 /**
  * The session history, as navigation.
@@ -227,6 +222,9 @@ function Row({
       >
         {working ? <i className="row-dot working" aria-hidden="true" /> : null}
         {failed ? <i className="row-dot failed" aria-hidden="true" /> : null}
+        {session.status === 'lost' ? (
+          <i className="row-dot lost" aria-hidden="true" />
+        ) : null}
         <span className="row-title">{session.displayTitle}</span>
       </a>
       <button

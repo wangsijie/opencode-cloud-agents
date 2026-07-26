@@ -405,7 +405,7 @@ code {
 }
 
 .sidebar-group-label {
-  margin: 12px 0 4px;
+  margin: 10px 0 2px;
   padding-inline: 10px;
   color: var(--text-dim);
   font-size: 12px;
@@ -416,8 +416,10 @@ code {
   position: relative;
   display: flex;
   align-items: center;
-  /* 40px keeps the row inside a comfortable thumb target on a phone. */
-  min-height: 40px;
+  min-height: 32px;
+  /* The gap keeps two adjacent highlighted rows — the active one and the one
+     under the pointer — from reading as a single block. */
+  margin-bottom: 2px;
   padding-right: 4px;
   border-radius: var(--radius-sm);
   font-size: 14px;
@@ -431,7 +433,7 @@ code {
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 6px 4px 6px 10px;
+  padding: 4px 4px 4px 10px;
   color: var(--text);
   text-decoration: none;
 }
@@ -471,6 +473,10 @@ code {
 
 .row-dot.failed {
   background: var(--danger);
+}
+
+.row-dot.lost {
+  background: var(--text-dim);
 }
 
 .row-menu-button {
@@ -1222,6 +1228,11 @@ summary:focus-visible {
 .badge-failed .dot,
 .badge-error .dot {
   background: var(--danger);
+}
+
+/* A lost session is over, not broken: it should read as inert, not as alarm. */
+.badge-lost .dot {
+  background: var(--text-dim);
 }
 
 .badge-deleting .dot {
