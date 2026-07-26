@@ -80,9 +80,9 @@ restore the workspace snapshot and run a best-effort `git fetch origin` without
 touching the working tree. A clone failure fails the wake; a fetch failure only
 logs a warning.
 
-Adding a repository is a one-line change in `src/repos.ts` plus a deploy.
-Public repositories use HTTPS clone URLs; private ones use SSH and require the
-bundled image key to be authorized on GitHub.
+Adding a repository is a one-line change in `src/repos.ts` plus a deploy. Every
+entry clones over SSH, so the bundled image key must be authorized for it on
+GitHub — public repositories included.
 
 All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.

@@ -6,10 +6,10 @@
  * first wake clones into `/workspace/<repoKey>`; later wakes restore the
  * workspace snapshot and run a best-effort `git fetch`.
  *
- * Adding a repository is a one-line change here followed by a deploy. Public
- * repositories should use HTTPS clone URLs; private repositories use SSH and
- * require the bundled image key (`docker/ssh/id_ed25519.pub`) to be authorized
- * for them on GitHub.
+ * Adding a repository is a one-line change here followed by a deploy. Every
+ * entry clones over SSH, so the bundled image key
+ * (`docker/ssh/id_ed25519.pub`) must be authorized for it on GitHub — public
+ * repositories included.
  */
 export interface RepoDefinition {
   /** Directory name below /workspace and the stable API identifier. */
@@ -24,16 +24,27 @@ export const REPOS: readonly RepoDefinition[] = [
   {
     repoKey: 'logto',
     displayName: 'logto-io/logto',
-    cloneUrl: 'https://github.com/logto-io/logto.git',
+    cloneUrl: 'git@github.com:logto-io/logto.git',
+    defaultBranch: 'master'
+  },
+  {
+    repoKey: 'logto-cloud',
+    displayName: 'logto-io/cloud',
+    cloneUrl: 'git@github.com:logto-io/cloud.git',
+    defaultBranch: 'master'
+  },
+  {
+    repoKey: 'v2ray-docker',
+    displayName: 'wangsijie/v2ray-docker',
+    cloneUrl: 'git@github.com:wangsijie/v2ray-docker.git',
+    defaultBranch: 'master'
+  },
+  {
+    repoKey: 'senmart',
+    displayName: 'wangsijie/senmart',
+    cloneUrl: 'git@github.com:wangsijie/senmart.git',
     defaultBranch: 'master'
   }
-  // Private repository example:
-  // {
-  //   repoKey: 'my-repo',
-  //   displayName: 'wangsijie/my-repo',
-  //   cloneUrl: 'git@github.com:wangsijie/my-repo.git',
-  //   defaultBranch: 'main'
-  // }
 ];
 
 /** Root of the snapshotted container workspace shared by every instance. */
