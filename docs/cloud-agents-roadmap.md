@@ -205,8 +205,11 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 
 - 不下发自定义 `messageID`。OpenCode 的消息 id 内含可排序时间戳前缀，塞随机 UUID 会破坏
   消息顺序；M5 的幂等去重改用 SessionAgent 队列内的 prompt id（派发成功后才出队）。
-- 派发时取一次 90 秒 work lease 且**不显式 endWork**：任务刚被接收到探测到 busy 之间有
-  空窗，让租约自然过期比立即 endWork 触发一次可能误判 idle 的探测更保守。
+- 派发时取一次 90 秒 work lease，桥接"任务被接收"到"探针看得见 busy"之间的空窗。批次交付
+  完成后确认会话确实活跃（`awaitPromptSettled`）再 `endWork`：确认这一步是安全前提，因为
+  `endWork` 会立刻重探，而任务尚未起跑时的那一探会读成 idle。确认不到就让租约自然过期——
+  观测不到的会话保守地当作在执行。（早先的做法是一律不 endWork、只等过期，代价是任何短于
+  90 秒的任务结束后仍会显示满 90 秒的"执行中"。）
 - 会话删除由 Worker 先调 `SessionAgent.markDeleted()` 再调 `Hub.beginDelete()`，避免
   Hub↔SessionAgent 互相等待造成 DO RPC 死锁（SessionAgent 会回写 Hub）。
 

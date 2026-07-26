@@ -42,9 +42,15 @@ const SCHEMA_VERSION = 1;
 const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000] as const;
 
 /**
- * The lease deliberately outlives dispatch and is never explicitly ended: a
- * just-accepted task can take a moment to appear as busy, and expiring the
- * lease is the conservative way to bridge that gap.
+ * The lease bridges the gap between a task being accepted and the activity
+ * probe being able to see it, so it must outlive `prompt_async` returning.
+ *
+ * Dispatch ends it explicitly once the handover is observably real (see
+ * `dispatchPending`), because holding it to expiry pins the session at
+ * `working` for the full TTL even after the agent has finished — the dominant
+ * term in perceived status lag for any task shorter than the lease. The TTL
+ * remains the fallback for every path that cannot confirm: a dispatch that
+ * throws, or a session that never becomes observably active.
  */
 const DISPATCH_WORK_LEASE_MS = 90_000;
 
@@ -366,6 +372,7 @@ export class SessionAgent extends DurableObject<Env> {
 
     // Prompts leave the queue one at a time so a failure halfway through a
     // batch cannot replay an already-accepted prompt on the next attempt.
+    let delivered = false;
     while (this.state && this.state.pending.length > 0) {
       const prompt = this.state.pending[0];
       const model = parseModelRef(prompt.model);
@@ -388,6 +395,7 @@ export class SessionAgent extends DurableObject<Env> {
         ].slice(-MAX_DELIVERED_PROMPT_IDS),
         lastPromptAt: new Date().toISOString()
       });
+      delivered = true;
       if (this.state && this.state.pending.length > 0) {
         await this.awaitPromptSettled(sandbox, wake.runtimeEpoch, {
           opencodeSessionId,
@@ -395,40 +403,64 @@ export class SessionAgent extends DurableObject<Env> {
         });
       }
     }
+
+    // Hand the session back to the activity probe as soon as the probe can
+    // actually see the work, rather than letting the lease expire. Confirming
+    // first is what makes this safe: `endWork` re-probes immediately, and a
+    // probe fired before the task starts would read the session as idle.
+    //
+    // Nothing delivered means there is no handover to bridge, so the lease has
+    // nothing left to protect either way. When the wait gives up the lease is
+    // deliberately left to expire — the conservative reading of an
+    // unobservable session is that it is working.
+    const confirmed =
+      !delivered ||
+      (await this.awaitPromptSettled(sandbox, wake.runtimeEpoch, {
+        opencodeSessionId,
+        directory: this.state?.directory ?? state.directory
+      }));
+    if (confirmed) {
+      await lifecycle.endWork(wake.runtimeEpoch, lease.leaseId);
+    }
   }
 
   /**
-   * Wait until the session is running work before handing over another prompt.
+   * Wait until the session is observably running work. Returns whether that was
+   * confirmed.
    *
-   * Only called when more prompts are still queued, so the ordinary
-   * one-message case costs nothing. Once this returns the session normally
-   * stays busy for the rest of the batch, so later iterations return on their
-   * first check. Failure to observe it is logged and ignored: sending the next
+   * Two callers, both wanting the same fact for different reasons. Between
+   * prompts it enforces ordering, and the answer is ignored: sending the next
    * prompt slightly too early risks the wrong order, while refusing to send it
-   * at all loses the message.
+   * at all loses the message. After the batch it decides whether the dispatch
+   * lease can be released, where a false answer means "keep the lease".
+   *
+   * The post-batch call is normally the cheap case — a multi-prompt batch has
+   * already established busy, and a single prompt only has to become active
+   * once — so this costs one probe, not the full wait.
    */
   private async awaitPromptSettled(
     sandbox: InstanceSandboxRpc,
     runtimeEpoch: string,
     target: OpencodeSessionActivityInput
-  ): Promise<void> {
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < PROMPT_SETTLE_POLL_ATTEMPTS; attempt += 1) {
       try {
         if (await sandbox.isOpencodeSessionActive(runtimeEpoch, target)) {
-          return;
+          return true;
         }
       } catch (error) {
-        console.warn('Failed to observe session activity between prompts', {
+        console.warn('Failed to observe session activity after dispatch', {
           sessionId: this.state?.sessionId,
           error: error instanceof Error ? error.message : String(error)
         });
-        return;
+        return false;
       }
       await scheduler.wait(PROMPT_SETTLE_POLL_INTERVAL_MS);
     }
-    console.warn('Prompt did not become active before the next was sent', {
+    console.warn('Prompt did not become active before the settle wait expired', {
       sessionId: this.state?.sessionId
     });
+    return false;
   }
 
   private async update(

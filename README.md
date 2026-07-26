@@ -130,8 +130,9 @@ starts inside the container:
 3. It takes a short work lease, creates the OpenCode session bound to
    `/workspace/<repoKey>`, and calls `session.promptAsync`.
 4. `promptAsync` returns as soon as the container accepts the task, so nothing
-   holds a connection while the agent works. The semantic activity probe sees
-   the run as busy and the usual 10-minute idle stop follows completion.
+   holds a connection while the agent works. The agent waits for the run to
+   show up as busy, releases its lease, and leaves the rest to the semantic
+   activity probe; the usual 10-minute idle stop follows completion.
 
 Continuing a session takes the same path, whether or not its container is still
 running. `POST /api/sessions/<id>/messages` puts the prompt on the agent's
@@ -387,6 +388,9 @@ runtime.
 - Work-starting calls carry a short durable lease so a fast task that starts
   and finishes between probes still resets the idle window. An attached terminal
   renews the same kind of lease, because a shell is invisible to the probe.
+- Dispatch releases its lease once it has confirmed the session is observably
+  active, handing the session back to the probe instead of staying `working`
+  until the lease expires. A handover it cannot confirm keeps the lease.
 - At the deadline, admission closes first; Sandbox waits for admitted request
   handshakes to drain, confirms OpenCode is still idle, checkpoints, and stops.
 - Open browser tabs, SSE streams, WebSockets, and status polling do not count as
