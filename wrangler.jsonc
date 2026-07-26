@@ -12,9 +12,10 @@
     "PERSISTENCE_LOCAL_BUCKET": "false"
   },
   // The Hub SPA. `run_worker_first` keeps every route decision in the Worker:
-  // Cloudflare Access must gate the app, `/` serves either the SPA or the stock
-  // UI depending on its query, and `/assets/` still belongs to the container
-  // proxy. Letting the asset server answer first would quietly break all three.
+  // the origin check runs on every request, `/` serves either the SPA or the
+  // stock UI depending on its query, and `/assets/` still belongs to the
+  // container proxy. Letting the asset server answer first would quietly break
+  // all three.
   "assets": {
     "directory": "./web/dist",
     "binding": "ASSETS",

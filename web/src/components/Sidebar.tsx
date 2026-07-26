@@ -38,7 +38,8 @@ export function Sidebar({
   onToggleArchived,
   refresh,
   open,
-  onClose
+  onClose,
+  onSignOut
 }: {
   sessions?: SessionView[];
   listError?: string;
@@ -48,6 +49,7 @@ export function Sidebar({
   refresh: (silent?: boolean) => Promise<void>;
   open: boolean;
   onClose: () => void;
+  onSignOut: () => Promise<void>;
 }) {
   const [menuFor, setMenuFor] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
@@ -183,6 +185,12 @@ export function Sidebar({
         ) : permission === 'denied' ? (
           <span className="muted">Notifications blocked by the browser</span>
         ) : null}
+        <button
+          className="link-button"
+          onClick={() => void onSignOut().catch(() => undefined)}
+        >
+          Sign out
+        </button>
       </div>
     </nav>
   );

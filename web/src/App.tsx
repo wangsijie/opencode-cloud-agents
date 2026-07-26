@@ -1,11 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchCatalog, type Catalog } from './api';
+import {
+  fetchAuthState,
+  fetchCatalog,
+  signOut,
+  UNAUTHORIZED_EVENT,
+  type Catalog
+} from './api';
 import { NewSessionPage } from './components/NewSessionPage';
 import { SessionPage } from './components/SessionPage';
 import { Sidebar } from './components/Sidebar';
+import { SignInPage } from './components/SignInPage';
 import { useRoute } from './router';
 import { useCompletionNotice } from './useCompletionNotice';
 import { useSessions } from './useSessions';
+
+/**
+ * The password gate.
+ *
+ * It stands outside the app rather than inside it so that a signed-out browser
+ * mounts none of the hooks below — no session poll, no catalog fetch, nothing
+ * that would answer 401 in a loop. The first render asks the Hub which state
+ * this browser is in and shows neither until it knows: flashing the sign-in
+ * form at somebody who is already signed in reads as being logged out.
+ */
+export function App() {
+  const [authenticated, setAuthenticated] = useState<boolean>();
+
+  useEffect(() => {
+    void fetchAuthState()
+      .then((state) => setAuthenticated(state.authenticated))
+      .catch(() => setAuthenticated(false));
+  }, []);
+
+  useEffect(() => {
+    const signedOut = () => setAuthenticated(false);
+    window.addEventListener(UNAUTHORIZED_EVENT, signedOut);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, signedOut);
+  }, []);
+
+  if (authenticated === undefined) {
+    return null;
+  }
+  if (!authenticated) {
+    return <SignInPage onSignedIn={() => setAuthenticated(true)} />;
+  }
+  return <Hub onSignedOut={() => setAuthenticated(false)} />;
+}
 
 /**
  * The shell: past sessions on the left, one conversation on the right.
@@ -17,7 +57,7 @@ import { useSessions } from './useSessions';
  * The catalog is fetched once; the session list polls, because its state
  * changes underneath the page as containers wake, work and sleep.
  */
-export function App() {
+function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const route = useRoute();
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogError, setCatalogError] = useState<string>();
@@ -81,6 +121,10 @@ export function App() {
         refresh={refresh}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onSignOut={async () => {
+          await signOut();
+          onSignedOut();
+        }}
       />
       {sidebarOpen ? (
         <button

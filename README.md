@@ -176,22 +176,23 @@ follows.
 
 ## Production access control
 
-The Hub exposes a terminal inside an image that contains deployment credentials,
-so production requests fail closed unless they carry a valid Cloudflare Access
-application JWT. Put the one Hub hostname behind an Access self-hosted
-application, then configure the exact team issuer and application Audience tag:
+One admin password, hardcoded in [src/access.ts](src/access.ts) next to the
+comment that explains why — the same reasoning that keeps provider credentials
+in `src/opencode-config.ts`. Change `ADMIN_PASSWORD` there and redeploy; every
+signed-in browser is signed out, because the cookie carries a hash of that
+string rather than a random session id the Worker would have to remember.
 
-```bash
-# Example issuer value: https://your-team.cloudflareaccess.com
-pnpm wrangler secret put ACCESS_TEAM_DOMAIN
-pnpm wrangler secret put ACCESS_POLICY_AUD
-```
+Everything under `/api/` requires it, including the terminal WebSocket. The SPA
+shell and its assets do not: they carry the sign-in form and nothing else worth
+reading. A rejected request answers 401, which drops the open tab back to the
+form. `wrangler dev` asks for the password too — there is no local bypass.
 
-The Worker validates the `Cf-Access-Jwt-Assertion` signature, issuer, and
-audience against Access's rotating JWKS. Keep the default `workers.dev` route
-disabled or protect it with the same policy so it cannot become a second entry
-point. Local Wrangler requests are exempt only when
-`PERSISTENCE_LOCAL_BUCKET=true` and the hostname is loopback.
+This is a single fixed secret with no rate limiting, which is enough for one
+operator on an unlisted hostname and not much more. The Hub hands out a terminal
+inside an image carrying deployment credentials, so if this deployment ever
+grows a second user or a guessable address, put it behind real identity —
+Cloudflare Access in front of every route including the default `workers.dev`
+one, or a Zero Trust tunnel.
 
 ## Run locally
 

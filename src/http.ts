@@ -69,10 +69,13 @@ export function isWebSocketUpgrade(request: Request): boolean {
 
 /**
  * Strip the Hub's own front-door credentials from a request being forwarded
- * into a container. Cloudflare Access identity ends at the Worker: nothing
- * inside the sandbox needs it, and forwarding it would hand a session's shell a
- * token for the Hub itself.
+ * into a container. Front-door identity ends at the Worker: nothing inside the
+ * sandbox needs it, and forwarding it would hand a session's shell a token for
+ * the Hub itself. The `cf-access-*` entries are vestigial — the Worker no
+ * longer sits behind Cloudflare Access — and cost nothing to keep stripping.
  */
+const FORWARD_BLOCKED_COOKIES = ['cf_authorization=', 'hub_admin='];
+
 export function stripAccessCredentials(headers: Headers): Headers {
   for (const name of [...headers.keys()]) {
     const lower = name.toLowerCase();
@@ -85,7 +88,12 @@ export function stripAccessCredentials(headers: Headers): Headers {
     const sanitized = cookie
       .split(';')
       .map((part) => part.trim())
-      .filter((part) => !part.toLowerCase().startsWith('cf_authorization='))
+      .filter(
+        (part) =>
+          !FORWARD_BLOCKED_COOKIES.some((blocked) =>
+            part.toLowerCase().startsWith(blocked)
+          )
+      )
       .join('; ');
     if (sanitized) {
       headers.set('cookie', sanitized);

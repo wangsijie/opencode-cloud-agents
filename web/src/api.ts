@@ -100,6 +100,15 @@ export interface Catalog {
   reposStale?: boolean;
 }
 
+/**
+ * Fired when the Hub answers 401 to anything.
+ *
+ * The session cookie can lapse under an open tab, and the polls would then turn
+ * into a wall of failures on whatever page happens to be up. The app listens
+ * for this and goes back to the sign-in form instead.
+ */
+export const UNAUTHORIZED_EVENT = 'hub:unauthorized';
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -112,11 +121,29 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const body: unknown =
     response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
+    // A rejected password is this route's ordinary answer, not a lapsed
+    // session: the form reports it, and nothing else should react.
+    if (response.status === 401 && path !== '/api/auth') {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     const detail = (body as { error?: string } | null)?.error;
     throw new Error(detail ?? `Request failed (${response.status})`);
   }
   return body as T;
 }
+
+/** Whether this browser already holds a session. Answers 200 either way. */
+export const fetchAuthState = () =>
+  call<{ authenticated: boolean }>('/api/auth');
+
+export const signIn = (password: string) =>
+  call<{ authenticated: boolean }>('/api/auth', {
+    method: 'POST',
+    body: JSON.stringify({ password })
+  });
+
+export const signOut = () =>
+  call<{ authenticated: boolean }>('/api/auth', { method: 'DELETE' });
 
 /**
  * One message and its parts, forwarded from OpenCode unchanged.

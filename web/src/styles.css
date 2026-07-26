@@ -540,7 +540,8 @@ code {
 
 textarea,
 select,
-input[type='text'] {
+input[type='text'],
+input[type='password'] {
   width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -641,6 +642,30 @@ summary:focus-visible {
   margin: 0;
   color: var(--danger);
   font-size: 13px;
+}
+
+/* ---------- sign in ---------- */
+
+/*
+  The sign-in form is the whole page when it is shown, so it centres in the
+  viewport rather than sitting in the app's column: there is no sidebar beside
+  it and no header above it to line up with.
+*/
+.sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px 16px;
+  background: var(--bg);
+}
+
+.sign-in-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 22rem;
 }
 
 /* ---------- new session page ---------- */

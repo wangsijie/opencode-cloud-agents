@@ -1,8 +1,8 @@
 /**
  * OpenCode Hub on Cloudflare Sandbox.
  *
- * This module is the single-domain HTTP router and nothing else: it validates
- * Cloudflare Access, dispatches to the API handlers, serves the SPA shell, and
+ * This module is the single-domain HTTP router and nothing else: it checks the
+ * front door, dispatches to the API handlers, serves the SPA shell, and
  * re-exports the Durable Object classes Wrangler binds. The container itself
  * lives in [sandbox.ts](sandbox.ts).
  *
@@ -13,7 +13,7 @@
  * Durable Object RPC from inside this Worker.
  */
 import { ContainerProxy } from '@cloudflare/sandbox';
-import { validateHubAccess } from './access';
+import { enforceSameOrigin, handleAuthApi, requireAdmin } from './access';
 import { handleHubApi } from './api-instances';
 import { handleSessionApi } from './api-sessions';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
@@ -61,9 +61,22 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       const url = new URL(request.url);
-      const accessFailure = await validateHubAccess(request, env, url);
-      if (accessFailure) {
-        return accessFailure;
+      const originFailure = enforceSameOrigin(request, url);
+      if (originFailure) {
+        return originFailure;
+      }
+
+      // Sign-in is the one route that answers without a session, and the SPA
+      // shell below is the one page: it carries the form. Everything else under
+      // `/api/` reaches a container or its records, so it needs the password.
+      if (url.pathname === '/api/auth') {
+        return await handleAuthApi(request, url);
+      }
+      if (url.pathname.startsWith('/api/')) {
+        const authFailure = await requireAdmin(request);
+        if (authFailure) {
+          return authFailure;
+        }
       }
 
       if (url.pathname === '/api/instances' || url.pathname.startsWith('/api/instances/')) {

@@ -18,7 +18,7 @@
 | 语义化空闲判定 | ✅ `LifecycleCoordinator` 按 OpenCode 执行状态（而非网络流量）判定空闲，10 分钟后 quiesce → checkpoint → stop；浏览器 tab/SSE/WebSocket 不算活跃（[lifecycle.ts](../src/lifecycle.ts)） |
 | 工作区持久化 | ✅ `/workspace` 完整快照到 R2，含 OpenCode 会话数据（`XDG_DATA_HOME=/workspace/.opencode-state`），唤醒时自动恢复；备份台账保证可重试清理 |
 | 防陈旧访问 | ✅ runtime epoch 机制，休眠后旧 tab 收 410，被动流量永远无法拉起容器 |
-| 认证 | ✅ Cloudflare Access JWT 校验，单入口 |
+| 认证 | ⚠️ Cloudflare Access 已移除，改为写死在 [access.ts](../src/access.ts) 的单一 admin 密码 + HttpOnly cookie，`/api/*` 全部关闭；临时方案，无限流 |
 | stock UI 单域名代理 | ✅ `/ui/<id>/<epoch>/...` + `/gateway/<id>/<epoch>/...` + bootstrap 补丁（**M6 已整体退役**，见下） |
 | 模型目录 | ✅ [opencode-config.ts](../src/opencode-config.ts) 集中定义 provider/model/能力/成本 |
 | 仓库凭据 | ✅ 镜像内置 SSH key（可 push、可签名）、`gh`、Wrangler 凭据 |
