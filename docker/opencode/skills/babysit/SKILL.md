@@ -24,7 +24,7 @@ This skill enables OpenCode to act as an automated PR babysitter. It monitors a 
 
 ## Execution Workflow
 
-### Phase 1: CI Status Check & "Dark Repair" (CI 修复)
+### Phase 1: CI Status Check & "Dark Repair"
 
 1. **Check CI Run Status**:
    ```bash
@@ -37,7 +37,7 @@ This skill enables OpenCode to act as an automated PR babysitter. It monitors a 
      gh run view --log-failed <run-id>
      ```
    - Inspect failure logs to diagnose the precise root cause (e.g. type errors, failing unit tests, lint violations, missing dependencies, build script errors).
-   - **Perform Dark Repair (黑暗修复)**:
+   - **Perform Dark Repair**:
      - Directly fix the failing code/configuration in the codebase.
      - Do not prompt the user for routine fixes (e.g. broken assertions, syntax errors, type fixes, formatting).
      - Verify the fix locally before committing (e.g. `pnpm run typecheck` or test suite).
@@ -50,7 +50,7 @@ This skill enables OpenCode to act as an automated PR babysitter. It monitors a 
 
 ---
 
-### Phase 2: Review Comments Processing & Scope Guarding (评论处理与偏离拦截)
+### Phase 2: Review Comments Processing & Scope Guarding
 
 1. **Retrieve PR Comments and Reviews**:
    ```bash
@@ -63,9 +63,9 @@ This skill enables OpenCode to act as an automated PR babysitter. It monitors a 
 2. **Evaluate Unhandled Comments**:
    For each actionable comment or review feedback:
 
-   - **Scope Guard (判断偏离主线)**:
-     - **ACCEPT (处理)**: Bug fixes, code style alignment, minor requested refactoring, missing test cases, typos, parameter tweaks directly related to the PR's purpose.
-     - **REJECT (拒绝/偏离主线)**: Off-topic feature requests, large unrelated architectural refactorings, requests to modify unrelated modules, unnecessary scope expansions, or changes contradicting codebase standards ("无关紧要的偏离主线的任务").
+   - **Scope Guard**:
+     - **ACCEPT**: Bug fixes, code style alignment, minor requested refactoring, missing test cases, typos, parameter tweaks directly related to the PR's purpose.
+     - **REJECT**: Off-topic feature requests, large unrelated architectural refactorings, requests to modify unrelated modules, unnecessary scope expansions, or changes contradicting codebase standards (anything that drifts off the PR's main line).
 
    - **Action for ACCEPTED Comments**:
      - Implement the requested changes in the code.
@@ -90,7 +90,7 @@ This skill enables OpenCode to act as an automated PR babysitter. It monitors a 
 
 ---
 
-### Phase 3: Conflict Check & Resolution (冲突处理)
+### Phase 3: Conflict Check & Resolution
 
 1. **Inspect Mergeability**:
    ```bash

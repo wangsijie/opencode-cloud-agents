@@ -236,9 +236,9 @@ export function SessionPage({
         <button
           className="link-button"
           onClick={() => navigate('/')}
-          aria-label="返回列表"
+          aria-label="Back to the list"
         >
-          ← 全部会话
+          ← All sessions
         </button>
         {session ? <StatusBadge status={session.status} /> : null}
       </header>
@@ -248,12 +248,12 @@ export function SessionPage({
           <h1
             onDoubleClick={() => {
               // `prompt` is the composer's state here, so the browser dialog is named.
-              const next = window.prompt('会话标题', session.displayTitle);
+              const next = window.prompt('Session title', session.displayTitle);
               if (next && next.trim() && next.trim() !== session.displayTitle) {
                 void run(() => patchSession(sessionId, { title: next.trim() }));
               }
             }}
-            title="双击重命名"
+            title="Double-click to rename"
           >
             {session.displayTitle}
           </h1>
@@ -271,7 +271,7 @@ export function SessionPage({
             */}
             {session.instance.runtime.lastWake?.cold ? (
               <span title={describeWakeStages(session.instance.runtime.lastWake)}>
-                {` · 上次唤醒 ${formatDuration(session.instance.runtime.lastWake.totalMs)}`}
+                {` · last wake ${formatDuration(session.instance.runtime.lastWake.totalMs)}`}
               </span>
             ) : null}
           </p>
@@ -300,7 +300,7 @@ export function SessionPage({
 
       {loadError ? (
         <section className="card error">
-          <h2>无法读取会话</h2>
+          <h2>Could not load this session</h2>
           <p className="muted">{loadError}</p>
         </section>
       ) : null}
@@ -313,33 +313,33 @@ export function SessionPage({
       {state === 'sleeping' && !dispatching ? (
         <p className="banner">
           {mirroredAt
-            ? `这个会话已休眠，以下是 ${formatTime(mirroredAt)} 的历史镜像。直接发消息即可唤醒并继续。`
-            : '这个会话已休眠，且还没有留下历史镜像。直接发消息即可唤醒并继续。'}
+            ? `This session is asleep. Below is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
+            : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
         </p>
       ) : null}
       {state === 'pending' && !dispatching ? (
-        <p className="banner">正在开工，还没有消息。</p>
+        <p className="banner">Starting up — no messages yet.</p>
       ) : null}
       {transcriptError ? <p className="banner error">{transcriptError}</p> : null}
 
       {(messages && messages.length > 0) || optimistic.length > 0 ? (
         <MessageList messages={messages ?? []} trailing={optimistic} />
       ) : state === 'live' ? (
-        <p className="muted">还没有消息。</p>
+        <p className="muted">No messages yet.</p>
       ) : null}
 
       {dispatching ? (
         <p className="banner progress" role="status">
           <i className="spinner" aria-hidden="true" />
           {waking
-            ? '正在唤醒沙箱…冷启动通常需要几十秒，消息会在恢复后自动发出。'
-            : '沙箱已就绪，正在把消息交给 agent…'}
+            ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
+            : 'Sandbox is ready, handing the message to the agent…'}
         </p>
       ) : null}
 
       {session?.phase === 'failed' ? (
         <section className="card error">
-          <h2>开工失败</h2>
+          <h2>Failed to start</h2>
           {session.lastError ? <p className="muted mono">{session.lastError}</p> : null}
           <div className="actions">
             <button
@@ -347,7 +347,7 @@ export function SessionPage({
               disabled={busy}
               onClick={() => run(() => retrySession(sessionId))}
             >
-              重试
+              Retry
             </button>
           </div>
         </section>
@@ -368,7 +368,9 @@ export function SessionPage({
         <textarea
           className="prompt"
           rows={2}
-          placeholder={attached ? '继续说点什么…' : '会话已休眠，发送即唤醒并继续'}
+          placeholder={
+            attached ? 'Say something…' : 'Session is asleep — sending wakes it and continues'
+          }
           value={prompt}
           disabled={busy || !canSend}
           onChange={(event) => setPrompt(event.target.value)}
@@ -376,7 +378,7 @@ export function SessionPage({
         <div className="composer-controls">
           {catalog ? (
             <select
-              aria-label="模型"
+              aria-label="Model"
               value={model ?? ''}
               disabled={busy || !canSend}
               onChange={(event) => setModel(event.target.value)}
@@ -395,7 +397,7 @@ export function SessionPage({
               disabled={busy}
               onClick={() => run(() => abortSession(sessionId))}
             >
-              中断
+              Abort
             </button>
           ) : null}
           <button
@@ -403,7 +405,7 @@ export function SessionPage({
             type="submit"
             disabled={busy || !canSend || !prompt.trim()}
           >
-            发送
+            Send
           </button>
         </div>
       </form>

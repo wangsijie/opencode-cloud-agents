@@ -68,7 +68,7 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
           disabled={loading}
           onClick={() => void openDirectory('')}
         >
-          仓库根目录
+          Repo root
         </button>
         {path ? <span className="mono">/{path}</span> : null}
         <button
@@ -77,7 +77,7 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
           disabled={loading}
           onClick={() => void (file ? openFile(file.path) : openDirectory(path))}
         >
-          刷新
+          Refresh
         </button>
       </div>
 
@@ -97,16 +97,16 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
               type="button"
               onClick={() => setFile(undefined)}
             >
-              返回目录
+              Back to directory
             </button>
           </div>
           {file.binary ? (
-            <p className="muted">二进制文件，不做预览。</p>
+            <p className="muted">Binary file — no preview.</p>
           ) : (
             <>
               <pre className="file-content mono">{file.content}</pre>
               {file.truncated ? (
-                <p className="muted">文件过大，只显示了前 256 KB。</p>
+                <p className="muted">File is large; showing the first 256 KB.</p>
               ) : null}
             </>
           )}
@@ -149,14 +149,14 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
             </li>
           ))}
           {listing.entries.length === 0 ? (
-            <li className="muted">空目录。</li>
+            <li className="muted">Empty directory.</li>
           ) : null}
           {listing.truncated ? (
-            <li className="muted">目录条目过多，只列出了前 2000 条。</li>
+            <li className="muted">Too many entries; listing the first 2000.</li>
           ) : null}
         </ul>
       ) : loading ? (
-        <p className="muted">正在读取目录…</p>
+        <p className="muted">Reading the directory…</p>
       ) : null}
     </div>
   );

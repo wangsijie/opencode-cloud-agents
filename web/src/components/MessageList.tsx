@@ -55,7 +55,7 @@ export function MessageList({
               ))}
               {failure ? (
                 <p className="message-failure">
-                  {failure.data?.message ?? failure.name ?? '生成中断'}
+                  {failure.data?.message ?? failure.name ?? 'Generation interrupted'}
                 </p>
               ) : null}
             </div>

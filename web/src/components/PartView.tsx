@@ -28,7 +28,7 @@ function Reasoning({ text }: { text: string }) {
         event.preventDefault();
         setOpen((value) => !value);
       }}>
-        思考过程
+        Thinking
       </summary>
       <div className="reasoning-body">{text}</div>
     </details>
@@ -60,7 +60,7 @@ function Todo({ part }: { part: MessagePart }) {
     ? (part.todo as { content?: string; status?: string }[])
     : [];
   if (todos.length === 0) {
-    return <div className="part-placeholder">待办列表</div>;
+    return <div className="part-placeholder">Todo list</div>;
   }
   return (
     <ul className="part-todo">
@@ -95,6 +95,6 @@ export function PartView({ part }: { part: MessagePart }) {
     default:
       // Named rather than hidden: an unrendered part is still evidence that
       // something happened, and the type is what tells us what to build next.
-      return <div className="part-placeholder">未支持的内容类型：{part.type}</div>;
+      return <div className="part-placeholder">Unsupported part type: {part.type}</div>;
   }
 }

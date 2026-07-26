@@ -5,7 +5,7 @@ import type {
   WakeTimings
 } from './api';
 
-const TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
+const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium',
   timeStyle: 'short'
 });
@@ -18,7 +18,7 @@ export function formatTime(value: string | undefined): string {
   return Number.isNaN(at.getTime()) ? '—' : TIME_FORMAT.format(at);
 }
 
-/** "3 分钟前" for anything recent, an absolute time once that stops helping. */
+/** "3 min ago" for anything recent, an absolute time once that stops helping. */
 export function formatRelative(value: string | undefined): string {
   if (!value) {
     return '—';
@@ -29,13 +29,13 @@ export function formatRelative(value: string | undefined): string {
   }
   const elapsedMs = Date.now() - at.getTime();
   if (elapsedMs < 60_000) {
-    return '刚刚';
+    return 'just now';
   }
   if (elapsedMs < 60 * 60_000) {
-    return `${Math.floor(elapsedMs / 60_000)} 分钟前`;
+    return `${Math.floor(elapsedMs / 60_000)} min ago`;
   }
   if (elapsedMs < 24 * 60 * 60_000) {
-    return `${Math.floor(elapsedMs / (60 * 60_000))} 小时前`;
+    return `${Math.floor(elapsedMs / (60 * 60_000))} h ago`;
   }
   return formatTime(value);
 }
@@ -53,8 +53,8 @@ export function formatBytes(value: number): string {
 /** Seconds with one decimal, for durations a person is waiting through. */
 export function formatDuration(ms: number): string {
   return ms >= 60_000
-    ? `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`
-    : `${(ms / 1000).toFixed(1)} 秒`;
+    ? `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
+    : `${(ms / 1000).toFixed(1)}s`;
 }
 
 function formatTokens(value: number): string {
@@ -90,26 +90,26 @@ export function formatUsage(usage: SessionUsage): string {
 export function describeWakeStages(wake: WakeTimings): string {
   const stages: string[] = [];
   if (wake.restoreMs !== undefined) {
-    stages.push(`容器启动 + 快照恢复 ${formatDuration(wake.restoreMs)}`);
+    stages.push(`container start + snapshot restore ${formatDuration(wake.restoreMs)}`);
   }
   if (wake.repoMs !== undefined) {
-    stages.push(`仓库置备 ${formatDuration(wake.repoMs)}`);
+    stages.push(`repo provisioning ${formatDuration(wake.repoMs)}`);
   }
   if (wake.serverMs !== undefined) {
-    stages.push(`OpenCode 启动 ${formatDuration(wake.serverMs)}`);
+    stages.push(`OpenCode startup ${formatDuration(wake.serverMs)}`);
   }
   return `${formatTime(wake.at)} · ${stages.join(' · ')}`;
 }
 
 export const STATUS_LABELS: Record<SessionStatus, string> = {
-  queued: '排队中',
-  starting: '正在开工',
-  working: '任务执行中',
-  idle: '空闲',
-  sleeping: '已休眠',
-  failed: '开工失败',
-  error: '运行异常',
-  deleting: '正在删除'
+  queued: 'Queued',
+  starting: 'Starting',
+  working: 'Working',
+  idle: 'Idle',
+  sleeping: 'Sleeping',
+  failed: 'Failed to start',
+  error: 'Error',
+  deleting: 'Deleting'
 };
 
 /**
@@ -123,12 +123,12 @@ export function formatIdleShutdown(session: SessionView): string {
   if (!deadline) {
     switch (session.status) {
       case 'working':
-        return '任务结束后开始计时';
+        return 'clock starts when the task ends';
       case 'sleeping':
-        return '已关闭';
+        return 'shut down';
       case 'starting':
       case 'queued':
-        return '唤醒后开始计时';
+        return 'clock starts once awake';
       default:
         return '—';
     }
@@ -139,9 +139,9 @@ export function formatIdleShutdown(session: SessionView): string {
   }
   const remainingMs = at.getTime() - Date.now();
   if (remainingMs <= 0) {
-    return '即将关闭';
+    return 'shutting down';
   }
   return remainingMs < 60_000
-    ? '不到 1 分钟后'
-    : `${Math.ceil(remainingMs / 60_000)} 分钟后`;
+    ? 'in under 1 min'
+    : `in ${Math.ceil(remainingMs / 60_000)} min`;
 }

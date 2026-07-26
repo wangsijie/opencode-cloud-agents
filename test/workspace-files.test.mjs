@@ -89,11 +89,11 @@ test('describes binary files instead of rendering them', () => {
 })
 
 test('caps text files and reports the cut', () => {
-  const small = buildWorkspaceFile({ path: 'a.txt', content: '你好 world' })
+  const small = buildWorkspaceFile({ path: 'a.txt', content: 'héllo world' })
   assert.equal(small.binary, false)
   assert.equal(small.truncated, false)
   // Multi-byte characters count as bytes, not characters.
-  assert.equal(small.size, Buffer.byteLength('你好 world'))
+  assert.equal(small.size, Buffer.byteLength('héllo world'))
 
   const large = buildWorkspaceFile({
     path: 'big.txt',

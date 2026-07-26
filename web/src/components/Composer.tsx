@@ -28,7 +28,7 @@ export function Composer({
     event.preventDefault();
     const text = prompt.trim();
     if (!text) {
-      setError('请先描述这次要做的事');
+      setError('Describe what you want done first');
       return;
     }
     setBusy(true);
@@ -49,14 +49,14 @@ export function Composer({
       <textarea
         className="prompt"
         rows={3}
-        placeholder="这次要做什么？"
+        placeholder="What should we do this time?"
         value={prompt}
         disabled={busy}
         onChange={(event) => setPrompt(event.target.value)}
       />
       <div className="composer-controls">
         <select
-          aria-label="仓库"
+          aria-label="Repository"
           value={repoKey}
           disabled={busy}
           onChange={(event) => setRepoKey(event.target.value)}
@@ -68,7 +68,7 @@ export function Composer({
           ))}
         </select>
         <select
-          aria-label="模型"
+          aria-label="Model"
           value={model}
           disabled={busy}
           onChange={(event) => setModel(event.target.value)}
@@ -87,7 +87,7 @@ export function Composer({
           className="button"
           type="button"
           disabled={busy || refreshing}
-          title="重新从 GitHub 读取仓库列表"
+          title="Re-read the repository list from GitHub"
           onClick={async () => {
             setRefreshing(true);
             setError(undefined);
@@ -100,10 +100,10 @@ export function Composer({
             }
           }}
         >
-          {refreshing ? '正在刷新…' : '刷新仓库'}
+          {refreshing ? 'Refreshing…' : 'Refresh repos'}
         </button>
         <button className="button primary" type="submit" disabled={busy}>
-          {busy ? '正在开工…' : '开工'}
+          {busy ? 'Starting…' : 'Start'}
         </button>
       </div>
       {error ? <p className="form-error">{error}</p> : null}

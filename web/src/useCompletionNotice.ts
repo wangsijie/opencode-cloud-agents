@@ -68,11 +68,13 @@ export function useCompletionNotice(sessions: SessionView[] | undefined): void {
       }
       const failed = session.status === 'failed' || session.status === 'error';
       const notice = new Notification(
-        failed ? `会话出错：${session.displayTitle}` : `任务完成：${session.displayTitle}`,
+        failed
+          ? `Session error: ${session.displayTitle}`
+          : `Task done: ${session.displayTitle}`,
         {
           body: failed
-            ? (session.lastError ?? '开工失败，可在会话页重试。')
-            : `${session.repoKey} · 点击查看结果`,
+            ? (session.lastError ?? 'Failed to start — retry from the session page.')
+            : `${session.repoKey} · click to see the result`,
           // One notification per session: a slow turn that ends twice should
           // replace its own notice rather than stack up.
           tag: session.id

@@ -86,7 +86,7 @@ caches the answer for ten minutes. Archived and read-only repositories are left
 out — a session that cannot push its work cannot finish. A failed refresh serves
 the last good answer; with nothing cached the dashboard shows the error rather
 than an empty picker, and no session can be started until it is fixed. The
-composer's *刷新仓库* button skips the cache (`GET /api/catalog?refresh=1`) for a
+composer's *Refresh repos* button skips the cache (`GET /api/catalog?refresh=1`) for a
 repository created a minute ago.
 
 The token is committed in `src/github-catalog.ts` alongside this image's other

@@ -108,7 +108,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
     const detail = (body as { error?: string } | null)?.error;
-    throw new Error(detail ?? `请求失败 (${response.status})`);
+    throw new Error(detail ?? `Request failed (${response.status})`);
   }
   return body as T;
 }

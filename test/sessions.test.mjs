@@ -48,7 +48,7 @@ test('unknown model references are rejected rather than forwarded', () => {
 })
 
 test('session titles come from the first non-empty prompt line', () => {
-  assert.equal(deriveSessionTitle('\n\n  修复 lint  \n更多说明'), '修复 lint')
+  assert.equal(deriveSessionTitle('\n\n  Fix lint  \nmore notes'), 'Fix lint')
   assert.equal(deriveSessionTitle('   '), 'Untitled session')
   const long = 'a'.repeat(MAX_SESSION_TITLE_LENGTH + 40)
   const title = deriveSessionTitle(long)
@@ -132,7 +132,7 @@ test('last activity is the newest timestamp on the record', () => {
 })
 
 test('OpenCode may rename a session, a human outranks it', () => {
-  const record = { title: '把登录页的报错文案改一下', createdAt: 'x', updatedAt: 'x' }
+  const record = { title: 'tweak the login page error copy', createdAt: 'x', updatedAt: 'x' }
   // Nothing mirrored yet: the opening prompt is all there is to go on.
   assert.equal(deriveDisplayTitle(record), record.title)
   assert.equal(

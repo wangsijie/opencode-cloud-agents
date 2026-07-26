@@ -72,7 +72,7 @@ function SessionList({
         <h1>OpenCode Hub</h1>
         {sessions ? (
           <span className="muted">
-            {sessions.length} 个会话 · {runningCount} 个醒着
+            {sessions.length} sessions · {runningCount} awake
           </span>
         ) : null}
       </header>
@@ -82,7 +82,7 @@ function SessionList({
           className="link-button"
           onClick={() => setShowArchived((value) => !value)}
         >
-          {showArchived ? '← 回到进行中' : '查看已归档'}
+          {showArchived ? '← Back to active' : 'View archived'}
         </button>
         {/*
           Asking for notification permission has to come from a click, so it is
@@ -90,10 +90,10 @@ function SessionList({
         */}
         {permission === 'default' ? (
           <button className="link-button" onClick={() => void request()}>
-            任务完成时通知我
+            Notify me when a task finishes
           </button>
         ) : permission === 'denied' ? (
-          <span className="muted">通知已被浏览器拒绝</span>
+          <span className="muted">Notifications blocked by the browser</span>
         ) : null}
       </div>
 
@@ -104,14 +104,14 @@ function SessionList({
       */}
       {catalogError ? (
         <section className="card error">
-          <h2>无法读取仓库列表</h2>
+          <h2>Could not load the repository list</h2>
           <p className="muted">{catalogError}</p>
           <div className="actions">
             <button
               className="button"
               onClick={() => void onRefreshRepos().catch(() => undefined)}
             >
-              重试
+              Retry
             </button>
           </div>
         </section>
@@ -131,18 +131,18 @@ function SessionList({
 
       {listError ? (
         <section className="card error">
-          <h2>无法读取会话列表</h2>
+          <h2>Could not load the session list</h2>
           <p className="muted">{listError}</p>
         </section>
       ) : !sessions ? (
-        <p className="muted">正在读取…</p>
+        <p className="muted">Loading…</p>
       ) : sessions.length === 0 ? (
         <section className="card empty">
-          <strong>{showArchived ? '没有已归档的会话' : '还没有会话'}</strong>
+          <strong>{showArchived ? 'No archived sessions' : 'No sessions yet'}</strong>
           <p className="muted">
             {showArchived
-              ? '归档过的会话会出现在这里，历史与容器都还在。'
-              : '在上面写下任务并选择仓库与模型即可开工。'}
+              ? 'Archived sessions show up here, with their history and containers intact.'
+              : 'Describe a task above, pick a repo and a model, and get going.'}
           </p>
         </section>
       ) : (

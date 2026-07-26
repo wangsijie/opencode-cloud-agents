@@ -42,7 +42,7 @@ export function WorkspacePanel({
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
         >
-          {open ? '▾' : '▸'} 工作区
+          {open ? '▾' : '▸'} Workspace
         </button>
         {open && attached ? (
           <div className="workspace-tabs" role="tablist">
@@ -53,7 +53,7 @@ export function WorkspacePanel({
               aria-selected={tab === 'files'}
               onClick={() => setTab('files')}
             >
-              文件
+              Files
             </button>
             <button
               className={`link-button${tab === 'terminal' ? ' active' : ''}`}
@@ -62,18 +62,21 @@ export function WorkspacePanel({
               aria-selected={tab === 'terminal'}
               onClick={() => setTab('terminal')}
             >
-              终端
+              Terminal
             </button>
           </div>
         ) : null}
       </header>
 
       {!open ? null : !attached ? (
-        <p className="muted">会话已休眠。发条消息唤醒容器后即可浏览文件或开终端。</p>
+        <p className="muted">
+          This session is asleep. Send a message to wake the container, then you
+          can browse files or open a terminal.
+        </p>
       ) : tab === 'files' ? (
         <FileBrowser sessionId={sessionId} />
       ) : (
-        <Suspense fallback={<p className="muted">正在加载终端…</p>}>
+        <Suspense fallback={<p className="muted">Loading the terminal…</p>}>
           <TerminalView sessionId={sessionId} cwd={directory} />
         </Suspense>
       )}

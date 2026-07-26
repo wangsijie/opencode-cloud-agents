@@ -67,19 +67,19 @@ export function SessionCard({
 
       <dl className="session-meta">
         <div>
-          <dt>仓库</dt>
+          <dt>Repo</dt>
           <dd className="mono">/workspace/{session.repoKey}</dd>
         </div>
         <div>
-          <dt>模型</dt>
+          <dt>Model</dt>
           <dd className="mono">{session.model}</dd>
         </div>
         <div>
-          <dt>最后活动</dt>
+          <dt>Last activity</dt>
           <dd>{formatRelative(session.lastActivityAt)}</dd>
         </div>
         <div>
-          <dt>自动休眠</dt>
+          <dt>Auto sleep</dt>
           <dd>{formatIdleShutdown(session)}</dd>
         </div>
         {/*
@@ -90,9 +90,9 @@ export function SessionCard({
         */}
         {session.status === 'sleeping' && session.transcript ? (
           <div>
-            <dt>历史镜像</dt>
+            <dt>Mirror</dt>
             <dd>
-              {session.transcript.messageCount} 条 ·{' '}
+              {session.transcript.messageCount} messages ·{' '}
               {formatRelative(session.transcript.mirroredAt)}
             </dd>
           </div>
@@ -105,7 +105,7 @@ export function SessionCard({
         {session.transcript?.usage &&
         session.transcript.usage.assistantMessages > 0 ? (
           <div>
-            <dt>用量</dt>
+            <dt>Usage</dt>
             <dd>{formatUsage(session.transcript.usage)}</dd>
           </div>
         ) : null}
@@ -124,7 +124,7 @@ export function SessionCard({
           disabled={Boolean(busy)}
           onClick={() => navigate(sessionPath(session.id))}
         >
-          进入会话
+          Open session
         </button>
         {session.phase === 'failed' ? (
           <button
@@ -132,7 +132,7 @@ export function SessionCard({
             disabled={Boolean(busy)}
             onClick={() => run('retry', () => retrySession(session.id))}
           >
-            重试开工
+            Retry start
           </button>
         ) : null}
         {ready && running ? (
@@ -141,7 +141,7 @@ export function SessionCard({
             disabled={Boolean(busy)}
             onClick={() => run('stop', () => stopInstance(session.instance.id))}
           >
-            停止
+            Stop
           </button>
         ) : null}
         <button
@@ -153,7 +153,7 @@ export function SessionCard({
             )
           }
         >
-          {session.archivedAt ? '取消归档' : '归档'}
+          {session.archivedAt ? 'Unarchive' : 'Archive'}
         </button>
         <button
           className="button danger"
@@ -161,14 +161,14 @@ export function SessionCard({
           onClick={() => {
             if (
               confirm(
-                `删除会话「${session.displayTitle}」？容器与快照会一并删除，不可恢复。归档只是移出列表，两者不同。`
+                `Delete session "${session.displayTitle}"? The container and its snapshot go with it, and this cannot be undone. Archiving only hides it from the list — that is a different thing.`
               )
             ) {
               void run('delete', () => deleteSession(session.id));
             }
           }}
         >
-          删除
+          Delete
         </button>
       </div>
     </article>

@@ -96,10 +96,10 @@ export function TerminalView({ sessionId, cwd }: { sessionId: string; cwd: strin
     <div className="terminal-view">
       <div className="terminal-status muted">
         {state === 'connected'
-          ? '已连接'
+          ? 'connected'
           : state === 'connecting'
-            ? '正在连接…'
-            : '已断开，正在重连…'}
+            ? 'connecting…'
+            : 'disconnected, reconnecting…'}
         {error ? ` · ${error}` : ''}
       </div>
       <div className="terminal-host" ref={host} />
