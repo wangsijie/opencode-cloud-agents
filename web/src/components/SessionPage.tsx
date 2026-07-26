@@ -31,6 +31,7 @@ import { useTranscript } from '../useTranscript';
 import { ChangesPanel } from './ChangesPanel';
 import { ArrowUpIcon, MenuIcon, StopIcon } from './icons';
 import { MessageList } from './MessageList';
+import { ModelSelect } from './ModelSelect';
 import { StatusBadge } from './StatusBadge';
 import { WorkspacePanel } from './WorkspacePanel';
 
@@ -384,19 +385,12 @@ export function SessionPage({
           />
           <div className="composer-row">
             {catalog ? (
-              <select
-                className="pill-select"
-                aria-label="Model"
+              <ModelSelect
+                models={catalog.models}
                 value={model ?? ''}
                 disabled={busy || !canSend}
-                onChange={(event) => setModel(event.target.value)}
-              >
-                {catalog.models.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.displayName}
-                  </option>
-                ))}
-              </select>
+                onChange={setModel}
+              />
             ) : null}
             <span className="spacer" />
             {/*

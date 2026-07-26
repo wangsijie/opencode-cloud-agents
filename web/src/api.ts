@@ -87,7 +87,9 @@ export interface RepoOption {
 
 export interface ModelOption {
   id: string;
+  /** `provider · model`. The picker shows `modelName` alone. */
   displayName: string;
+  modelName: string;
 }
 
 export interface Catalog {

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { createSession, type Catalog } from '../api';
 import { navigate, sessionPath } from '../router';
 import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
+import { ModelSelect } from './ModelSelect';
 import { RepoSelect } from './RepoSelect';
 
 /**
@@ -156,23 +157,13 @@ export function NewSessionPage({
                   onChange={setRepoKey}
                   onRefresh={onRefreshRepos}
                 />
-                <select
-                  className="pill-select"
-                  aria-label="Model"
+                <ModelSelect
+                  models={catalog?.models}
                   value={model}
-                  disabled={busy || loading}
-                  onChange={(event) => setModel(event.target.value)}
-                >
-                  {loading ? (
-                    <option value="">Loading models…</option>
-                  ) : (
-                    catalog.models.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.displayName}
-                      </option>
-                    ))
-                  )}
-                </select>
+                  loading={loading}
+                  disabled={busy}
+                  onChange={setModel}
+                />
                 <span className="spacer" />
                 <button
                   className="send-button"

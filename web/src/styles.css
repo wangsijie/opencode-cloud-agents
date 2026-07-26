@@ -637,21 +637,21 @@ summary:focus-visible {
   max-width: 100%;
 }
 
-/* ---------- repository picker ---------- */
+/* ---------- composer pickers ---------- */
 
 /*
-  The pill is drawn rather than native because the panel it opens holds a search
-  field and the refresh button; the closed state still has to sit level with the
-  model `<select>` beside it.
+  Both pickers are drawn rather than native: one panel holds a search field and
+  the refresh button, and a `<select>` can hold neither. Closed, they are the
+  same pill they always were.
 */
-.repo-select {
+.pill-menu {
   position: relative;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
 }
 
-.repo-select-button {
+.pill-menu-button {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -661,12 +661,12 @@ summary:focus-visible {
   cursor: pointer;
 }
 
-.repo-select-button:disabled {
+.pill-menu-button:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
-.repo-select-label {
+.pill-menu-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -674,7 +674,7 @@ summary:focus-visible {
 
 /* Opens upwards: the composer sits low on the page on a phone, and the panel
    would otherwise unfold under the keyboard. */
-.repo-select-panel {
+.pill-menu-panel {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
@@ -690,7 +690,7 @@ summary:focus-visible {
   box-shadow: var(--shadow);
 }
 
-.repo-select-search {
+.pill-menu-search {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -699,7 +699,7 @@ summary:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
-.repo-select-search input {
+.pill-menu-search input {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 34px;
@@ -712,14 +712,14 @@ summary:focus-visible {
   outline: none;
 }
 
-.repo-select-list {
+.pill-menu-list {
   display: flex;
   flex-direction: column;
   max-height: 260px;
   overflow-y: auto;
 }
 
-.repo-select-option {
+.pill-menu-option {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -738,18 +738,18 @@ summary:focus-visible {
 
 /* One highlight, moved by both the pointer and the arrow keys, so the row Enter
    would take is never ambiguous. */
-.repo-select-option.active {
+.pill-menu-option.active {
   background: var(--surface-raised);
 }
 
-.repo-select-option-name {
+.pill-menu-option-name {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.repo-select-empty {
+.pill-menu-empty {
   margin: 0;
   padding: 8px;
   font-size: 13px;
