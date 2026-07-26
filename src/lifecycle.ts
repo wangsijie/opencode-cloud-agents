@@ -1,12 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox } from '@cloudflare/sandbox';
-import {
-  CURRENT_IMAGE_KEY,
-  LOGTO_IMAGE_KEY,
-  isImageKey,
-  type ImageKey,
-  type RuntimeLifecycle
-} from './instances';
+import type { RuntimeLifecycle } from './instances';
 
 /**
  * Semantic lifecycle policy for one OpenCode instance.
@@ -44,9 +38,6 @@ export interface ExecutionSnapshot {
 
 export interface InitializeLifecycleInput {
   instanceId: string;
-  imageKey: ImageKey;
-  /** Used only while creating the coordinator record for a legacy instance. */
-  containerRunning?: boolean;
 }
 
 export type LifecyclePhase =
@@ -60,11 +51,7 @@ export type LifecyclePhase =
   | 'error_waking'
   | 'deleting';
 
-type LifecycleOperationType =
-  | 'wake'
-  | 'adopt'
-  | 'idle-stop'
-  | 'force-stop';
+type LifecycleOperationType = 'wake' | 'idle-stop' | 'force-stop';
 
 interface LifecycleOperation {
   id: string;
@@ -81,14 +68,13 @@ interface WorkLease {
 
 interface LifecycleError {
   at: number;
-  operation: 'wake' | 'adopt' | 'probe' | 'idle-stop' | 'force-stop';
+  operation: 'wake' | 'probe' | 'idle-stop' | 'force-stop';
   message: string;
 }
 
 interface StoredLifecycleState {
   schemaVersion: typeof LIFECYCLE_SCHEMA_VERSION;
   instanceId: string;
-  imageKey: ImageKey;
   phase: LifecyclePhase;
   revision: number;
   runtimeEpoch?: string;
@@ -163,14 +149,8 @@ export interface LifecycleWakeResult {
 }
 
 interface LifecycleSandboxRpc {
-  adoptRunningForLifecycle(input: {
-    instanceId: string;
-    imageKey: ImageKey;
-    runtimeEpoch: string;
-  }): Promise<ExecutionSnapshot>;
   wakeForLifecycle(input: {
     instanceId: string;
-    imageKey: ImageKey;
     runtimeEpoch: string;
   }): Promise<ExecutionSnapshot>;
   getExecutionSnapshotIfRunning(
@@ -201,7 +181,6 @@ export class LifecycleCoordinator extends DurableObject<Env> {
   private readonly lifecycleState: DurableObjectState<{}>;
   private readonly ready: Promise<void>;
   private state: StoredLifecycleState | undefined;
-  private adoptionInProgress: Promise<void> | undefined;
   private wakeInProgress: Promise<LifecycleWakeResult> | undefined;
   private probeInProgress: Promise<void> | undefined;
   private stopInProgress: Promise<void> | undefined;
@@ -235,15 +214,8 @@ export class LifecycleCoordinator extends DurableObject<Env> {
     input: InitializeLifecycleInput
   ): Promise<LifecycleStatus> {
     await this.ready;
-    if (!isImageKey(input.imageKey)) {
-      throw new Error(`Unsupported image: ${String(input.imageKey)}`);
-    }
-
     if (this.state) {
-      if (
-        this.state.instanceId !== input.instanceId ||
-        this.state.imageKey !== input.imageKey
-      ) {
+      if (this.state.instanceId !== input.instanceId) {
         throw new Error('Lifecycle identity does not match the Hub record');
       }
       if (this.state.phase === 'deleting') {
@@ -252,42 +224,23 @@ export class LifecycleCoordinator extends DurableObject<Env> {
       return this.toStatus();
     }
 
-    const now = Date.now();
-    const containerRunning = input.containerRunning === true;
-    const runtimeEpoch = containerRunning ? newRuntimeEpoch() : undefined;
+    // A new instance always starts stopped. Only an explicit wake() may start
+    // its container.
     this.state = {
       schemaVersion: LIFECYCLE_SCHEMA_VERSION,
       instanceId: input.instanceId,
-      imageKey: input.imageKey,
-      // A legacy running container has no matching Sandbox runtime gate yet.
-      // Treat migration as a recoverable wake so Sandbox acknowledges the new
-      // epoch before ordinary traffic can be admitted.
-      phase: containerRunning ? 'waking' : 'sleeping',
+      phase: 'sleeping',
       revision: 0,
-      ...(runtimeEpoch ? { runtimeEpoch } : {}),
       idleConfirmations: 0,
-      ...(containerRunning ? { nextProbeAt: now } : {}),
       activeSessionCount: 0,
       retrySessionCount: 0,
       activityLocations: [],
       consecutiveProbeFailures: 0,
       workLeases: {},
-      ...(containerRunning
-        ? {
-            operation: {
-              id: crypto.randomUUID(),
-              type: 'adopt' as const,
-              startedAt: now
-            }
-          }
-        : {}),
       wakeAfterStop: false,
-      updatedAt: now
+      updatedAt: Date.now()
     };
     await this.persistAndSchedule();
-    if (containerRunning) {
-      await this.continueAdoption();
-    }
     return this.toStatus();
   }
 
@@ -558,11 +511,7 @@ export class LifecycleCoordinator extends DurableObject<Env> {
 
     try {
       if (state.phase === 'waking' || state.phase === 'error_waking') {
-        if (state.operation?.type === 'adopt') {
-          await this.continueAdoption();
-        } else {
-          await this.continueWake(false);
-        }
+        await this.continueWake(false);
         return;
       }
       if (state.phase === 'quiescing') {
@@ -603,98 +552,6 @@ export class LifecycleCoordinator extends DurableObject<Env> {
         error: errorMessage(error)
       });
       await this.persistAndSchedule().catch(() => undefined);
-    }
-  }
-
-  private async continueAdoption(): Promise<void> {
-    if (!this.adoptionInProgress) {
-      this.adoptionInProgress = this.performAdoption().finally(() => {
-        this.adoptionInProgress = undefined;
-      });
-    }
-    return this.adoptionInProgress;
-  }
-
-  private async performAdoption(): Promise<void> {
-    let state = this.requireState();
-    const operation = state.operation;
-    const runtimeEpoch = state.runtimeEpoch;
-    if (
-      (state.phase !== 'waking' && state.phase !== 'error_waking') ||
-      operation?.type !== 'adopt' ||
-      !runtimeEpoch
-    ) {
-      return;
-    }
-
-    if (state.phase === 'error_waking') {
-      this.state = {
-        ...state,
-        phase: 'waking',
-        nextProbeAt: Date.now() + OPERATION_RECOVERY_INTERVAL_MS,
-        updatedAt: Date.now()
-      };
-      await this.persistAndSchedule();
-      state = this.requireState();
-    }
-
-    try {
-      const snapshot =
-        await this.resolveSandbox().adoptRunningForLifecycle({
-          instanceId: state.instanceId,
-          imageKey: state.imageKey,
-          runtimeEpoch
-        });
-      state = this.requireState();
-      if (
-        state.phase !== 'waking' ||
-        state.operation?.id !== operation.id ||
-        state.operation.type !== 'adopt' ||
-        state.runtimeEpoch !== runtimeEpoch
-      ) {
-        return;
-      }
-      if (snapshot.state === 'not_running') {
-        this.state = toSleepingState(state, Date.now(), 'unexpected');
-        await this.persistAndSchedule();
-        return;
-      }
-      this.state = {
-        ...state,
-        phase: 'running_unknown',
-        operation: undefined,
-        nextProbeAt: Date.now(),
-        consecutiveProbeFailures: 0,
-        lastError: undefined,
-        updatedAt: Date.now()
-      };
-      this.applyExecutionSnapshot(snapshot, Date.now());
-      await this.persistAndSchedule();
-    } catch (error) {
-      state = this.requireState();
-      if (
-        state.phase !== 'waking' ||
-        state.operation?.id !== operation.id ||
-        state.operation.type !== 'adopt' ||
-        state.runtimeEpoch !== runtimeEpoch
-      ) {
-        return;
-      }
-      const failures = state.consecutiveProbeFailures + 1;
-      this.state = {
-        ...state,
-        phase: 'error_waking',
-        consecutiveProbeFailures: failures,
-        nextProbeAt: Date.now() + retryBackoff(failures),
-        lastError: lifecycleError('adopt', error),
-        updatedAt: Date.now()
-      };
-      await this.persistAndSchedule();
-      console.warn('Failed to adopt running OpenCode container', {
-        instanceId: state.instanceId,
-        runtimeEpoch,
-        error: errorMessage(error)
-      });
     }
   }
 
@@ -777,7 +634,6 @@ export class LifecycleCoordinator extends DurableObject<Env> {
     try {
       const snapshot = await this.resolveSandbox().wakeForLifecycle({
         instanceId: this.state.instanceId,
-        imageKey: this.state.imageKey,
         runtimeEpoch
       });
       state = this.requireState();
@@ -1276,21 +1132,10 @@ export class LifecycleCoordinator extends DurableObject<Env> {
   }
 
   private resolveSandbox(): LifecycleSandboxRpc {
-    const state = this.requireState();
-    switch (state.imageKey) {
-      case CURRENT_IMAGE_KEY:
-        return getSandbox(this.env.Sandbox, state.instanceId, {
-          normalizeId: true,
-          keepAlive: true
-        }) as unknown as LifecycleSandboxRpc;
-      case LOGTO_IMAGE_KEY:
-        return getSandbox(this.env.LogtoSandbox, state.instanceId, {
-          normalizeId: true,
-          keepAlive: true
-        }) as unknown as LifecycleSandboxRpc;
-      default:
-        throw new Error(`Unsupported image: ${String(state.imageKey)}`);
-    }
+    return getSandbox(this.env.Sandbox, this.requireState().instanceId, {
+      normalizeId: true,
+      keepAlive: true
+    }) as unknown as LifecycleSandboxRpc;
   }
 
   private toStatus(): LifecycleStatus {

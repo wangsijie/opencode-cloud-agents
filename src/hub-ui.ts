@@ -3,11 +3,9 @@ import { REPOS } from './repos';
 
 export function renderHubHtml(): Response {
   const html = HUB_HTML.replace(
-    '<!--WORKSPACE_OPTIONS-->',
-    workspaceOptionsHtml()
-  )
-    .replace('<!--REPO_SELECT_OPTIONS-->', repoSelectOptionsHtml())
-    .replace('<!--MODEL_SELECT_OPTIONS-->', modelSelectOptionsHtml());
+    '<!--REPO_SELECT_OPTIONS-->',
+    repoSelectOptionsHtml()
+  ).replace('<!--MODEL_SELECT_OPTIONS-->', modelSelectOptionsHtml());
   return new Response(html, {
     headers: {
       'Cache-Control': 'no-store',
@@ -26,22 +24,6 @@ export function renderHubHtml(): Response {
       'X-Frame-Options': 'DENY'
     }
   });
-}
-
-/** Render one radio card per catalog repository for the creation dialog. */
-function workspaceOptionsHtml(): string {
-  return REPOS.map(
-    (repo) => `<label class="template-option">
-            <input type="radio" name="workspace" value="${escapeHtml(repo.repoKey)}" />
-            <span class="template-card">
-              <span>
-                <span class="template-name">${escapeHtml(repo.displayName)}</span>
-                <span class="template-description">首次唤醒时克隆 <code>${escapeHtml(repo.cloneUrl)}</code>，之后唤醒自动 fetch 更新。</span>
-                <span class="template-path">/workspace/${escapeHtml(repo.repoKey)}</span>
-              </span>
-            </span>
-          </label>`
-  ).join('\n          ');
 }
 
 /** Repository choices for the session composer. */
@@ -134,7 +116,6 @@ const HUB_HTML = String.raw`<!doctype html>
       }
       .card:hover { border-color: var(--line-strong); background-color: var(--panel-hover); }
       .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-      .instance-name { font: 600 16px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
       .instance-id { margin-top: 7px; color: #737c89; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
       .status { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
       .dot { width: 7px; height: 7px; border-radius: 50%; background: #667080; box-shadow: 0 0 0 3px rgba(102,112,128,.12); }
@@ -158,37 +139,6 @@ const HUB_HTML = String.raw`<!doctype html>
       dialog h3 { margin: 0 0 10px; font-size: 18px; }
       dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
       dialog code { color: var(--text); }
-      #create-dialog { width: min(610px, calc(100% - 32px)); }
-      .template-options {
-        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
-        margin: 20px 0 0; padding: 0; border: 0;
-      }
-      .visually-hidden {
-        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-        overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-      }
-      .template-option { position: relative; cursor: pointer; }
-      .template-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-      .template-card {
-        position: relative; display: flex; min-height: 150px; padding: 17px;
-        border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel);
-        transition: 140ms ease;
-      }
-      .template-card > span { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-      .template-option:hover .template-card { border-color: #566171; background: var(--panel-hover); }
-      .template-option input:focus-visible + .template-card { outline: 2px solid var(--accent); outline-offset: 3px; }
-      .template-option input:checked + .template-card {
-        border-color: var(--accent); background: linear-gradient(145deg, rgba(214,255,83,.08), transparent 70%), var(--panel);
-      }
-      .template-option input:checked + .template-card::after {
-        content: "\2713"; position: absolute; top: 13px; right: 13px;
-        display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
-        background: var(--accent); color: var(--accent-ink); font-size: 12px; font-weight: 800;
-      }
-      .template-option input:disabled + .template-card { opacity: .45; cursor: wait; }
-      .template-name { display: block; padding-right: 28px; font: 650 16px ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .template-description { display: block; margin-top: 11px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-      .template-path { display: block; margin-top: auto; padding-top: 17px; color: #c0c6cf; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
       .composer { margin: 30px 0 14px; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); }
       .composer textarea {
         width: 100%; min-height: 92px; padding: 12px 13px; resize: vertical;
@@ -202,21 +152,17 @@ const HUB_HTML = String.raw`<!doctype html>
         background: #191d23; color: var(--text); font: inherit; font-size: 13px; max-width: 100%;
       }
       .composer .grow { flex: 1 1 120px; }
-      .section-title { margin: 30px 0 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
-      .section-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
-      .section-title span { color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
       .session-title { font-size: 15px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
       .dot.queued { background: var(--muted); box-shadow: 0 0 0 3px rgba(145,153,166,.12); }
       .dot.starting { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,184,61,.12); }
       .dot.failed { background: var(--danger); box-shadow: 0 0 0 3px rgba(255,107,115,.12); }
-      .dialog-error { margin-top: 14px; padding: 10px 12px; border: 1px solid rgba(255,107,115,.35); border-radius: 8px; background: rgba(255,107,115,.07); color: #ffb2b7; font-size: 12px; }
+      .form-error { margin-top: 14px; padding: 10px 12px; border: 1px solid rgba(255,107,115,.35); border-radius: 8px; background: rgba(255,107,115,.07); color: #ffb2b7; font-size: 12px; }
       .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
       @media (max-width: 650px) {
         .shell { width: min(100% - 24px, 1180px); padding-top: 20px; }
         header, .hero { align-items: stretch; }
         .hero { margin-top: 46px; flex-direction: column; }
         .grid { grid-template-columns: 1fr; }
-        .template-options { grid-template-columns: 1fr; }
         .button.primary { padding-inline: 12px; }
       }
     </style>
@@ -226,9 +172,8 @@ const HUB_HTML = String.raw`<!doctype html>
       <header>
         <div class="brand">
           <div class="mark">&gt;_</div>
-          <div><h1>OpenCode Hub</h1><div class="subtitle">Cloudflare Sandbox instances</div></div>
+          <div><h1>OpenCode Hub</h1><div class="subtitle">Cloud coding sessions</div></div>
         </div>
-        <button class="button primary" id="create" aria-haspopup="dialog" aria-controls="create-dialog">＋ 新建实例</button>
       </header>
 
       <section class="hero">
@@ -251,49 +196,19 @@ const HUB_HTML = String.raw`<!doctype html>
             </select>
             <button class="button primary" id="session-submit" type="submit">开始会话</button>
           </div>
-          <div class="dialog-error hidden" id="session-error" role="alert"></div>
+          <div class="form-error hidden" id="session-error" role="alert"></div>
         </form>
       </section>
 
       <div class="error-box hidden" id="error" role="alert"></div>
 
-      <div class="section-title"><h3>会话</h3><span id="sessions-summary"></span></div>
       <section class="grid" id="sessions">
         <article class="card skeleton"></article><article class="card skeleton"></article>
       </section>
-
-      <div class="section-title"><h3>其他实例</h3><span id="instances-summary"></span></div>
-      <section class="grid" id="instances"></section>
     </main>
 
-    <dialog id="create-dialog" aria-labelledby="create-title" aria-describedby="create-description">
-      <form id="create-form">
-        <h3 id="create-title">选择工作区</h3>
-        <p id="create-description">仓库实例使用统一基础镜像，在首次唤醒时把所选仓库克隆到工作区。</p>
-        <fieldset class="template-options">
-          <legend class="visually-hidden">工作区</legend>
-          <label class="template-option">
-            <input type="radio" name="workspace" value="" checked autofocus />
-            <span class="template-card">
-              <span>
-                <span class="template-name">空白</span>
-                <span class="template-description">基础 OpenCode 环境，进入后是一个空白工作区。</span>
-                <span class="template-path">/workspace</span>
-              </span>
-            </span>
-          </label>
-          <!--WORKSPACE_OPTIONS-->
-        </fieldset>
-        <div class="dialog-error hidden" id="create-error" role="alert"></div>
-        <div class="dialog-actions">
-          <button class="button small" id="create-cancel" type="button">取消</button>
-          <button class="button small primary" id="create-confirm" type="submit">创建实例</button>
-        </div>
-      </form>
-    </dialog>
-
     <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
-      <h3 id="delete-title">删除这个实例？</h3>
+      <h3 id="delete-title">删除这个会话？</h3>
       <p id="delete-description">将永久销毁 <code id="delete-name"></code> 的容器，并删除 R2 中所有已跟踪的持久化快照。此操作不可撤销。</p>
       <div class="dialog-actions">
         <button class="button small" id="delete-cancel">取消</button>
@@ -302,11 +217,8 @@ const HUB_HTML = String.raw`<!doctype html>
     </dialog>
 
     <script>
-      const list = document.querySelector('#instances')
       const sessionList = document.querySelector('#sessions')
       const summary = document.querySelector('#summary')
-      const sessionsSummary = document.querySelector('#sessions-summary')
-      const instancesSummary = document.querySelector('#instances-summary')
       const sessionForm = document.querySelector('#session-form')
       const sessionPrompt = document.querySelector('#session-prompt')
       const sessionRepo = document.querySelector('#session-repo')
@@ -314,17 +226,9 @@ const HUB_HTML = String.raw`<!doctype html>
       const sessionSubmit = document.querySelector('#session-submit')
       const sessionError = document.querySelector('#session-error')
       const errorBox = document.querySelector('#error')
-      const createButton = document.querySelector('#create')
-      const createDialog = document.querySelector('#create-dialog')
-      const createForm = document.querySelector('#create-form')
-      const createCancel = document.querySelector('#create-cancel')
-      const createConfirm = document.querySelector('#create-confirm')
-      const createError = document.querySelector('#create-error')
-      const templateInputs = [...createForm.querySelectorAll('input[name="workspace"]')]
       const deleteDialog = document.querySelector('#delete-dialog')
       const deleteName = document.querySelector('#delete-name')
       const deleteConfirm = document.querySelector('#delete-confirm')
-      let instances = []
       let sessions = []
       let deleting = null
       let busy = false
@@ -418,15 +322,9 @@ const HUB_HTML = String.raw`<!doctype html>
       }
 
       function render() {
-        const running = instances.filter((item) => ['running', 'healthy'].includes(item.runtime.container)).length
-        summary.textContent = sessions.length + ' 个会话 · ' + instances.length + ' 个实例 · ' + running + ' 个运行中'
-        renderSessions()
-        renderInstances()
-      }
-
-      function renderSessions() {
+        const running = sessions.filter((item) => ['running', 'healthy'].includes(item.instance.runtime.container)).length
+        summary.textContent = sessions.length + ' 个会话 · ' + running + ' 个运行中'
         sessionList.replaceChildren()
-        sessionsSummary.textContent = sessions.length ? sessions.length + ' 个' : ''
         if (!sessions.length) {
           const empty = node('div', 'empty')
           empty.append(node('strong', '', '还没有会话'), document.createTextNode('在上面写下任务并选择仓库与模型即可开工。'))
@@ -462,7 +360,10 @@ const HUB_HTML = String.raw`<!doctype html>
           if (session.phase === 'failed') {
             actions.append(action('重试开工', () => post('/api/sessions/' + encodeURIComponent(session.id) + '/retry')))
           }
-          actions.append(action('删除', () => askDelete({ kind: 'session', id: session.id, name: session.title }), 'danger'))
+          if (available && ['running', 'healthy'].includes(instance.runtime.container)) {
+            actions.append(action('停止', () => post('/api/instances/' + encodeURIComponent(instance.id) + '/stop')))
+          }
+          actions.append(action('删除', () => askDelete(session), 'danger'))
           card.append(head, meta, actions)
           if (session.lastError) {
             const detail = node('div', 'instance-id', session.lastError)
@@ -474,71 +375,9 @@ const HUB_HTML = String.raw`<!doctype html>
         }
       }
 
-      function renderInstances() {
-        list.replaceChildren()
-        const sessionIds = new Set(sessions.map((session) => session.instanceId))
-        const plain = instances.filter((instance) => !sessionIds.has(instance.id))
-        instancesSummary.textContent = plain.length ? plain.length + ' 个' : ''
-        if (!plain.length) {
-          const empty = node('div', 'empty')
-          empty.append(node('strong', '', '没有独立实例'), document.createTextNode('“新建实例”创建的手工实例会显示在这里。'))
-          list.append(empty)
-          return
-        }
-
-        for (const instance of plain) {
-          const card = node('article', 'card')
-          const head = node('div', 'card-head')
-          const identity = node('div')
-          identity.append(node('div', 'instance-name', instance.name), node('div', 'instance-id', instance.id))
-          const status = statusFor(instance)
-          const statusNode = node('div', 'status')
-          statusNode.append(node('span', 'dot ' + status.css), document.createTextNode(status.label))
-          head.append(identity, statusNode)
-
-          const meta = node('div', 'meta')
-          const image = node('div')
-          const workspaceText = instance.repoKey
-            ? instance.repoKey + ' → /workspace/' + instance.repoKey
-            : instance.imageKey
-          image.append(node('div', 'meta-label', instance.repoKey ? 'Repo' : 'Image'), node('div', 'meta-value', workspaceText))
-          const backup = node('div')
-          const backupText = instance.runtime.persistence.hasBackup
-            ? '已备份 · ' + formatTime(instance.runtime.persistence.lastCheckpointAt)
-            : '尚无快照'
-          backup.append(node('div', 'meta-label', 'Persistence'), node('div', 'meta-value', backupText))
-          const idleDeadline = node('div')
-          idleDeadline.append(node('div', 'meta-label', 'Idle shutdown'), node('div', 'meta-value', formatIdleDeadline(instance)))
-          meta.append(image, backup, idleDeadline)
-
-          const actions = node('div', 'actions')
-          const available = instance.lifecycle === 'ready'
-          const enter = action(launching === instance.id ? '正在进入…' : '进入 OpenCode ↗', () => wake(instance), 'primary')
-          enter.disabled = busy || !available
-          actions.append(enter)
-          if (available && ['running', 'healthy'].includes(instance.runtime.container)) {
-            actions.append(action('保存快照', () => command(instance.id, 'checkpoint')), action('停止', () => command(instance.id, 'stop')))
-          }
-          actions.append(action(instance.lifecycle === 'delete_failed' ? '重试删除' : '删除', () => askDelete(instance), 'danger'))
-          card.append(head, meta, actions)
-          if (instance.lastError) {
-            const detail = node('div', 'instance-id', instance.lastError)
-            detail.style.color = 'var(--danger)'
-            detail.style.marginTop = '12px'
-            card.append(detail)
-          }
-          list.append(card)
-        }
-      }
-
       function showError(error) {
         errorBox.textContent = error instanceof Error ? error.message : String(error)
         errorBox.classList.remove('hidden')
-      }
-
-      function showCreateError(error) {
-        createError.textContent = error instanceof Error ? error.message : String(error)
-        createError.classList.remove('hidden')
       }
 
       function showSessionError(error) {
@@ -547,11 +386,7 @@ const HUB_HTML = String.raw`<!doctype html>
       }
 
       function syncBusyState() {
-        createButton.disabled = busy
-        createCancel.disabled = busy
-        createConfirm.disabled = busy
-        createForm.setAttribute('aria-busy', String(busy))
-        for (const input of templateInputs) input.disabled = busy
+        sessionForm.setAttribute('aria-busy', String(busy))
         sessionSubmit.disabled = busy
         sessionPrompt.disabled = busy
         sessionRepo.disabled = busy
@@ -567,12 +402,7 @@ const HUB_HTML = String.raw`<!doctype html>
 
       async function refresh(silent = false) {
         try {
-          const [nextSessions, nextInstances] = await Promise.all([
-            api('/api/sessions'),
-            api('/api/instances')
-          ])
-          sessions = nextSessions
-          instances = nextInstances
+          sessions = await api('/api/sessions')
           if (!silent) errorBox.classList.add('hidden')
           render()
         } catch (error) {
@@ -588,10 +418,6 @@ const HUB_HTML = String.raw`<!doctype html>
         try { await work(); await refresh(); return true }
         catch (error) { handleError(error); await refresh(true); return false }
         finally { busy = false; syncBusyState(); render() }
-      }
-
-      async function command(id, commandName) {
-        await post('/api/instances/' + encodeURIComponent(id) + '/' + commandName)
       }
 
       async function post(path) {
@@ -620,11 +446,9 @@ const HUB_HTML = String.raw`<!doctype html>
         }
       }
 
-      function askDelete(target) {
-        deleting = target.kind === 'session'
-          ? target
-          : { kind: 'instance', id: target.id, name: target.name }
-        deleteName.textContent = deleting.name
+      function askDelete(session) {
+        deleting = session
+        deleteName.textContent = session.title
         deleteDialog.showModal()
       }
 
@@ -652,44 +476,11 @@ const HUB_HTML = String.raw`<!doctype html>
         if (created) sessionPrompt.value = ''
       })
 
-      createButton.addEventListener('click', () => {
-        createError.classList.add('hidden')
-        createDialog.showModal()
-      })
-      createCancel.addEventListener('click', () => createDialog.close())
-      createForm.addEventListener('submit', async (event) => {
-        event.preventDefault()
-        if (busy) return
-        const workspace = new FormData(createForm).get('workspace')
-        if (typeof workspace !== 'string') {
-          showCreateError('请选择一个工作区')
-          return
-        }
-        createError.classList.add('hidden')
-        const payload = workspace ? { repoKey: workspace } : { imageKey: 'opencode-v1' }
-        const created = await mutate(
-          () => api('/api/instances', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          }),
-          showCreateError
-        )
-        if (created) createDialog.close()
-      })
-      createDialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault() })
-      createDialog.addEventListener('close', () => {
-        createForm.reset()
-        createError.textContent = ''
-        createError.classList.add('hidden')
-      })
       document.querySelector('#delete-cancel').addEventListener('click', () => deleteDialog.close())
       deleteConfirm.addEventListener('click', () => {
         const target = deleting
         deleteDialog.close()
-        if (!target) return
-        const base = target.kind === 'session' ? '/api/sessions/' : '/api/instances/'
-        mutate(() => api(base + encodeURIComponent(target.id), { method: 'DELETE' }))
+        if (target) mutate(() => api('/api/sessions/' + encodeURIComponent(target.id), { method: 'DELETE' }))
       })
       deleteDialog.addEventListener('close', () => { deleting = null })
 

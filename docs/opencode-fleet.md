@@ -20,8 +20,7 @@ Live configuration files on machines are deployment targets, not sources of trut
 
 | Runtime | Live configuration | Update mechanism |
 |---------|--------------------|------------------|
-| Cloudflare Base Sandbox | `OPENCODE_CONFIG` supplied by the Worker | Change `src/opencode-config.ts`, verify, deploy |
-| Cloudflare Logto Sandbox | `OPENCODE_CONFIG` supplied by the Worker | Change `src/opencode-config.ts`, verify, deploy |
+| Cloudflare Sandbox | `OPENCODE_CONFIG` supplied by the Worker | Change `src/opencode-config.ts`, verify, deploy |
 | Mac Mini OpenCode Web | `~/.config/opencode/opencode.jsonc` | Semantically sync from `src/opencode-config.ts`, restart LaunchAgent, verify `/provider` |
 
 Add every future machine/runtime to this table and create a dedicated operations document under `docs/` before treating it as managed.

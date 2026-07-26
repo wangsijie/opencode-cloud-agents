@@ -1,5 +1,3 @@
-ARG WORKSPACE_TEMPLATE=base
-
 FROM docker.io/cloudflare/sandbox:0.12.3@sha256:23f67e16131b780865a5fa5aa3c8607408a730105c248836409f4e02bb6bf042 AS base
 
 ARG OPENCODE_VERSION=1.18.4
@@ -64,16 +62,12 @@ COPY docker/opencode/skills /workspace/.opencode/skills
 RUN install -d -m 0700 /workspace/.opencode-state/data/opencode
 COPY --chmod=0600 docker/auth/opencode/mcp-auth.json /workspace/.opencode-state/data/opencode/mcp-auth.json
 
-# /workspace is supported by the Sandbox backup/restore API. The base template
-# deliberately leaves it empty; later container starts overlay the latest R2
-# snapshot.
+# /workspace is supported by the Sandbox backup/restore API. The image leaves it
+# empty: repositories are cloned at wake time and later container starts overlay
+# the latest R2 snapshot.
 RUN mkdir -p /workspace
 
-FROM base AS logto
-
-RUN git clone --depth 1 https://github.com/logto-io/logto.git /workspace/logto
-
-FROM ${WORKSPACE_TEMPLATE} AS final
+FROM base AS final
 
 WORKDIR /workspace
 

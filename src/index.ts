@@ -27,7 +27,6 @@ import {
   InstanceWakePendingError,
   wakeInstanceRuntime,
   type CreateOpencodeSessionInput,
-  type InstanceSandboxRpc,
   type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
@@ -35,12 +34,7 @@ import {
   type LifecycleStatus
 } from './lifecycle';
 import {
-  CURRENT_IMAGE_KEY,
   HUB_DURABLE_OBJECT_ID,
-  LEGACY_INSTANCE_ID,
-  LOGTO_IMAGE_KEY,
-  isImageKey,
-  type ImageKey,
   type InstanceRecord,
   type InstanceRuntimeStatus,
   type InstanceView
@@ -142,9 +136,8 @@ interface PersistenceStatus {
 
 interface InstanceIdentity {
   id: string;
-  imageKey: ImageKey;
-  /** Catalog repository provisioned during wake; absent for blank/template instances. */
-  repoKey?: string;
+  /** Catalog repository provisioned during wake. */
+  repoKey: string;
   state: 'active' | 'deleting';
   initializedAt: string;
 }
@@ -177,7 +170,6 @@ export interface ExecutionSnapshot {
 
 export interface LifecycleWakeInput {
   instanceId: string;
-  imageKey: ImageKey;
   runtimeEpoch: string;
 }
 
@@ -268,24 +260,19 @@ export class Sandbox extends BaseSandbox<Env> {
     });
   }
 
-  async initializeInstance(
-    id: string,
-    imageKey: ImageKey,
-    repoKey?: string
-  ): Promise<void> {
+  async initializeInstance(id: string, repoKey: string): Promise<void> {
     await this.lifecycleReady;
     await this.setKeepAlive(true);
     if (this.purgeRequested) {
       throw new Error('A deleting instance cannot be initialized');
     }
-    if (repoKey !== undefined && !isRepoKey(repoKey)) {
+    if (!isRepoKey(repoKey)) {
       throw new Error(`Unknown repository: ${String(repoKey)}`);
     }
     if (this.instanceIdentity) {
       if (
         this.instanceIdentity.id !== id ||
-        this.instanceIdentity.imageKey !== imageKey ||
-        (this.instanceIdentity.repoKey ?? undefined) !== (repoKey ?? undefined)
+        this.instanceIdentity.repoKey !== repoKey
       ) {
         throw new Error('Sandbox identity does not match the Hub record');
       }
@@ -301,8 +288,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
     const identity: InstanceIdentity = {
       id,
-      imageKey,
-      ...(repoKey ? { repoKey } : {}),
+      repoKey,
       state: 'active',
       initializedAt: new Date().toISOString()
     };
@@ -343,10 +329,7 @@ export class Sandbox extends BaseSandbox<Env> {
     input: LifecycleWakeInput
   ): Promise<ExecutionSnapshot> {
     this.assertInstanceActive();
-    if (
-      this.instanceIdentity?.id !== input.instanceId ||
-      this.instanceIdentity.imageKey !== input.imageKey
-    ) {
+    if (this.instanceIdentity?.id !== input.instanceId) {
       throw new Error('Lifecycle wake identity does not match this Sandbox');
     }
     if (!isSafeRuntimeEpoch(input.runtimeEpoch)) {
@@ -433,72 +416,6 @@ export class Sandbox extends BaseSandbox<Env> {
       throw new Error(
         `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
       );
-    }
-  }
-
-  /**
-   * Attach a semantic runtime epoch to a container which predates the
-   * LifecycleCoordinator deployment. This never starts a stopped container.
-   */
-  async adoptRunningForLifecycle(
-    input: LifecycleWakeInput
-  ): Promise<ExecutionSnapshot> {
-    await this.lifecycleReady;
-    return this.withLifecycleMutation(() =>
-      this.performAdoptRunningForLifecycle(input)
-    );
-  }
-
-  private async performAdoptRunningForLifecycle(
-    input: LifecycleWakeInput
-  ): Promise<ExecutionSnapshot> {
-    this.assertInstanceActive();
-    if (
-      this.instanceIdentity?.id !== input.instanceId ||
-      this.instanceIdentity.imageKey !== input.imageKey
-    ) {
-      throw new Error('Lifecycle adoption identity does not match this Sandbox');
-    }
-    if (!isSafeRuntimeEpoch(input.runtimeEpoch)) {
-      throw new Error('Invalid runtime epoch');
-    }
-    if (this.persistenceState.container?.running !== true) {
-      return notRunningExecutionSnapshot();
-    }
-
-    const revision = (this.runtimeGate?.revision ?? 0) + 1;
-    await this.setRuntimeGate({
-      phase: 'waking',
-      runtimeEpoch: input.runtimeEpoch,
-      revision
-    });
-    try {
-      // The running check above is the migration safety barrier. These calls
-      // may repair the server process, but cannot wake a stopped container.
-      await this.ensureWorkspaceRestored();
-      await this.withControlPlaneAccess(() =>
-        createOpencodeServer(this, {
-          port: OPENCODE_PORT,
-          directory: WORKSPACE_DIRECTORY,
-          config: OPENCODE_CONFIG,
-          env: OPENCODE_ENV
-        })
-      );
-      await this.setRuntimeGate({
-        phase: 'running',
-        runtimeEpoch: input.runtimeEpoch,
-        revision
-      });
-      return this.inspectExecutionIfRunning();
-    } catch (error) {
-      // Keep admission closed. The coordinator's retry alarm can complete the
-      // same adoption through wakeForLifecycle without changing the epoch.
-      await this.setRuntimeGate({
-        phase: 'waking',
-        runtimeEpoch: input.runtimeEpoch,
-        revision
-      });
-      throw error;
     }
   }
 
@@ -1449,10 +1366,7 @@ export class Sandbox extends BaseSandbox<Env> {
             typeof value.id === 'string' &&
             typeof value.dir === 'string' &&
             typeof value.name === 'string' &&
-            (value.name.startsWith(`opencode:${owner}:`) ||
-              (owner === LEGACY_INSTANCE_ID &&
-                (value.name === 'opencode-manual' ||
-                  value.name === 'opencode-idle-stop')))
+            value.name.startsWith(`opencode:${owner}:`)
           ) {
             discovered.push({ id: value.id, dir: value.dir });
           }
@@ -1624,8 +1538,6 @@ export class Sandbox extends BaseSandbox<Env> {
 }
 
 /** The same persisted Sandbox behavior backed by the Logto template image. */
-export class LogtoSandbox extends Sandbox {}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -1787,20 +1699,16 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const hub = getHub(env);
 
+  // Instances are only created as part of a session. What remains here is the
+  // operational surface: reading container state and driving one runtime.
   if (url.pathname === '/api/instances') {
-    if (request.method === 'GET') {
-      const records = await hub.listInstances();
-      const instances = await Promise.all(
-        records.map((record) => getInstanceView(env, record))
-      );
-      return json(instances);
+    if (request.method !== 'GET') {
+      return methodNotAllowed('GET');
     }
-    if (request.method === 'POST') {
-      const input = await readCreateInstanceInput(request);
-      const instance = await hub.createInstance(input.imageKey, input.repoKey);
-      return json(await getInstanceView(env, instance), 201);
-    }
-    return methodNotAllowed('GET, POST');
+    const records = await hub.listInstances();
+    return json(
+      await Promise.all(records.map((record) => getInstanceView(env, record)))
+    );
   }
 
   const match = /^\/api\/instances\/([^/]+)(?:\/([^/]+))?$/.exec(
@@ -1842,19 +1750,14 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
   const lifecycle = resolveLifecycle(env, record.id);
   switch (action) {
     case 'wake': {
-      const wake = await wakeInstance(env, record, sandbox, lifecycle);
+      const wake = await wakeInstance(env, record, lifecycle);
       return json({
         launchUrl: `/?${UI_INSTANCE_PARAM}=${encodeURIComponent(record.id)}&${UI_RUNTIME_PARAM}=${encodeURIComponent(wake.runtimeEpoch)}`,
         runtime: await getMergedRuntimeStatus(sandbox, wake.status)
       });
     }
     case 'checkpoint': {
-      const runtime = await getInitializedLifecycleStatus(
-        env,
-        record,
-        sandbox,
-        lifecycle
-      );
+      const runtime = await ensureLifecycleInitialized(env, record.id, lifecycle);
       // A sleeping instance was already checkpointed before it stopped. Do
       // not start it merely to create an identical manual checkpoint.
       if (!runtime.admissionOpen) {
@@ -1866,11 +1769,11 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
       return json(await sandbox.checkpointWorkspace(runtime.runtimeEpoch));
     }
     case 'stop':
-      await getInitializedLifecycleStatus(env, record, sandbox, lifecycle);
+      await ensureLifecycleInitialized(env, record.id, lifecycle);
       await lifecycle.forceStop();
       return json(await getInstanceView(env, record));
     case 'test': {
-      const wake = await wakeInstance(env, record, sandbox, lifecycle);
+      const wake = await wakeInstance(env, record, lifecycle);
       const lease = await lifecycle.beginWork(wake.runtimeEpoch);
       if (!lease.admitted) {
         return lifecycleUnavailableResponse(lease.reason, lease.phase);
@@ -1964,7 +1867,6 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     await resolveSessionAgent(env, record.id).startSession({
       sessionId: record.id,
       instanceId: record.instanceId,
-      imageKey: CURRENT_IMAGE_KEY,
       repoKey: record.repoKey,
       directory: repoWorkspaceDirectory(repo),
       model: record.model,
@@ -2050,7 +1952,6 @@ async function getSessionView(
       : {
           id: record.instanceId,
           name: record.instanceId,
-          imageKey: CURRENT_IMAGE_KEY,
           repoKey: record.repoKey,
           lifecycle: 'deleting',
           createdAt: record.createdAt,
@@ -2077,10 +1978,9 @@ async function getInstanceView(
   try {
     const sandbox = resolveSandbox(env, record);
     const lifecycle = resolveLifecycle(env, record.id);
-    const lifecycleStatus = await getInitializedLifecycleStatus(
+    const lifecycleStatus = await ensureLifecycleInitialized(
       env,
-      record,
-      sandbox,
+      record.id,
       lifecycle
     );
     return {
@@ -2596,58 +2496,26 @@ async function proxyRunningContainerRequest(
 }
 
 function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
-  switch (instance.imageKey) {
-    case CURRENT_IMAGE_KEY:
-      return getSandbox(env.Sandbox, instance.id, {
-        normalizeId: true,
-        keepAlive: true
-      });
-    case LOGTO_IMAGE_KEY:
-      return getSandbox(env.LogtoSandbox, instance.id, {
-        normalizeId: true,
-        keepAlive: true
-      });
-    default:
-      throw new HttpError(501, `Unsupported image: ${String(instance.imageKey)}`);
-  }
+  return getSandbox(env.Sandbox, instance.id, {
+    normalizeId: true,
+    keepAlive: true
+  });
 }
 
 function resolveLifecycle(env: Env, instanceId: string) {
   return env.LifecycleCoordinator.getByName(instanceId);
 }
 
-async function getInitializedLifecycleStatus(
-  env: Env,
-  record: InstanceRecord,
-  sandbox: Sandbox,
-  lifecycle: ReturnType<typeof resolveLifecycle>
-): Promise<LifecycleStatus> {
-  return ensureLifecycleInitialized(
-    env,
-    record.id,
-    record.imageKey,
-    sandbox as unknown as InstanceSandboxRpc,
-    lifecycle
-  );
-}
-
 async function wakeInstance(
   env: Env,
   record: InstanceRecord,
-  sandbox = resolveSandbox(env, record),
   lifecycle = resolveLifecycle(env, record.id)
 ): Promise<{
   runtimeEpoch: string;
   status: LifecycleStatus;
 }> {
   try {
-    return await wakeInstanceRuntime(
-      env,
-      record.id,
-      record.imageKey,
-      sandbox as unknown as InstanceSandboxRpc,
-      lifecycle
-    );
+    return await wakeInstanceRuntime(env, record.id, lifecycle);
   } catch (error) {
     if (error instanceof InstanceWakePendingError) {
       throw new HttpError(503, error.message);
@@ -2707,52 +2575,6 @@ function lifecycleUnavailableResponse(reason: string, phase: string): Response {
       }
     }
   );
-}
-
-interface CreateInstanceInput {
-  imageKey: ImageKey;
-  repoKey?: string;
-}
-
-async function readCreateInstanceInput(
-  request: Request
-): Promise<CreateInstanceInput> {
-  const body = await request.text();
-  if (!body.trim()) {
-    return { imageKey: CURRENT_IMAGE_KEY };
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(body);
-  } catch {
-    throw new HttpError(400, 'Request body must be valid JSON');
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new HttpError(400, 'Request body must be a JSON object');
-  }
-
-  const { imageKey, repoKey } = value as {
-    imageKey?: unknown;
-    repoKey?: unknown;
-  };
-  if (repoKey !== undefined) {
-    if (!isRepoKey(repoKey)) {
-      throw new HttpError(400, 'Unknown repository');
-    }
-    // Repository instances always provision at runtime on the base image.
-    if (imageKey !== undefined && imageKey !== CURRENT_IMAGE_KEY) {
-      throw new HttpError(400, 'Repository instances use the base image');
-    }
-    return { imageKey: CURRENT_IMAGE_KEY, repoKey };
-  }
-  if (imageKey === undefined) {
-    return { imageKey: CURRENT_IMAGE_KEY };
-  }
-  if (!isImageKey(imageKey)) {
-    throw new HttpError(400, 'Unknown instance template');
-  }
-  return { imageKey };
 }
 
 function getHub(env: Env) {

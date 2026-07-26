@@ -3,12 +3,12 @@
 OpenCode platform source of truth and Cloudflare deployment. The repository
 defines the shared provider/model configuration for all managed OpenCode
 runtimes and runs an OpenCode Hub on Cloudflare Workers, Durable Objects,
-Containers, and R2. One Worker hostname serves a management dashboard and
-routes traffic to any number of independently sleeping OpenCode instances.
+Containers, and R2. One Worker hostname serves a session dashboard and routes
+traffic to any number of independently sleeping OpenCode containers.
 
 ## Repository roles
 
-- Build and deploy independently sleeping OpenCode Sandbox instances on Cloudflare.
+- Build and deploy independently sleeping OpenCode coding sessions on Cloudflare.
 - Maintain the canonical OpenCode provider, model, capability and version configuration for Sandbox and other machines.
 - Document and operate machine deployments such as Mac Mini OpenCode Web.
 
@@ -22,8 +22,8 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 ## Hub architecture
 
 - `/` is the Hub dashboard. Its composer starts a session from a repository, a
-  model and a prompt; below it, the dashboard lists sessions and any remaining
-  hand-made instances with their container and backup state.
+  model and a prompt; below it, the dashboard lists every session with its
+  dispatch phase and container state.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -31,15 +31,11 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 - Every instance also has a `LifecycleCoordinator` Durable Object. Its alarm
   polls OpenCode execution state and owns the semantic 10-minute idle deadline;
   browser HTTP, SSE, and WebSocket traffic never renews that deadline.
-- Every immutable instance ID maps to a different template-specific Sandbox
-  Durable Object and therefore a different container. Display names such as
-  `amber-otter-4f2a` are generated randomly.
-- New instances are provisioned lazily: creation records the selected template
-  and adds a stopped logical instance immediately; its image starts when the
-  instance is first opened.
-- The first Hub access registers the previous single-instance ID, `opencode`,
-  as `original-opencode`, preserving its Durable Object storage and R2 backup
-  during the migration.
+- Every immutable instance ID maps to its own Sandbox Durable Object and
+  therefore its own container. Display names such as `amber-otter-4f2a` are
+  generated randomly.
+- Instances are provisioned lazily: creating a session records a stopped logical
+  instance immediately, and its container starts on the first explicit wake.
 
 ### Why the single-domain router is path based
 
@@ -73,32 +69,22 @@ Wildcard subdomains would be simpler if they become available: the Worker
 could route `<instance>.example.com` directly and stock OpenCode could use that
 origin without UI adaptation. The current design works with one exact hostname.
 
-Each template is backed by a container image and a dedicated Durable Object
-class binding. Instance records persist the image key, allowing the router and
-lifecycle operations to resolve the correct Sandbox class without changing
-instance URLs.
-
 ## Workspaces and repository provisioning
 
-New instances always use the **Base** image (internal key `opencode-v1`), which
-installs OpenCode, `gh`, Wrangler, and the bundled credentials. The creation
-dialog chooses the workspace content:
+There is one container image. It installs OpenCode, `gh`, Wrangler, and the
+bundled credentials, and leaves `/workspace` empty; repositories are never baked
+into the image.
 
-- **Blank** starts with an empty `/workspace`.
-- **Repository** instances record a `repoKey` from the catalog in
-  [`src/repos.ts`](src/repos.ts). The first wake shallow-clones the repository
-  into `/workspace/<repoKey>` before the OpenCode server starts; later wakes
-  restore the workspace snapshot and run a best-effort `git fetch origin`
-  without touching the working tree. A clone failure fails the wake; a fetch
-  failure only logs a warning.
+Every instance records a `repoKey` from the catalog in
+[`src/repos.ts`](src/repos.ts). The first wake shallow-clones the repository
+into `/workspace/<repoKey>` before the OpenCode server starts; later wakes
+restore the workspace snapshot and run a best-effort `git fetch origin` without
+touching the working tree. A clone failure fails the wake; a fetch failure only
+logs a warning.
 
 Adding a repository is a one-line change in `src/repos.ts` plus a deploy.
 Public repositories use HTTPS clone URLs; private ones use SSH and require the
 bundled image key to be authorized on GitHub.
-
-The legacy **Logto** template image (`logto-v1`, cloned at build time) is no
-longer offered for new instances; existing `logto-v1` instances keep working
-unchanged.
 
 All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.
@@ -166,8 +152,8 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:8787>. Building a template image for the first time can
-take several minutes. Local development uses Wrangler's local R2 store via
+Open <http://localhost:8787>. Building the container image for the first time
+can take several minutes. Local development uses Wrangler's local R2 store via
 `PERSISTENCE_LOCAL_BUCKET=true`.
 
 Local-mode restore pushes the whole snapshot archive through the container
@@ -214,23 +200,13 @@ below.
 
 ## Instance API
 
+Instances are created only as part of a session. What remains is the operational
+surface for one container: reading its state, driving its runtime, and the
+deletion path that session deletion delegates to.
+
 ```bash
 # List instances with live container and persistence state.
 curl http://localhost:8787/api/instances
-
-# Create a stopped Base instance with a random display name. An empty POST uses
-# Base for backward compatibility.
-curl -X POST http://localhost:8787/api/instances
-
-# Explicitly create a blank Base instance.
-curl -X POST http://localhost:8787/api/instances \
-  -H 'Content-Type: application/json' \
-  --data '{"imageKey":"opencode-v1"}'
-
-# Create a repository instance; the first wake clones into /workspace/logto.
-curl -X POST http://localhost:8787/api/instances \
-  -H 'Content-Type: application/json' \
-  --data '{"repoKey":"logto"}'
 
 # Inspect one instance.
 curl http://localhost:8787/api/instances/<instance-id>
@@ -270,8 +246,6 @@ runtime.
 - Only the latest successful snapshot is retained during normal operation.
 - A backup ledger retains every handle whose R2 deletion has not yet been
   confirmed, so failed stale-backup cleanup remains retryable.
-- Deleting the migrated `opencode` instance also recognizes the two legacy
-  snapshot names (`opencode-manual` and `opencode-idle-stop`).
 - Instance deletion first marks the registry record as `deleting`, which blocks
   new UI/API traffic, and returns `202` immediately. A Hub Durable Object alarm
   waits for in-flight startup/checkpoint/stop operations, destroys the container
@@ -341,7 +315,11 @@ pnpm run typecheck
 pnpm run deploy
 ```
 
-The `v2` Durable Object migration creates the Hub registry, `v3` adds the
-`LogtoSandbox` class, `v4` adds the per-instance lifecycle coordinator, and `v5`
-adds the per-session dispatch agent.
-Wrangler builds and pushes both configured template images during deployment.
+The `v2` Durable Object migration creates the Hub registry, `v3` added the
+now-retired `LogtoSandbox` class, `v4` adds the per-instance lifecycle
+coordinator, `v5` adds the per-session dispatch agent, and `v6` deletes
+`LogtoSandbox` together with its Durable Object storage.
+
+Because `v6` destroys that storage, delete every remaining `logto-v1` instance
+through the Hub *before* deploying it. Deletion is what removes an instance's R2
+snapshots, and the backup handles live in the storage the migration erases.

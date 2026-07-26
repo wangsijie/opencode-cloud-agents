@@ -1,21 +1,13 @@
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox } from '@cloudflare/sandbox';
-import {
-  CURRENT_IMAGE_KEY,
-  LEGACY_INSTANCE_ID,
-  LOGTO_IMAGE_KEY,
-  isImageKey,
-  type ImageKey,
-  type InstanceRecord
-} from './instances';
+import type { InstanceRecord } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
 import { isModelRef } from './opencode-config';
 import { isRepoKey } from './repos';
 import type { SessionRecord, SessionStatePatch } from './sessions';
 
-const INITIALIZED_KEY = 'hub:initialized';
 const SCHEMA_VERSION_KEY = 'hub:schema-version';
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const INSTANCE_KEY_PREFIX = 'instance:';
 const SESSION_KEY_PREFIX = 'session:';
 const DELETE_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000;
@@ -72,40 +64,7 @@ export class Hub extends DurableObject<Env> {
     super(ctx, env);
     this.initialized = ctx.blockConcurrencyWhile(async () => {
       if ((await ctx.storage.get<number>(SCHEMA_VERSION_KEY)) !== SCHEMA_VERSION) {
-        const registryExists = Boolean(
-          await ctx.storage.get<boolean>(INITIALIZED_KEY)
-        );
-        const existingLegacy = await ctx.storage.get<InstanceRecord>(
-          instanceStorageKey(LEGACY_INSTANCE_ID)
-        );
-
-        if (!registryExists || existingLegacy) {
-          // Preserve the pre-Hub deployment's fixed "opencode" Durable Object
-          // and its R2 backup. This identity RPC does not start its container.
-          const now = new Date().toISOString();
-          const legacy: InstanceRecord = existingLegacy
-            ? {
-                ...existingLegacy,
-                imageKey: CURRENT_IMAGE_KEY,
-                updatedAt: now
-              }
-            : {
-                id: LEGACY_INSTANCE_ID,
-                name: 'original-opencode',
-                imageKey: CURRENT_IMAGE_KEY,
-                lifecycle: 'ready',
-                createdAt: now,
-                updatedAt: now
-              };
-          const sandbox = resolveSandbox(env, legacy.id, legacy.imageKey);
-          await sandbox.initializeInstance(legacy.id, legacy.imageKey);
-          await ctx.storage.put(instanceStorageKey(legacy.id), legacy);
-        }
-
-        await ctx.storage.put({
-          [INITIALIZED_KEY]: true,
-          [SCHEMA_VERSION_KEY]: SCHEMA_VERSION
-        });
+        await ctx.storage.put(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
       }
 
       const [records, alarm] = await Promise.all([
@@ -134,36 +93,26 @@ export class Hub extends DurableObject<Env> {
     return this.ctx.storage.get<InstanceRecord>(instanceStorageKey(id));
   }
 
-  async createInstance(
-    imageKey: ImageKey = CURRENT_IMAGE_KEY,
-    repoKey?: string
-  ): Promise<InstanceRecord> {
-    await this.initialized;
-    if (!isImageKey(imageKey)) {
-      throw new Error(`Unsupported image: ${String(imageKey)}`);
-    }
-    if (repoKey !== undefined && !isRepoKey(repoKey)) {
+  /** Instances exist only to run a session, so a repository is mandatory. */
+  private async createInstance(repoKey: string): Promise<InstanceRecord> {
+    if (!isRepoKey(repoKey)) {
       throw new Error(`Unknown repository: ${String(repoKey)}`);
     }
     const now = new Date().toISOString();
     const record: InstanceRecord = {
       id: `inst-${crypto.randomUUID()}`,
       name: randomInstanceName(),
-      imageKey,
-      ...(repoKey ? { repoKey } : {}),
+      repoKey,
       lifecycle: 'ready',
       createdAt: now,
       updatedAt: now
     };
 
-    const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
+    const sandbox = resolveSandbox(this.env, record.id);
     const lifecycle = resolveLifecycle(this.env, record.id);
-    await sandbox.initializeInstance(record.id, record.imageKey, record.repoKey);
+    await sandbox.initializeInstance(record.id, record.repoKey);
     try {
-      await lifecycle.initializeInstance({
-        instanceId: record.id,
-        imageKey: record.imageKey
-      });
+      await lifecycle.initializeInstance({ instanceId: record.id });
       await this.ctx.storage.put(instanceStorageKey(record.id), record);
     } catch (error) {
       await sandbox.purgeInstance().catch(() => undefined);
@@ -208,7 +157,7 @@ export class Hub extends DurableObject<Env> {
       throw new Error(`Unknown model: ${String(input.model)}`);
     }
 
-    const instance = await this.createInstance(CURRENT_IMAGE_KEY, input.repoKey);
+    const instance = await this.createInstance(input.repoKey);
     const now = new Date().toISOString();
     const record: SessionRecord = {
       id: instance.id,
@@ -301,7 +250,7 @@ export class Hub extends DurableObject<Env> {
     if (record) {
       const operationId = record.deleteOperationId!;
       try {
-        const sandbox = resolveSandbox(this.env, record.id, record.imageKey);
+        const sandbox = resolveSandbox(this.env, record.id);
         const lifecycle = resolveLifecycle(this.env, record.id);
         await lifecycle.beginDelete();
         const purgeResult = await withTimeout(
@@ -410,21 +359,11 @@ function isPendingDeletion(record: InstanceRecord): boolean {
   return record.lifecycle === 'deleting' && Boolean(record.deleteOperationId);
 }
 
-function resolveSandbox(env: Env, id: string, imageKey: ImageKey) {
-  switch (imageKey) {
-    case CURRENT_IMAGE_KEY:
-      return getSandbox(env.Sandbox, id, {
-        normalizeId: true,
-        keepAlive: true
-      });
-    case LOGTO_IMAGE_KEY:
-      return getSandbox(env.LogtoSandbox, id, {
-        normalizeId: true,
-        keepAlive: true
-      });
-    default:
-      throw new Error(`Unsupported image: ${String(imageKey)}`);
-  }
+function resolveSandbox(env: Env, id: string) {
+  return getSandbox(env.Sandbox, id, {
+    normalizeId: true,
+    keepAlive: true
+  });
 }
 
 function resolveLifecycle(env: Env, id: string) {

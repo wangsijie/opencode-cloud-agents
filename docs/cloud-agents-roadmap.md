@@ -109,7 +109,7 @@ busy 并自动保活，干完自然进入 10 分钟空闲倒计时。
   分支、commit/push/PR 流程）作为整体课题放 M6 设计。
 - OpenCode session 的 `directory` 指向 `/workspace/<repoKey>`（活动探测的 known-locations
   机制已支持多目录）。
-- 由此 `LogtoSandbox` 类和模板镜像机制走向退役（迁移完成后清理）。
+- 由此 `LogtoSandbox` 类和模板镜像机制走向退役（已于 2026-07-26 清理，见下）。
 
 ### D5 · 无感恢复的体验定义
 
@@ -219,6 +219,29 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 - composer 提交后**不进任何 UI**，容器自行 clone/恢复并开始执行 prompt。
 - 干完后 10 分钟自动休眠（现有能力，无需新代码）。
 - 开工序列任一步失败（如 repo 拉取失败）在列表页可见且可重试。
+
+### M2.5 · 去兼容化清理 — ✅ 完成（2026-07-26）
+
+M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡期的兼容层一次性清掉，Hub 只剩会话：
+
+- **模板镜像退役**：删掉 Dockerfile 的 `logto` stage 与 `WORKSPACE_TEMPLATE` 参数、
+  `LogtoSandbox` 容器与 DO 绑定；migration `v6` 用 `deleted_classes` 连带销毁其 DO 存储。
+- **`imageKey` 概念消失**：`InstanceRecord` / Sandbox identity / lifecycle state / 各 RPC
+  入参全部去掉镜像键，`repoKey` 改为必填——实例只为跑会话而存在。
+- **legacy 实例兼容删除**：Hub 构造函数不再注册 `opencode` → `original-opencode`
+  （schema 版本 2 → 3），备份归属识别去掉 `opencode-manual` / `opencode-idle-stop` 特例。
+- **adoption 路径删除**：`adoptRunningForLifecycle` 与 coordinator 的 `'adopt'` 操作类型
+  一并移除；协调器初始化后一律是 `sleeping`，只有显式 `wake()` 能启动容器。
+- **独立实例入口删除**：`POST /api/instances` 与创建对话框、首页「其他实例」区块下线。
+  `/api/instances` 保留为运维读取面与单实例操作（wake/checkpoint/stop/test/delete），
+  M4 验收「用 /api/instances 确认无唤醒」照常可用。
+
+**部署顺序（重要）**：`v6` 会销毁 `LogtoSandbox` 的 DO 存储，而实例的 R2 快照句柄就存在那里。
+必须先在 Hub 上把存量实例全部删除（删除流程才会清 R2），再部署本次变更，否则快照会变成
+无法枚举的孤儿对象。
+
+清理后本地复测：全新状态下不再自动出现 legacy 实例，`POST /api/instances` 返回 405，
+会话创建 → clone → 执行 → 回答 → idle → 删除全链路正常。
 
 ### M3 · 自定义会话页（醒着时的聊天视图） — 约 4–6 天
 

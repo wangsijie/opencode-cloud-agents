@@ -13,7 +13,7 @@
  * task that starts between two activity probes still resets the idle window.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { HUB_DURABLE_OBJECT_ID, isImageKey, type ImageKey } from './instances';
+import { HUB_DURABLE_OBJECT_ID } from './instances';
 import {
   resolveInstanceLifecycle,
   resolveInstanceSandbox,
@@ -51,7 +51,6 @@ interface StoredSessionAgentState {
   schemaVersion: number;
   sessionId: string;
   instanceId: string;
-  imageKey: ImageKey;
   repoKey: string;
   /** Absolute container path the OpenCode session is bound to. */
   directory: string;
@@ -70,7 +69,6 @@ interface StoredSessionAgentState {
 export interface StartSessionInput {
   sessionId: string;
   instanceId: string;
-  imageKey: ImageKey;
   repoKey: string;
   directory: string;
   model: string;
@@ -127,9 +125,6 @@ export class SessionAgent extends DurableObject<Env> {
       }
       return this.snapshot();
     }
-    if (!isImageKey(input.imageKey)) {
-      throw new Error(`Unsupported image: ${String(input.imageKey)}`);
-    }
     if (!findRepo(input.repoKey)) {
       throw new Error(`Unknown repository: ${input.repoKey}`);
     }
@@ -142,7 +137,6 @@ export class SessionAgent extends DurableObject<Env> {
       schemaVersion: SCHEMA_VERSION,
       sessionId: input.sessionId,
       instanceId: input.instanceId,
-      imageKey: input.imageKey,
       repoKey: input.repoKey,
       directory: input.directory,
       model: input.model,
@@ -244,17 +238,11 @@ export class SessionAgent extends DurableObject<Env> {
 
   private async dispatchPending(): Promise<void> {
     const state = this.requireState();
-    const sandbox = resolveInstanceSandbox(
-      this.env,
-      state.instanceId,
-      state.imageKey
-    );
+    const sandbox = resolveInstanceSandbox(this.env, state.instanceId);
     const lifecycle = resolveInstanceLifecycle(this.env, state.instanceId);
     const wake = await wakeInstanceRuntime(
       this.env,
       state.instanceId,
-      state.imageKey,
-      sandbox,
       lifecycle
     );
 

@@ -1,11 +1,5 @@
 export const HUB_DURABLE_OBJECT_ID = 'opencode-hub';
-export const CURRENT_IMAGE_KEY = 'opencode-v1';
-export const LOGTO_IMAGE_KEY = 'logto-v1';
-export const LEGACY_INSTANCE_ID = 'opencode';
 
-export const IMAGE_KEYS = [CURRENT_IMAGE_KEY, LOGTO_IMAGE_KEY] as const;
-
-export type ImageKey = (typeof IMAGE_KEYS)[number];
 export type InstanceLifecycle = 'ready' | 'deleting' | 'delete_failed';
 export type RuntimeLifecycle =
   | 'sleeping'
@@ -17,16 +11,15 @@ export type RuntimeLifecycle =
   | 'stopping'
   | 'error';
 
-export function isImageKey(value: unknown): value is ImageKey {
-  return IMAGE_KEYS.some((imageKey) => imageKey === value);
-}
-
+/**
+ * The container behind one session. Every instance runs the same image and is
+ * defined by the catalog repository it provisions at wake time.
+ */
 export interface InstanceRecord {
   id: string;
   name: string;
-  imageKey: ImageKey;
-  /** Catalog repository provisioned at wake time; absent for blank/template instances. */
-  repoKey?: string;
+  /** Catalog repository cloned into `/workspace/<repoKey>` on first wake. */
+  repoKey: string;
   lifecycle: InstanceLifecycle;
   createdAt: string;
   updatedAt: string;
