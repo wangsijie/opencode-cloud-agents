@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { fetchCatalog, type Catalog } from './api';
 import { Composer } from './components/Composer';
 import { SessionCard } from './components/SessionCard';
+import { SessionPage } from './components/SessionPage';
+import { useRoute } from './router';
 import { useSessions } from './useSessions';
 
 /**
@@ -12,10 +14,9 @@ import { useSessions } from './useSessions';
  * underneath the page as containers wake, work and sleep.
  */
 export function App() {
-  const { sessions, error: listError, refresh } = useSessions();
+  const route = useRoute();
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogError, setCatalogError] = useState<string>();
-  const [actionError, setActionError] = useState<string>();
 
   useEffect(() => {
     fetchCatalog()
@@ -24,6 +25,23 @@ export function App() {
         setCatalogError(cause instanceof Error ? cause.message : String(cause))
       );
   }, []);
+
+  return route.name === 'session' ? (
+    <SessionPage sessionId={route.id} catalog={catalog} />
+  ) : (
+    <SessionList catalog={catalog} catalogError={catalogError} />
+  );
+}
+
+function SessionList({
+  catalog,
+  catalogError
+}: {
+  catalog?: Catalog;
+  catalogError?: string;
+}) {
+  const { sessions, error: listError, refresh } = useSessions();
+  const [actionError, setActionError] = useState<string>();
 
   const runningCount = sessions?.filter((session) =>
     ['working', 'idle'].includes(session.status)

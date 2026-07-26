@@ -259,7 +259,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 | S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | ✅ 2026-07-26 |
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | ✅ 2026-07-26 |
 | S5 | 列表页 + composer 迁入 SPA | ✅ 2026-07-26 |
-| S6 | 会话详情页 + message part 渲染器 | 待做 |
+| S6 | 会话详情页 + message part 渲染器 | ✅ 2026-07-26 |
 | S7 | 并发 tab 验证、测试/类型、文档回填 | 待做 |
 
 **S1 实际交付（2026-07-26）**：`src/sessions.ts` 加 `deriveSessionStatus`（把 dispatch phase 与
@@ -371,6 +371,28 @@ select 不肯收缩，把整行顶出视口（375px 视口渲染成 405px 宽）
 ② 轮询原本只在 `!document.hidden` 时跑，从后台切回来最多要等一个周期才更新；补了
 `visibilitychange` 立即刷新。顺带一提，自动化浏览器把页面恒定报成 hidden，所以轮询这条
 必须手动把 `document.hidden` 打开才验得到——直接看截图会误以为轮询坏了。
+
+**S6 实际交付（2026-07-26）**：会话详情页 `/sessions/:id`。路由自己写了 30 行
+（两条路由不值得引依赖）；`useTranscript` 先全量拉 `/messages`，再挂 `/events` SSE 增量，
+**按 part.id 做 map 合并**（S1 发现：流式文本是同一个 part 反复更新，不是不断新增）。
+part 渲染器覆盖 text（markdown）/ reasoning（默认折叠）/ tool（单行摘要）/ todo，
+`step-start`/`step-finish` 直接跳过（S1 发现），其余类型显示「未支持的内容类型：<type>」——
+写出类型名而不是静默隐藏，因为那正是下一步该做什么的线索。消息上的 `error` 单独渲染，
+所以中断与供应商报错在页面上看得见。列表卡片标题点进详情，修饰键点击仍走原生链接行为。
+
+本地实测（浏览器实操）：列表点进详情，历史正确渲染（用户气泡 + `read package.json`
+工具行 + markdown 正文）；在页面里发续聊，**纯靠 SSE** 4 秒内消息数 3→5，与服务端
+`/messages` 逐字对比一致（尾部 `…38|39|40` 完全相同），全程没有刷新；停掉容器后详情页
+显示「已休眠」横幅、输入框禁用、按钮变成「唤醒并打开 IDE」。
+
+**S6 发现**：① markdown 会把单个换行折叠成空格，agent 数了 40 行结果渲染成 3 行——加
+`remark-breaks` 保留软换行，因为 agent 的输出是按终端习惯写的。② 手机上 composer 一度占掉
+半个视口（每个按钮各占一行），给 sticky composer 单独放宽成同排。
+
+**S6 待补**：UI 上的「中断」按钮只验到它确实发出了 `POST .../abort`（拦 fetch 确认），
+没能在一次连续的流式输出里看到它把生成截断——试的时候上游供应商又开始报
+`unknown certificate verification error`。端点本身的截断效果已在 S3 补验里确认
+（数到 1367/5000 + `MessageAbortedError`）。
 
 **S2 发现（两条都很坑）**：
 

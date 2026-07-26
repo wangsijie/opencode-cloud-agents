@@ -7,6 +7,7 @@ import {
   type SessionView
 } from '../api';
 import { formatIdleShutdown, formatRelative } from '../format';
+import { navigate, sessionPath } from '../router';
 import { StatusBadge } from './StatusBadge';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
@@ -58,7 +59,21 @@ export function SessionCard({
     <article className="card session">
       <header className="session-head">
         <div className="session-identity">
-          <h3>{session.title}</h3>
+          <h3>
+            <a
+              href={sessionPath(session.id)}
+              onClick={(event) => {
+                // Keep modifier-clicks and middle-clicks behaving like links.
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
+                  return;
+                }
+                event.preventDefault();
+                navigate(sessionPath(session.id));
+              }}
+            >
+              {session.title}
+            </a>
+          </h3>
           <p className="muted mono">{session.id}</p>
         </div>
         <StatusBadge status={session.status} />

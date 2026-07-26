@@ -74,7 +74,64 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/**
+ * One message and its parts, forwarded from OpenCode unchanged.
+ *
+ * Only the fields the renderer reads are named; parts carry many more, and a
+ * type this layer does not know about is shown as a placeholder rather than
+ * being dropped.
+ */
+export interface MessagePart {
+  id: string;
+  type: string;
+  text?: string;
+  tool?: string;
+  state?: { status?: string; title?: string };
+  [key: string]: unknown;
+}
+
+export interface MessageInfo {
+  id: string;
+  role: 'user' | 'assistant';
+  modelID?: string;
+  time?: { created?: number; completed?: number };
+  error?: { name?: string; data?: { message?: string } };
+}
+
+export interface SessionMessage {
+  info: MessageInfo;
+  parts: MessagePart[];
+}
+
+export type TranscriptState = 'live' | 'sleeping' | 'pending' | 'error';
+
+export interface Transcript {
+  state: TranscriptState;
+  messages: SessionMessage[];
+  error?: string;
+}
+
 export const listSessions = () => call<SessionView[]>('/api/sessions');
+
+export const getSession = (id: string) =>
+  call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`);
+
+export const fetchTranscript = (id: string) =>
+  call<Transcript>(`/api/sessions/${encodeURIComponent(id)}/messages`);
+
+export const sendMessage = (
+  id: string,
+  input: { prompt: string; model?: string; promptId?: string }
+) =>
+  call<SessionView>(`/api/sessions/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+
+export const abortSession = (id: string) =>
+  call<{ aborted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/abort`, {
+    method: 'POST'
+  });
 export const fetchCatalog = () => call<Catalog>('/api/catalog');
 
 export const createSession = (input: {
