@@ -36,6 +36,14 @@ export const REPOS: readonly RepoDefinition[] = [
   // }
 ];
 
+/** Root of the snapshotted container workspace shared by every instance. */
+export const WORKSPACE_ROOT = '/workspace';
+
+/** Absolute container path a repository is provisioned into. */
+export function repoWorkspaceDirectory(repo: RepoDefinition): string {
+  return `${WORKSPACE_ROOT}/${repo.repoKey}`;
+}
+
 export function findRepo(repoKey: string): RepoDefinition | undefined {
   return REPOS.find((repo) => repo.repoKey === repoKey);
 }

@@ -1,10 +1,13 @@
+import { DEFAULT_MODEL_REF, MODEL_OPTIONS } from './opencode-config';
 import { REPOS } from './repos';
 
 export function renderHubHtml(): Response {
   const html = HUB_HTML.replace(
     '<!--WORKSPACE_OPTIONS-->',
     workspaceOptionsHtml()
-  );
+  )
+    .replace('<!--REPO_SELECT_OPTIONS-->', repoSelectOptionsHtml())
+    .replace('<!--MODEL_SELECT_OPTIONS-->', modelSelectOptionsHtml());
   return new Response(html, {
     headers: {
       'Cache-Control': 'no-store',
@@ -39,6 +42,22 @@ function workspaceOptionsHtml(): string {
             </span>
           </label>`
   ).join('\n          ');
+}
+
+/** Repository choices for the session composer. */
+function repoSelectOptionsHtml(): string {
+  return REPOS.map(
+    (repo) =>
+      `<option value="${escapeHtml(repo.repoKey)}">${escapeHtml(repo.displayName)}</option>`
+  ).join('\n            ');
+}
+
+/** Model choices come from the canonical OpenCode provider configuration. */
+function modelSelectOptionsHtml(): string {
+  return MODEL_OPTIONS.map(
+    (model) =>
+      `<option value="${escapeHtml(model.id)}"${model.id === DEFAULT_MODEL_REF ? ' selected' : ''}>${escapeHtml(model.displayName)}</option>`
+  ).join('\n            ');
 }
 
 function escapeHtml(value: string): string {
@@ -170,6 +189,26 @@ const HUB_HTML = String.raw`<!doctype html>
       .template-name { display: block; padding-right: 28px; font: 650 16px ui-monospace, SFMono-Regular, Menlo, monospace; }
       .template-description { display: block; margin-top: 11px; color: var(--muted); font-size: 12px; line-height: 1.55; }
       .template-path { display: block; margin-top: auto; padding-top: 17px; color: #c0c6cf; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .composer { margin: 30px 0 14px; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); }
+      .composer textarea {
+        width: 100%; min-height: 92px; padding: 12px 13px; resize: vertical;
+        border: 1px solid var(--line-strong); border-radius: 9px;
+        background: #0d1015; color: var(--text); font: inherit; font-size: 14px; line-height: 1.55;
+      }
+      .composer textarea:focus-visible, .composer select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .composer-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; align-items: center; }
+      .composer select {
+        min-height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 9px;
+        background: #191d23; color: var(--text); font: inherit; font-size: 13px; max-width: 100%;
+      }
+      .composer .grow { flex: 1 1 120px; }
+      .section-title { margin: 30px 0 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+      .section-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
+      .section-title span { color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .session-title { font-size: 15px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+      .dot.queued { background: var(--muted); box-shadow: 0 0 0 3px rgba(145,153,166,.12); }
+      .dot.starting { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,184,61,.12); }
+      .dot.failed { background: var(--danger); box-shadow: 0 0 0 3px rgba(255,107,115,.12); }
       .dialog-error { margin-top: 14px; padding: 10px 12px; border: 1px solid rgba(255,107,115,.35); border-radius: 8px; background: rgba(255,107,115,.07); color: #ffb2b7; font-size: 12px; }
       .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
       @media (max-width: 650px) {
@@ -195,15 +234,36 @@ const HUB_HTML = String.raw`<!doctype html>
       <section class="hero">
         <div>
           <h2>你的工作空间</h2>
-          <p>每个实例拥有独立容器、OpenCode 状态和 R2 持久化快照。停止实例会保留数据；删除实例会同时销毁容器并清空其备份。</p>
+          <p>选好仓库和模型，写下这次要做的事就能直接开一个会话：沙箱会自行唤醒、准备仓库并开始执行，不需要先进 OpenCode。每个会话拥有独立容器、OpenCode 状态和 R2 持久化快照。</p>
         </div>
-        <div class="summary" id="summary">正在读取实例…</div>
+        <div class="summary" id="summary">正在读取…</div>
+      </section>
+
+      <section class="composer">
+        <form id="session-form">
+          <textarea id="session-prompt" name="prompt" rows="3" placeholder="描述这次要做的事，例如：把 packages/core 的 lint 错误修掉并提交" aria-label="任务描述"></textarea>
+          <div class="composer-row">
+            <select id="session-repo" class="grow" aria-label="仓库">
+            <!--REPO_SELECT_OPTIONS-->
+            </select>
+            <select id="session-model" class="grow" aria-label="模型">
+            <!--MODEL_SELECT_OPTIONS-->
+            </select>
+            <button class="button primary" id="session-submit" type="submit">开始会话</button>
+          </div>
+          <div class="dialog-error hidden" id="session-error" role="alert"></div>
+        </form>
       </section>
 
       <div class="error-box hidden" id="error" role="alert"></div>
-      <section class="grid" id="instances">
+
+      <div class="section-title"><h3>会话</h3><span id="sessions-summary"></span></div>
+      <section class="grid" id="sessions">
         <article class="card skeleton"></article><article class="card skeleton"></article>
       </section>
+
+      <div class="section-title"><h3>其他实例</h3><span id="instances-summary"></span></div>
+      <section class="grid" id="instances"></section>
     </main>
 
     <dialog id="create-dialog" aria-labelledby="create-title" aria-describedby="create-description">
@@ -243,7 +303,16 @@ const HUB_HTML = String.raw`<!doctype html>
 
     <script>
       const list = document.querySelector('#instances')
+      const sessionList = document.querySelector('#sessions')
       const summary = document.querySelector('#summary')
+      const sessionsSummary = document.querySelector('#sessions-summary')
+      const instancesSummary = document.querySelector('#instances-summary')
+      const sessionForm = document.querySelector('#session-form')
+      const sessionPrompt = document.querySelector('#session-prompt')
+      const sessionRepo = document.querySelector('#session-repo')
+      const sessionModel = document.querySelector('#session-model')
+      const sessionSubmit = document.querySelector('#session-submit')
+      const sessionError = document.querySelector('#session-error')
       const errorBox = document.querySelector('#error')
       const createButton = document.querySelector('#create')
       const createDialog = document.querySelector('#create-dialog')
@@ -256,9 +325,16 @@ const HUB_HTML = String.raw`<!doctype html>
       const deleteName = document.querySelector('#delete-name')
       const deleteConfirm = document.querySelector('#delete-confirm')
       let instances = []
+      let sessions = []
       let deleting = null
       let busy = false
       let launching = null
+
+      const sessionPhases = {
+        queued: { label: '排队中', css: 'queued' },
+        starting: { label: '正在开工', css: 'starting' },
+        failed: { label: '开工失败', css: 'failed' }
+      }
 
       const lifecycleStatuses = {
         sleeping: { label: '已休眠', css: 'sleeping' },
@@ -335,18 +411,82 @@ const HUB_HTML = String.raw`<!doctype html>
         return button
       }
 
+      function statusForSession(session) {
+        if (session.instance.lifecycle !== 'ready') return statusFor(session.instance)
+        if (session.phase !== 'working') return sessionPhases[session.phase] || sessionPhases.queued
+        return lifecycleStatuses[lifecycleFor(session.instance)]
+      }
+
       function render() {
-        list.replaceChildren()
         const running = instances.filter((item) => ['running', 'healthy'].includes(item.runtime.container)).length
-        summary.textContent = instances.length + ' 个实例 · ' + running + ' 个运行中'
-        if (!instances.length) {
+        summary.textContent = sessions.length + ' 个会话 · ' + instances.length + ' 个实例 · ' + running + ' 个运行中'
+        renderSessions()
+        renderInstances()
+      }
+
+      function renderSessions() {
+        sessionList.replaceChildren()
+        sessionsSummary.textContent = sessions.length ? sessions.length + ' 个' : ''
+        if (!sessions.length) {
           const empty = node('div', 'empty')
-          empty.append(node('strong', '', '还没有实例'), document.createTextNode('点击“新建实例”开始。'))
+          empty.append(node('strong', '', '还没有会话'), document.createTextNode('在上面写下任务并选择仓库与模型即可开工。'))
+          sessionList.append(empty)
+          return
+        }
+
+        for (const session of sessions) {
+          const instance = session.instance
+          const card = node('article', 'card')
+          const head = node('div', 'card-head')
+          const identity = node('div')
+          identity.append(node('div', 'session-title', session.title), node('div', 'instance-id', session.id))
+          const status = statusForSession(session)
+          const statusNode = node('div', 'status')
+          statusNode.append(node('span', 'dot ' + status.css), document.createTextNode(status.label))
+          head.append(identity, statusNode)
+
+          const meta = node('div', 'meta')
+          const repo = node('div')
+          repo.append(node('div', 'meta-label', 'Repo'), node('div', 'meta-value', '/workspace/' + session.repoKey))
+          const model = node('div')
+          model.append(node('div', 'meta-label', 'Model'), node('div', 'meta-value', session.model))
+          const idleDeadline = node('div')
+          idleDeadline.append(node('div', 'meta-label', 'Idle shutdown'), node('div', 'meta-value', formatIdleDeadline(instance)))
+          meta.append(repo, model, idleDeadline)
+
+          const actions = node('div', 'actions')
+          const available = instance.lifecycle === 'ready'
+          const enter = action(launching === instance.id ? '正在进入…' : '打开完整 IDE ↗', () => wake(instance), 'primary')
+          enter.disabled = busy || !available
+          actions.append(enter)
+          if (session.phase === 'failed') {
+            actions.append(action('重试开工', () => post('/api/sessions/' + encodeURIComponent(session.id) + '/retry')))
+          }
+          actions.append(action('删除', () => askDelete({ kind: 'session', id: session.id, name: session.title }), 'danger'))
+          card.append(head, meta, actions)
+          if (session.lastError) {
+            const detail = node('div', 'instance-id', session.lastError)
+            detail.style.color = 'var(--danger)'
+            detail.style.marginTop = '12px'
+            card.append(detail)
+          }
+          sessionList.append(card)
+        }
+      }
+
+      function renderInstances() {
+        list.replaceChildren()
+        const sessionIds = new Set(sessions.map((session) => session.instanceId))
+        const plain = instances.filter((instance) => !sessionIds.has(instance.id))
+        instancesSummary.textContent = plain.length ? plain.length + ' 个' : ''
+        if (!plain.length) {
+          const empty = node('div', 'empty')
+          empty.append(node('strong', '', '没有独立实例'), document.createTextNode('“新建实例”创建的手工实例会显示在这里。'))
           list.append(empty)
           return
         }
 
-        for (const instance of instances) {
+        for (const instance of plain) {
           const card = node('article', 'card')
           const head = node('div', 'card-head')
           const identity = node('div')
@@ -401,12 +541,21 @@ const HUB_HTML = String.raw`<!doctype html>
         createError.classList.remove('hidden')
       }
 
+      function showSessionError(error) {
+        sessionError.textContent = error instanceof Error ? error.message : String(error)
+        sessionError.classList.remove('hidden')
+      }
+
       function syncBusyState() {
         createButton.disabled = busy
         createCancel.disabled = busy
         createConfirm.disabled = busy
         createForm.setAttribute('aria-busy', String(busy))
         for (const input of templateInputs) input.disabled = busy
+        sessionSubmit.disabled = busy
+        sessionPrompt.disabled = busy
+        sessionRepo.disabled = busy
+        sessionModel.disabled = busy
       }
 
       async function api(path, options) {
@@ -418,7 +567,12 @@ const HUB_HTML = String.raw`<!doctype html>
 
       async function refresh(silent = false) {
         try {
-          instances = await api('/api/instances')
+          const [nextSessions, nextInstances] = await Promise.all([
+            api('/api/sessions'),
+            api('/api/instances')
+          ])
+          sessions = nextSessions
+          instances = nextInstances
           if (!silent) errorBox.classList.add('hidden')
           render()
         } catch (error) {
@@ -437,7 +591,11 @@ const HUB_HTML = String.raw`<!doctype html>
       }
 
       async function command(id, commandName) {
-        await mutate(() => api('/api/instances/' + encodeURIComponent(id) + '/' + commandName, { method: 'POST' }))
+        await post('/api/instances/' + encodeURIComponent(id) + '/' + commandName)
+      }
+
+      async function post(path) {
+        await mutate(() => api(path, { method: 'POST' }))
       }
 
       async function wake(instance) {
@@ -462,11 +620,37 @@ const HUB_HTML = String.raw`<!doctype html>
         }
       }
 
-      function askDelete(instance) {
-        deleting = instance
-        deleteName.textContent = instance.name
+      function askDelete(target) {
+        deleting = target.kind === 'session'
+          ? target
+          : { kind: 'instance', id: target.id, name: target.name }
+        deleteName.textContent = deleting.name
         deleteDialog.showModal()
       }
+
+      sessionForm.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        if (busy) return
+        const prompt = sessionPrompt.value.trim()
+        if (!prompt) {
+          showSessionError('请先描述这次要做的事')
+          return
+        }
+        sessionError.classList.add('hidden')
+        const created = await mutate(
+          () => api('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repoKey: sessionRepo.value,
+              model: sessionModel.value,
+              prompt
+            })
+          }),
+          showSessionError
+        )
+        if (created) sessionPrompt.value = ''
+      })
 
       createButton.addEventListener('click', () => {
         createError.classList.add('hidden')
@@ -503,7 +687,9 @@ const HUB_HTML = String.raw`<!doctype html>
       deleteConfirm.addEventListener('click', () => {
         const target = deleting
         deleteDialog.close()
-        if (target) mutate(() => api('/api/instances/' + encodeURIComponent(target.id), { method: 'DELETE' }))
+        if (!target) return
+        const base = target.kind === 'session' ? '/api/sessions/' : '/api/instances/'
+        mutate(() => api(base + encodeURIComponent(target.id), { method: 'DELETE' }))
       })
       deleteDialog.addEventListener('close', () => { deleting = null })
 

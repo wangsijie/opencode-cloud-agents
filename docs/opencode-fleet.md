@@ -42,6 +42,9 @@ When provider or model configuration changes:
    ```
 
 3. Keep OpenCode and SDK versions aligned unless a documented platform constraint requires otherwise.
+   Note that the Cloudflare Hub also derives its session model picker from this file: a model removed
+   here disappears from the composer, and any existing session pinned to it fails on its next dispatch.
+   Retire a model only after its sessions are finished or repointed.
 4. Run `pnpm test` and `pnpm run typecheck`.
 5. Deploy Sandbox changes with `pnpm run deploy` when production rollout is requested.
 6. Sync the equivalent configuration to each documented machine, restart its OpenCode service, and verify the runtime provider catalog. For image models, `capabilities.input.image` must be `true`.

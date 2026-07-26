@@ -52,6 +52,10 @@
       {
         "class_name": "LifecycleCoordinator",
         "name": "LifecycleCoordinator"
+      },
+      {
+        "class_name": "SessionAgent",
+        "name": "SessionAgent"
       }
     ]
   },
@@ -71,6 +75,10 @@
     {
       "new_sqlite_classes": ["LifecycleCoordinator"],
       "tag": "v4"
+    },
+    {
+      "new_sqlite_classes": ["SessionAgent"],
+      "tag": "v5"
     }
   ]
 }

@@ -9,12 +9,15 @@ import {
   type InstanceRecord
 } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
+import { isModelRef } from './opencode-config';
 import { isRepoKey } from './repos';
+import type { SessionRecord, SessionStatePatch } from './sessions';
 
 const INITIALIZED_KEY = 'hub:initialized';
 const SCHEMA_VERSION_KEY = 'hub:schema-version';
 const SCHEMA_VERSION = 2;
 const INSTANCE_KEY_PREFIX = 'instance:';
+const SESSION_KEY_PREFIX = 'session:';
 const DELETE_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000;
 
 class DeleteAttemptTimeoutError extends Error {}
@@ -170,6 +173,93 @@ export class Hub extends DurableObject<Env> {
     return record;
   }
 
+  async listSessions(): Promise<SessionRecord[]> {
+    await this.initialized;
+    const stored = await this.ctx.storage.list<SessionRecord>({
+      prefix: SESSION_KEY_PREFIX
+    });
+    return [...stored.values()].sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt)
+    );
+  }
+
+  async getSession(id: string): Promise<SessionRecord | undefined> {
+    await this.initialized;
+    return this.ctx.storage.get<SessionRecord>(sessionStorageKey(id));
+  }
+
+  /**
+   * Create a session and the instance that runs it in one step. The session id
+   * is the instance id: one session always owns exactly one container.
+   *
+   * The record starts with the opening prompt already counted as pending; the
+   * caller then hands it to the session's SessionAgent for dispatch.
+   */
+  async createSession(input: {
+    repoKey: string;
+    model: string;
+    title: string;
+  }): Promise<SessionRecord> {
+    await this.initialized;
+    if (!isRepoKey(input.repoKey)) {
+      throw new Error(`Unknown repository: ${String(input.repoKey)}`);
+    }
+    if (!isModelRef(input.model)) {
+      throw new Error(`Unknown model: ${String(input.model)}`);
+    }
+
+    const instance = await this.createInstance(CURRENT_IMAGE_KEY, input.repoKey);
+    const now = new Date().toISOString();
+    const record: SessionRecord = {
+      id: instance.id,
+      instanceId: instance.id,
+      repoKey: input.repoKey,
+      model: input.model,
+      title: input.title,
+      phase: 'queued',
+      pendingPromptCount: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.ctx.storage.put(sessionStorageKey(record.id), record);
+    return record;
+  }
+
+  /** Mirror of the SessionAgent's dispatch state; the agent stays canonical. */
+  async updateSession(
+    id: string,
+    patch: SessionStatePatch
+  ): Promise<SessionRecord | undefined> {
+    await this.initialized;
+    return this.ctx.storage.transaction(async (transaction) => {
+      const record = await transaction.get<SessionRecord>(
+        sessionStorageKey(id)
+      );
+      if (!record) {
+        return undefined;
+      }
+      const updated: SessionRecord = {
+        ...record,
+        ...(patch.phase ? { phase: patch.phase } : {}),
+        ...(patch.opencodeSessionId
+          ? { opencodeSessionId: patch.opencodeSessionId }
+          : {}),
+        ...(patch.pendingPromptCount !== undefined
+          ? { pendingPromptCount: patch.pendingPromptCount }
+          : {}),
+        ...(patch.lastPromptAt ? { lastPromptAt: patch.lastPromptAt } : {}),
+        updatedAt: new Date().toISOString()
+      };
+      if (patch.lastError === null) {
+        delete updated.lastError;
+      } else if (patch.lastError !== undefined) {
+        updated.lastError = patch.lastError;
+      }
+      await transaction.put(sessionStorageKey(id), updated);
+      return updated;
+    });
+  }
+
   async beginDelete(id: string): Promise<InstanceRecord | undefined> {
     await this.initialized;
     const deleting = await this.ctx.storage.transaction(async (transaction) => {
@@ -302,12 +392,18 @@ export class Hub extends DurableObject<Env> {
         return;
       }
       await transaction.delete(instanceStorageKey(id));
+      // A session and its instance share one id and are deleted together.
+      await transaction.delete(sessionStorageKey(id));
     });
   }
 }
 
 function instanceStorageKey(id: string): string {
   return `${INSTANCE_KEY_PREFIX}${id}`;
+}
+
+function sessionStorageKey(id: string): string {
+  return `${SESSION_KEY_PREFIX}${id}`;
 }
 
 function isPendingDeletion(record: InstanceRecord): boolean {

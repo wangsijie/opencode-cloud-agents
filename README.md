@@ -21,9 +21,13 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 
 ## Hub architecture
 
-- `/` is the Hub dashboard. It lists instance/container state and backup state,
-  and supports create, enter, checkpoint, stop, and delete.
-- The `Hub` Durable Object is the strongly consistent instance registry.
+- `/` is the Hub dashboard. Its composer starts a session from a repository, a
+  model and a prompt; below it, the dashboard lists sessions and any remaining
+  hand-made instances with their container and backup state.
+- The `Hub` Durable Object is the strongly consistent session and instance
+  registry.
+- Every session has a `SessionAgent` Durable Object. Its alarm owns the
+  start-work sequence and survives restarts and transient failures.
 - Every instance also has a `LifecycleCoordinator` Durable Object. Its alarm
   polls OpenCode execution state and owns the semantic 10-minute idle deadline;
   browser HTTP, SSE, and WebSocket traffic never renews that deadline.
@@ -99,6 +103,35 @@ unchanged.
 All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.
 
+## Sessions
+
+A session is the product-level unit of work: one repository, one model, one
+prompt thread, one container. Creating a session from the Hub composer needs no
+further interaction — submitting the form returns immediately and the work
+starts inside the container:
+
+1. The Hub creates the session and its instance (session id = instance id) and
+   hands the prompt to that session's `SessionAgent` Durable Object.
+2. The agent's alarm wakes the runtime through the normal explicit-intent path,
+   which restores the workspace snapshot and provisions the repository.
+3. It takes a short work lease, creates the OpenCode session bound to
+   `/workspace/<repoKey>`, and calls `session.promptAsync`.
+4. `promptAsync` returns as soon as the container accepts the task, so nothing
+   holds a connection while the agent works. The semantic activity probe sees
+   the run as busy and the usual 10-minute idle stop follows completion.
+
+Dispatch failures (a repository that cannot be cloned, a runtime that will not
+wake) are retried three times with backoff, then the session stays `failed` with
+the underlying error on the record and a retry button in the dashboard.
+
+Model choices come from the provider catalog in `src/opencode-config.ts`; a
+session stores the `providerID/modelID` reference and unknown references are
+rejected at the API boundary.
+
+Session state (`queued` / `starting` / `working` / `failed`) describes dispatch
+only. Container state stays in the instance runtime status, so a `working`
+session may be busy, idle, or already asleep.
+
 ## Prerequisites
 
 - Docker is running locally.
@@ -149,6 +182,35 @@ if the dev server never becomes ready.
 The shared Base stage installs OpenCode, `gh`, and Wrangler. OpenCode data,
 state, and cache are kept below `/workspace`, so they are part of each instance
 snapshot alongside any checked-out repositories.
+
+## Session API
+
+```bash
+# Repository and model choices for the composer.
+curl http://localhost:8787/api/catalog
+
+# List sessions with their dispatch phase and live instance state.
+curl http://localhost:8787/api/sessions
+
+# Start a session. Returns HTTP 202 immediately; `model` defaults to the
+# configured default model.
+curl -X POST http://localhost:8787/api/sessions \
+  -H 'Content-Type: application/json' \
+  --data '{"repoKey":"logto","model":"vwnpc/ag/gemini-3.6-flash-high","prompt":"Fix the lint errors in packages/core"}'
+
+# Inspect one session.
+curl http://localhost:8787/api/sessions/<session-id>
+
+# Re-run a failed start sequence.
+curl -X POST http://localhost:8787/api/sessions/<session-id>/retry
+
+# Delete the session together with its container and snapshots (HTTP 202).
+curl -X DELETE http://localhost:8787/api/sessions/<session-id>
+```
+
+While the custom session view is still being built, open a running session's
+full OpenCode IDE from the dashboard; that link uses the instance wake route
+below.
 
 ## Instance API
 
@@ -280,5 +342,6 @@ pnpm run deploy
 ```
 
 The `v2` Durable Object migration creates the Hub registry, `v3` adds the
-`LogtoSandbox` class, and `v4` adds the per-instance lifecycle coordinator.
+`LogtoSandbox` class, `v4` adds the per-instance lifecycle coordinator, and `v5`
+adds the per-session dispatch agent.
 Wrangler builds and pushes both configured template images during deployment.

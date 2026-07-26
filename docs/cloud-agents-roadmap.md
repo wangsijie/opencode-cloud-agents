@@ -173,9 +173,37 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 - stop 后再次唤醒：目录来自快照恢复，且 fetch 拿到了远端新提交。
 - `pnpm test && pnpm run typecheck` 通过；README 模板章节更新。
 
-### M2 · 会话化创建：repo + 模型 + prompt 直接开工 — 约 3–5 天
+### M2 · 会话化创建：repo + 模型 + prompt 直接开工 — ✅ 完成（2026-07-26）
 
-范围：
+实际交付与验证：`src/sessions.ts` 会话类型 + Hub DO 会话注册表（`session:<id>`，与实例同 id）；
+新增 `SessionAgent` DO（migration v5）执行 wake → ensure-repo（沿用 M1 唤醒流水线）→
+`session.create(directory=/workspace/<repoKey>)` → `promptAsync`，失败自动退避重试 3 次
+（5s/20s/60s）后停在 `failed` 并可手动重试；`src/opencode-config.ts` 派生模型目录
+（`MODEL_OPTIONS`/`parseModelRef`，模型 id 含斜杠，只取首段为 provider）；
+`src/instance-runtime.ts` 抽出 Worker 与 DO 共用的唤醒/生命周期解析；API
+`GET|POST /api/sessions`、`GET|DELETE /api/sessions/:id`、`POST /api/sessions/:id/retry`、
+`GET /api/catalog`；Hub 首页加 composer 与会话卡片列表（阶段徽章、错误、重试、删除、
+“打开完整 IDE”）。
+
+本地实测（wrangler dev + 真实容器）：
+
+- composer 提交后全程不进任何 UI，容器自行 clone logto、建 OpenCode 会话、执行 prompt；
+  transcript 里 agent 用 `read` 工具读到真实 checkout 并正确作答，随后按现有机制转 idle。
+- 阶段流转 `queued → starting → working`，实例 runtime 依次 `waking → busy → idle`。
+- 故意配置无效 clone URL：三次退避重试后停在 `failed`，`lastError` 带 git 原文；
+  `POST .../retry` 重新进入派发。
+- `DELETE /api/sessions/:id` 连带删除实例与快照，会话与实例列表都清空。
+
+偏差与备注：
+
+- 不下发自定义 `messageID`。OpenCode 的消息 id 内含可排序时间戳前缀，塞随机 UUID 会破坏
+  消息顺序；M5 的幂等去重改用 SessionAgent 队列内的 prompt id（派发成功后才出队）。
+- 派发时取一次 90 秒 work lease 且**不显式 endWork**：任务刚被接收到探测到 busy 之间有
+  空窗，让租约自然过期比立即 endWork 触发一次可能误判 idle 的探测更保守。
+- 会话删除由 Worker 先调 `SessionAgent.markDeleted()` 再调 `Hub.beginDelete()`，避免
+  Hub↔SessionAgent 互相等待造成 DO RPC 死锁（SessionAgent 会回写 Hub）。
+
+原范围：
 
 - promptAsync 冒烟 spike（见 D1；按决策记录已前置到 M1 之前执行），结论写进本文档。
 - `SessionRecord`（Hub DO）：`{ id, repoKey, model, title, opencodeSessionId?, phase, createdAt, … }`
@@ -197,7 +225,8 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 范围：
 
 - 搭 `web/` SPA 脚手架（Vite + React + TS，见 D6），构建产物接入 Wrangler 静态资源托管，
-  取代 `hub-ui.ts` 的模板字符串页面；M2 的 composer 一并迁入。
+  取代 `hub-ui.ts` 的模板字符串页面；M2 的 composer 一并迁入（现有 composer 与会话卡片
+  是过渡实现，`GET /api/catalog` 已经把仓库/模型目录暴露给 SPA）。
 - **移动优先布局**：手机是一等场景（路上发任务、看进度、睡前续聊），列表页与会话页
   从一开始就按窄屏设计，桌面是放大适配。
 - Hub 首页改为会话列表（状态徽章：working / idle / sleeping / error；最后活动时间）。
@@ -264,7 +293,7 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 
 | 风险 | 影响 | 对策 |
 |------|------|------|
-| `promptAsync` 在 1.18.4 的确切语义未验证 | M2 根基 | spike 已列为最先执行项；若行为不符，退路是容器内 `nohup curl` 自持投递进程 |
+| ~~`promptAsync` 在 1.18.4 的确切语义未验证~~ | ~~M2 根基~~ | 已消解：spike + M2 本地端到端均验证通过 |
 | 冷启动耗时决定"无感"体感 | M5 体验 | 先测量并在 UI 明示进度；优化项进 M6 |
 | 长对话镜像体积 | M4 存储 | 正文进 R2、DO 只存索引；分页读取 |
 | 一实例被 stock UI 开出多个 OpenCode session | 镜像/状态聚焦 | 会话页只聚焦主 `opencodeSessionId`，其余 session 照常被活动探测保活，镜像可顺带导出 |

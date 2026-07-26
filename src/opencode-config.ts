@@ -5,6 +5,9 @@ export const DEFAULT_MODEL_ID = 'ag/gemini-3.6-flash-high';
 
 const DEFAULT_MODEL = `${DEFAULT_PROVIDER_ID}/${DEFAULT_MODEL_ID}`;
 
+/** Canonical `providerID/modelID` reference used by session records. */
+export const DEFAULT_MODEL_REF = DEFAULT_MODEL;
+
 /**
  * Complete OpenCode configuration shared by the web UI and SDK client.
  *
@@ -283,3 +286,64 @@ export const OPENCODE_CONFIG: Config = {
     }
   }
 };
+
+/**
+ * One selectable model in the session composer.
+ *
+ * `id` is the `providerID/modelID` reference persisted on a session record.
+ * Model ids themselves may contain slashes (`ag/gemini-3.6-flash-high`), so the
+ * provider is always the first segment and the model is everything after it.
+ */
+export interface ModelOption {
+  id: string;
+  providerID: string;
+  modelID: string;
+  providerName: string;
+  modelName: string;
+  displayName: string;
+}
+
+export const MODEL_OPTIONS: readonly ModelOption[] = Object.entries(
+  OPENCODE_CONFIG.provider ?? {}
+).flatMap(([providerID, provider]) => {
+  const providerName = provider?.name ?? providerID;
+  return Object.entries(provider?.models ?? {}).map(
+    ([modelID, model]): ModelOption => {
+      const modelName = model?.name ?? modelID;
+      return {
+        id: `${providerID}/${modelID}`,
+        providerID,
+        modelID,
+        providerName,
+        modelName,
+        displayName: `${providerName} · ${modelName}`
+      };
+    }
+  );
+});
+
+export function findModel(modelRef: string): ModelOption | undefined {
+  return MODEL_OPTIONS.find((option) => option.id === modelRef);
+}
+
+export function isModelRef(value: unknown): value is string {
+  return typeof value === 'string' && findModel(value) !== undefined;
+}
+
+/**
+ * Split a catalog reference into the provider/model pair the OpenCode API
+ * expects. Unknown references are rejected instead of being forwarded, so a
+ * stale UI cannot make the container start work with an unconfigured model.
+ */
+export function parseModelRef(
+  modelRef: string
+): { providerID: string; modelID: string } | undefined {
+  const option = findModel(modelRef);
+  return option
+    ? { providerID: option.providerID, modelID: option.modelID }
+    : undefined;
+}
+
+if (!isModelRef(DEFAULT_MODEL_REF)) {
+  throw new Error(`Default model is missing from the catalog: ${DEFAULT_MODEL_REF}`);
+}

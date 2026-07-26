@@ -23,6 +23,14 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Hub } from './hub';
 import { renderHubHtml } from './hub-ui';
 import {
+  ensureLifecycleInitialized,
+  InstanceWakePendingError,
+  wakeInstanceRuntime,
+  type CreateOpencodeSessionInput,
+  type InstanceSandboxRpc,
+  type PromptOpencodeSessionInput
+} from './instance-runtime';
+import {
   LifecycleCoordinator,
   type LifecycleStatus
 } from './lifecycle';
@@ -39,9 +47,19 @@ import {
 } from './instances';
 import {
   DEFAULT_MODEL_ID,
+  DEFAULT_MODEL_REF,
   DEFAULT_PROVIDER_ID,
+  isModelRef,
+  MODEL_OPTIONS,
   OPENCODE_CONFIG
 } from './opencode-config';
+import { SessionAgent } from './session-agent';
+import {
+  deriveSessionTitle,
+  normalizeSessionPrompt,
+  type SessionRecord,
+  type SessionView
+} from './sessions';
 import {
   extractOpenCodeLocation,
   GLOBAL_SESSION_LIST_PATH,
@@ -51,11 +69,16 @@ import {
   queryOpenCodeActivity,
   type OpenCodeLocation
 } from './opencode-activity';
-import { findRepo, isRepoKey, type RepoDefinition } from './repos';
+import {
+  findRepo,
+  isRepoKey,
+  REPOS,
+  repoWorkspaceDirectory,
+  WORKSPACE_ROOT
+} from './repos';
 
-export { ContainerProxy, Hub, LifecycleCoordinator };
+export { ContainerProxy, Hub, LifecycleCoordinator, SessionAgent };
 
-const WORKSPACE_ROOT = '/workspace';
 const WORKSPACE_DIRECTORY = WORKSPACE_ROOT;
 const PERSISTENCE_MARKER = `${WORKSPACE_ROOT}/.opencode-persistence-ready`;
 const BACKUP_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -810,26 +833,111 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
+  /**
+   * Create the OpenCode session that backs one Hub session record.
+   *
+   * `directory` is the session's repository checkout, which also registers that
+   * location with the activity probe through the container fetch path.
+   */
+  async createOpencodeSession(
+    runtimeEpoch: string,
+    input: CreateOpencodeSessionInput
+  ): Promise<string> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Creating an OpenCode session'
+      );
+      const session = await client.session.create({
+        title: input.title,
+        directory: input.directory
+      });
+      const id = session.data?.id;
+      if (!id) {
+        throw new Error(
+          `Failed to create OpenCode session: ${describeSdkFailure(session)}`
+        );
+      }
+      return id;
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Hand a prompt to the container's agent loop and return immediately. The
+   * task keeps running server-side after this call, where the semantic activity
+   * probe observes it as busy and holds off the idle deadline.
+   */
+  async promptOpencodeSessionAsync(
+    runtimeEpoch: string,
+    input: PromptOpencodeSessionInput
+  ): Promise<void> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Dispatching an OpenCode prompt'
+      );
+      // The message id is left to OpenCode: it encodes a sortable timestamp
+      // that message ordering depends on, so an arbitrary id is not safe.
+      const result = await client.session.promptAsync({
+        sessionID: input.opencodeSessionId,
+        directory: input.directory,
+        model: {
+          providerID: input.providerID,
+          modelID: input.modelID
+        },
+        parts: [{ type: 'text', text: input.text }]
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to dispatch OpenCode prompt: ${describeSdkFailure(result)}`
+        );
+      }
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Build an OpenCode client bound to the current runtime generation. Every
+   * request carries the epoch header, so a runtime which stopped mid-operation
+   * fails the request instead of silently reaching a newer container.
+   */
+  private createRuntimeClient(
+    runtimeEpoch: string,
+    intent: string
+  ): OpencodeClient {
+    if (
+      this.runtimeGate?.phase !== 'running' ||
+      this.runtimeGate.runtimeEpoch !== runtimeEpoch
+    ) {
+      throw new Error(`${intent} requires the current runtime epoch`);
+    }
+    return createOpencodeClient({
+      baseUrl: `http://localhost:${OPENCODE_PORT}`,
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        const headers = new Headers(request.headers);
+        headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
+        return this.containerFetch(
+          new Request(request, { headers }),
+          OPENCODE_PORT
+        );
+      }
+    });
+  }
+
   async runSdkTest(runtimeEpoch: string): Promise<Response> {
     await this.lifecycleReady;
     this.beginActiveOperation();
 
     try {
-      if (
-        this.runtimeGate?.phase !== 'running' ||
-        this.runtimeGate.runtimeEpoch !== runtimeEpoch
-      ) {
-        throw new Error('SDK test requires the current runtime epoch');
-      }
-      const client: OpencodeClient = createOpencodeClient({
-        baseUrl: `http://localhost:${OPENCODE_PORT}`,
-        fetch: (input, init) => {
-          const request = new Request(input, init);
-          const headers = new Headers(request.headers);
-          headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
-          return this.containerFetch(new Request(request, { headers }), OPENCODE_PORT);
-        }
-      });
+      const client = this.createRuntimeClient(runtimeEpoch, 'The SDK test');
 
       const session = await client.session.create({
         title: 'Test Session',
@@ -1531,6 +1639,14 @@ export default {
         return await handleHubApi(request, env);
       }
 
+      if (url.pathname === '/api/sessions' || url.pathname.startsWith('/api/sessions/')) {
+        return await handleSessionApi(request, env);
+      }
+
+      if (url.pathname === '/api/catalog' && request.method === 'GET') {
+        return json({ repos: REPOS, models: MODEL_OPTIONS });
+      }
+
       if (url.pathname === '/hub/bootstrap.js') {
         return serveUiBootstrap(url);
       }
@@ -1734,6 +1850,7 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
     }
     case 'checkpoint': {
       const runtime = await getInitializedLifecycleStatus(
+        env,
         record,
         sandbox,
         lifecycle
@@ -1749,7 +1866,7 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
       return json(await sandbox.checkpointWorkspace(runtime.runtimeEpoch));
     }
     case 'stop':
-      await getInitializedLifecycleStatus(record, sandbox, lifecycle);
+      await getInitializedLifecycleStatus(env, record, sandbox, lifecycle);
       await lifecycle.forceStop();
       return json(await getInstanceView(env, record));
     case 'test': {
@@ -1769,6 +1886,184 @@ async function handleHubApi(request: Request, env: Env): Promise<Response> {
   }
 }
 
+/**
+ * Session API.
+ *
+ * The Hub creates a session, its instance, and its dispatch agent in one
+ * request and returns immediately: waking the container, provisioning the
+ * repository and starting the agent loop all happen in the SessionAgent alarm.
+ */
+async function handleSessionApi(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const hub = getHub(env);
+
+  if (url.pathname === '/api/sessions') {
+    if (request.method === 'GET') {
+      const records = await hub.listSessions();
+      return json(
+        await Promise.all(records.map((record) => getSessionView(env, record)))
+      );
+    }
+    if (request.method === 'POST') {
+      return await createSession(request, env);
+    }
+    return methodNotAllowed('GET, POST');
+  }
+
+  const match = /^\/api\/sessions\/([^/]+)(?:\/([^/]+))?$/.exec(url.pathname);
+  if (!match) {
+    throw new HttpError(404, 'Session API route not found');
+  }
+  const id = decodeRouteSegment(match[1]);
+  const action = match[2];
+  const record = await requireSession(env, id);
+
+  if (!action) {
+    if (request.method === 'GET') {
+      return json(await getSessionView(env, record));
+    }
+    if (request.method === 'DELETE') {
+      // Clearing the agent first stops a queued dispatch from waking a
+      // container the Hub is about to destroy.
+      await resolveSessionAgent(env, record.id).markDeleted();
+      const deleting = await hub.beginDelete(record.instanceId);
+      if (!deleting) {
+        throw new HttpError(404, 'Session instance not found');
+      }
+      return json(
+        { deleting: true, id: record.id, operationId: deleting.deleteOperationId },
+        202
+      );
+    }
+    return methodNotAllowed('GET, DELETE');
+  }
+
+  if (request.method !== 'POST') {
+    return methodNotAllowed('POST');
+  }
+  if (action !== 'retry') {
+    throw new HttpError(404, 'Session action not found');
+  }
+  await resolveSessionAgent(env, record.id).retrySession();
+  return json(await getSessionView(env, await requireSession(env, record.id)), 202);
+}
+
+async function createSession(request: Request, env: Env): Promise<Response> {
+  const input = await readCreateSessionInput(request);
+  const repo = findRepo(input.repoKey);
+  if (!repo) {
+    throw new HttpError(400, 'Unknown repository');
+  }
+
+  const record = await getHub(env).createSession({
+    repoKey: input.repoKey,
+    model: input.model,
+    title: deriveSessionTitle(input.prompt)
+  });
+  try {
+    await resolveSessionAgent(env, record.id).startSession({
+      sessionId: record.id,
+      instanceId: record.instanceId,
+      imageKey: CURRENT_IMAGE_KEY,
+      repoKey: record.repoKey,
+      directory: repoWorkspaceDirectory(repo),
+      model: record.model,
+      title: record.title,
+      prompt: input.prompt
+    });
+  } catch (error) {
+    // The session exists, so surface the failure on the record instead of
+    // leaving an orphaned instance behind an error response.
+    const message = error instanceof Error ? error.message : String(error);
+    await getHub(env)
+      .updateSession(record.id, { phase: 'failed', lastError: message })
+      .catch(() => undefined);
+    return json(
+      await getSessionView(env, (await getHub(env).getSession(record.id)) ?? record),
+      202
+    );
+  }
+  return json(
+    await getSessionView(env, (await getHub(env).getSession(record.id)) ?? record),
+    202
+  );
+}
+
+interface CreateSessionInput {
+  repoKey: string;
+  model: string;
+  prompt: string;
+}
+
+async function readCreateSessionInput(
+  request: Request
+): Promise<CreateSessionInput> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object');
+  }
+
+  const { repoKey, model, prompt } = value as {
+    repoKey?: unknown;
+    model?: unknown;
+    prompt?: unknown;
+  };
+  if (!isRepoKey(repoKey)) {
+    throw new HttpError(400, 'Unknown repository');
+  }
+  const modelRef = model === undefined ? DEFAULT_MODEL_REF : model;
+  if (!isModelRef(modelRef)) {
+    throw new HttpError(400, 'Unknown model');
+  }
+  const text = normalizeSessionPrompt(prompt);
+  if (!text) {
+    throw new HttpError(400, 'A prompt of up to 32000 characters is required');
+  }
+  return { repoKey, model: modelRef, prompt: text };
+}
+
+async function requireSession(env: Env, id: string): Promise<SessionRecord> {
+  if (!isSafeInstanceId(id)) {
+    throw new HttpError(400, 'Invalid session id');
+  }
+  const record = await getHub(env).getSession(id);
+  if (!record) {
+    throw new HttpError(404, 'Session not found');
+  }
+  return record;
+}
+
+async function getSessionView(
+  env: Env,
+  record: SessionRecord
+): Promise<SessionView> {
+  const instance = await getHub(env).getInstance(record.instanceId);
+  return {
+    ...record,
+    instance: instance
+      ? await getInstanceView(env, instance)
+      : {
+          id: record.instanceId,
+          name: record.instanceId,
+          imageKey: CURRENT_IMAGE_KEY,
+          repoKey: record.repoKey,
+          lifecycle: 'deleting',
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+          runtime: unknownRuntimeStatus(true)
+        }
+  };
+}
+
+function resolveSessionAgent(env: Env, sessionId: string) {
+  return env.SessionAgent.getByName(sessionId);
+}
+
 async function getInstanceView(
   env: Env,
   record: InstanceRecord
@@ -1783,6 +2078,7 @@ async function getInstanceView(
     const sandbox = resolveSandbox(env, record);
     const lifecycle = resolveLifecycle(env, record.id);
     const lifecycleStatus = await getInitializedLifecycleStatus(
+      env,
       record,
       sandbox,
       lifecycle
@@ -2321,22 +2617,18 @@ function resolveLifecycle(env: Env, instanceId: string) {
 }
 
 async function getInitializedLifecycleStatus(
+  env: Env,
   record: InstanceRecord,
   sandbox: Sandbox,
   lifecycle: ReturnType<typeof resolveLifecycle>
 ): Promise<LifecycleStatus> {
-  let status = await lifecycle.getLifecycleStatus();
-  if (status.phase !== 'uninitialized') {
-    return status;
-  }
-
-  const runtime = await sandbox.getInstanceRuntimeStatus();
-  status = await lifecycle.initializeInstance({
-    instanceId: record.id,
-    imageKey: record.imageKey,
-    containerRunning: runtime.platformRunning
-  });
-  return status;
+  return ensureLifecycleInitialized(
+    env,
+    record.id,
+    record.imageKey,
+    sandbox as unknown as InstanceSandboxRpc,
+    lifecycle
+  );
 }
 
 async function wakeInstance(
@@ -2348,23 +2640,20 @@ async function wakeInstance(
   runtimeEpoch: string;
   status: LifecycleStatus;
 }> {
-  await getInitializedLifecycleStatus(record, sandbox, lifecycle);
-  let result = await lifecycle.wake();
-
-  // A wake racing with the final idle-stop barrier is queued by the
-  // coordinator. Keep this explicit Hub request attached briefly so the user
-  // normally lands in the newly-created runtime epoch in one click.
-  for (let attempt = 0; result.pending && attempt < 60; attempt += 1) {
-    await scheduler.wait(500);
-    result = await lifecycle.wake();
+  try {
+    return await wakeInstanceRuntime(
+      env,
+      record.id,
+      record.imageKey,
+      sandbox as unknown as InstanceSandboxRpc,
+      lifecycle
+    );
+  } catch (error) {
+    if (error instanceof InstanceWakePendingError) {
+      throw new HttpError(503, error.message);
+    }
+    throw error;
   }
-  if (!result.ready || !result.runtimeEpoch) {
-    throw new HttpError(503, 'Instance wake is still pending; retry shortly');
-  }
-  return {
-    runtimeEpoch: result.runtimeEpoch,
-    status: result.status
-  };
 }
 
 async function getMergedRuntimeStatus(
@@ -2601,8 +2890,17 @@ function isWorkspaceLocation(value: string): boolean {
   return value === WORKSPACE_ROOT || value.startsWith(`${WORKSPACE_ROOT}/`);
 }
 
-function repoWorkspaceDirectory(repo: RepoDefinition): string {
-  return `${WORKSPACE_ROOT}/${repo.repoKey}`;
+/** Summarize an OpenCode SDK result whose body is an error or unexpected. */
+function describeSdkFailure(result: {
+  error?: unknown;
+  response?: { status: number };
+}): string {
+  const status = result.response?.status;
+  const detail =
+    result.error === undefined
+      ? 'no response body'
+      : truncateOutput(JSON.stringify(result.error));
+  return status === undefined ? detail : `HTTP ${status}: ${detail}`;
 }
 
 function truncateOutput(value: string, limit = 600): string {
