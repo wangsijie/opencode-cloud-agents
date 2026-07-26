@@ -637,6 +637,124 @@ summary:focus-visible {
   max-width: 100%;
 }
 
+/* ---------- repository picker ---------- */
+
+/*
+  The pill is drawn rather than native because the panel it opens holds a search
+  field and the refresh button; the closed state still has to sit level with the
+  model `<select>` beside it.
+*/
+.repo-select {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.repo-select-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.repo-select-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.repo-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Opens upwards: the composer sits low on the page on a phone, and the panel
+   would otherwise unfold under the keyboard. */
+.repo-select-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: min(320px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.repo-select-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.repo-select-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.repo-select-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.repo-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* One highlight, moved by both the pointer and the arrow keys, so the row Enter
+   would take is never ambiguous. */
+.repo-select-option.active {
+  background: var(--surface-raised);
+}
+
+.repo-select-option-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-select-empty {
+  margin: 0;
+  padding: 8px;
+  font-size: 13px;
+}
+
 /* Legacy composer shape, still used by the publish form. */
 .composer-controls {
   display: flex;

@@ -1,7 +1,7 @@
 /**
  * The icon set, inline.
  *
- * Seven glyphs do not justify a dependency, and inline SVG inherits
+ * A handful of glyphs does not justify a dependency, and inline SVG inherits
  * `currentColor`, so an icon in a button is coloured by the button.
  */
 function Icon({ children, size = 18 }: { children: React.ReactNode; size?: number }) {
@@ -69,6 +69,31 @@ export function RefreshIcon() {
   return (
     <Icon>
       <path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5" />
+    </Icon>
+  );
+}
+
+export function ChevronDownIcon() {
+  return (
+    <Icon size={16}>
+      <path d="m6 9 6 6 6-6" />
+    </Icon>
+  );
+}
+
+export function SearchIcon() {
+  return (
+    <Icon size={16}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </Icon>
+  );
+}
+
+export function CheckIcon() {
+  return (
+    <Icon size={16}>
+      <path d="m5 13 4 4L19 7" />
     </Icon>
   );
 }

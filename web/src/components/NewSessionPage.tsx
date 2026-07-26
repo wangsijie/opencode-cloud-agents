@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { createSession, type Catalog } from '../api';
 import { navigate, sessionPath } from '../router';
-import { ArrowUpIcon, MenuIcon, RefreshIcon, SparkIcon } from './icons';
+import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
+import { RepoSelect } from './RepoSelect';
 
 /**
  * Where a session starts: a repository, a model and a prompt.
@@ -32,7 +33,6 @@ export function NewSessionPage({
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
 
   const repos = catalog?.repos;
@@ -148,23 +148,14 @@ export function NewSessionPage({
                 }}
               />
               <div className="composer-row">
-                <select
-                  className="pill-select"
-                  aria-label="Repository"
+                <RepoSelect
+                  repos={catalog?.repos}
                   value={repoKey}
-                  disabled={busy || loading}
-                  onChange={(event) => setRepoKey(event.target.value)}
-                >
-                  {loading ? (
-                    <option value="">Loading repositories…</option>
-                  ) : (
-                    catalog.repos.map((repo) => (
-                      <option key={repo.repoKey} value={repo.repoKey}>
-                        {repo.displayName}
-                      </option>
-                    ))
-                  )}
-                </select>
+                  loading={loading}
+                  disabled={busy}
+                  onChange={setRepoKey}
+                  onRefresh={onRefreshRepos}
+                />
                 <select
                   className="pill-select"
                   aria-label="Model"
@@ -182,31 +173,6 @@ export function NewSessionPage({
                     ))
                   )}
                 </select>
-                {/*
-                  The stored list is only re-read from GitHub when the page
-                  finds it stale, so a repository created a minute ago needs a
-                  way to ask now.
-                */}
-                <button
-                  className="icon-button"
-                  type="button"
-                  disabled={busy || loading || refreshing}
-                  aria-label="Refresh the repository list"
-                  title="Re-read the repository list from GitHub"
-                  onClick={async () => {
-                    setRefreshing(true);
-                    setError(undefined);
-                    try {
-                      await onRefreshRepos();
-                    } catch (cause) {
-                      setError(cause instanceof Error ? cause.message : String(cause));
-                    } finally {
-                      setRefreshing(false);
-                    }
-                  }}
-                >
-                  <RefreshIcon />
-                </button>
                 <span className="spacer" />
                 <button
                   className="send-button"
