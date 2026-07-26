@@ -336,9 +336,7 @@ mirror, so the list shows them without touching a container; OpenCode's own
 title for a conversation replaces the first line of the opening prompt once it
 has one, unless the session has been renamed by hand; and archiving takes a
 session out of the default list while keeping its container, history and mirror
-— sending it a message brings it straight back. The browser's own notification
-fires when an agent stops working, which needs no push service and no
-server-side subscription, and therefore only works while a tab is open.
+— sending it a message brings it straight back.
 
 Reading a session — the list, the transcript, the event stream, the diff, the
 files, the terminal — never starts a container. Only creating a session and

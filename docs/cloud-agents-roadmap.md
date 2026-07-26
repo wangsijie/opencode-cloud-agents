@@ -617,9 +617,9 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
 - ✅ **会话管理**：归档（`PATCH /api/sessions/:id {archived}`，列表默认隐藏、发消息自动取消
   归档、容器与历史全留着，与删除明确区分）、重命名（双击标题，`titleLocked` 之后不再被
   自动标题覆盖）、自动标题（镜像携带 OpenCode 自己起的 title，`displayTitle` 优先用它）、
-  token 用量与成本（从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）、
-  完成时通知（浏览器原生 Notification，不引入 push 服务与服务端订阅，代价是只在标签页
-  开着时有效——这一点在 README 里明说了）。
+  token 用量与成本（从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）。
+  **完成时通知已删除**：浏览器原生 Notification 只在标签页开着时有效，价值太薄，
+  本项目暂不做推送。
 - ✅ **自建 UI 补齐逃生舱能力**：新增 `src/workspace-files.ts`（纯逻辑：相对路径规范化与
   越界拒绝、目录排序、文本/二进制与截断判定）+ Sandbox `listWorkspaceDirectory`/
   `readWorkspaceFile` + `GET /api/sessions/:id/files`（`&read=1` 读单文件，文本上限

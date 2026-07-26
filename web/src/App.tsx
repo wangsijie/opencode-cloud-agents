@@ -11,7 +11,6 @@ import { SessionPage } from './components/SessionPage';
 import { Sidebar } from './components/Sidebar';
 import { SignInPage } from './components/SignInPage';
 import { useRoute } from './router';
-import { useCompletionNotice } from './useCompletionNotice';
 import { useSessions } from './useSessions';
 
 /**
@@ -68,9 +67,6 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const { sessions, error: listError, refresh } = useSessions(
     showArchived ? '1' : undefined
   );
-  // One notice for the whole app: the list polls on every route now, so an open
-  // conversation is covered by the same hook that covers the ones that are not.
-  useCompletionNotice(sessions);
 
   const loadCatalog = useCallback(async (refreshRepos = false) => {
     try {

@@ -7,7 +7,6 @@ import {
 } from '../api';
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { navigate, sessionPath } from '../router';
-import { useNotificationOptIn } from '../useCompletionNotice';
 import { DotsIcon, PlusIcon } from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
@@ -54,7 +53,6 @@ export function Sidebar({
   const [menuFor, setMenuFor] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  const { permission, request } = useNotificationOptIn();
   const newLink = useRef<HTMLAnchorElement>(null);
 
   // The drawer is a temporary surface: opening it should put the keyboard
@@ -174,17 +172,6 @@ export function Sidebar({
         <button className="link-button" onClick={onToggleArchived}>
           {showArchived ? '← Back to active' : 'View archived'}
         </button>
-        {/*
-          Asking for notification permission has to come from a click, so it is
-          a button rather than something the page does on load.
-        */}
-        {permission === 'default' ? (
-          <button className="link-button" onClick={() => void request()}>
-            Notify me when a task finishes
-          </button>
-        ) : permission === 'denied' ? (
-          <span className="muted">Notifications blocked by the browser</span>
-        ) : null}
         <button
           className="link-button"
           onClick={() => void onSignOut().catch(() => undefined)}
