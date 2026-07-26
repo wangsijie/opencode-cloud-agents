@@ -248,7 +248,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 （`LogtoSandbox` 已随 v6 消失），并用 `wrangler containers delete` 清掉残留的
 `opencode-cloud-logtosandbox` 容器应用。
 
-### M3 · 自定义会话页（醒着时的聊天视图） — 约 4–6 天 — 🚧 进行中
+### M3 · 自定义会话页（醒着时的聊天视图） — ✅ 完成（2026-07-26）
 
 拆成 7 步执行，后端先行（S1–S3 每步都能单独用 curl 验完），SPA 脚手架可与之并行：
 
@@ -260,7 +260,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | ✅ 2026-07-26 |
 | S5 | 列表页 + composer 迁入 SPA | ✅ 2026-07-26 |
 | S6 | 会话详情页 + message part 渲染器 | ✅ 2026-07-26 |
-| S7 | 并发 tab 验证、测试/类型、文档回填 | 待做 |
+| S7 | 并发 tab 验证、测试/类型、文档回填 | ✅ 2026-07-26 |
 
 **S1 实际交付（2026-07-26）**：`src/sessions.ts` 加 `deriveSessionStatus`（把 dispatch phase 与
 容器 runtime 两个状态机折成一个徽章：删除 > 派发失败 > runtime 错误 > 未完成的派发 >
@@ -393,6 +393,26 @@ part 渲染器覆盖 text（markdown）/ reasoning（默认折叠）/ tool（单
 没能在一次连续的流式输出里看到它把生成截断——试的时候上游供应商又开始报
 `unknown certificate verification error`。端点本身的截断效果已在 S3 补验里确认
 （数到 1367/5000 + `MessageAbortedError`）。
+
+**S7 验收（2026-07-26）**：
+
+- **两个会话两个 tab 互不串扰**（M3 验收项）：建两个会话，各自被要求以 `[A]`/`[B]` 前缀
+  回复，两个 tab 同时开着、各自挂着 SSE，各发一条消息。结果 tab A 出现 5 次 `[A]`、
+  0 次 `[B]`，tab B 出现 5 次 `[B]`、0 次 `[A]`。
+- **全程在会话页完成多轮对话，不打开 stock UI**（M3 验收项）：达成。列表 → 详情 → 多轮
+  续聊 → 换模型 → 停止/唤醒全部在自建 UI 内完成。
+- `pnpm run typecheck`（Worker + web 两个 tsconfig）、`pnpm test`（32 用例）、
+  `wrangler deploy --dry-run` 均通过。
+
+**S7 发现**：中断按钮原本挂在折叠后的 `status === 'working'` 上，而发消息会让会话重新经过
+`queued → starting`，于是**刚发完消息、agent 正在生成的那几秒里按钮反而消失**——正是最想
+用它的时候。改成看容器 runtime 是否 `busy`。
+
+**M3 遗留（不阻塞验收）**：UI 上「中断」按钮把正在流式输出的生成截断，没能在一次连续观测
+里拍到——前后试了四次，上游模型供应商都在长生成时报
+`unknown certificate verification error`。两半分别验过：端点确实截断（S3 补验，数到
+1367/5000 + `MessageAbortedError`），按钮确实发出 `POST .../abort`（拦 fetch 确认），
+按钮也确实在容器 busy 时渲染。等供应商稳定后补一次连续观测即可。
 
 **S2 发现（两条都很坑）**：
 

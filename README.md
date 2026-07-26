@@ -25,6 +25,11 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
   the same Worker on the same origin. Its composer starts a session from a
   repository, a model and a prompt; below it, the dashboard lists every session
   with one status badge and its last activity.
+- `/sessions/:id` is the conversation view: the transcript is read once and then
+  kept current by that session's event stream, and the composer continues the
+  thread (optionally on a different model) or interrupts a running agent. The
+  stock OpenCode IDE remains one click away for terminals, file browsing and
+  diffs until the self-built UI covers them.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -119,6 +124,12 @@ Session state (`queued` / `starting` / `working` / `failed`) describes dispatch
 only. Container state stays in the instance runtime status, so a `working`
 session may be busy, idle, or already asleep.
 
+Because those are two state machines, the API also returns a single `status` the
+UI renders as one badge: deletion and dispatch failures outrank everything, an
+unfinished dispatch describes the session better than the container it is waking
+does, and once every prompt has been handed over the container is what the badge
+follows.
+
 ## Prerequisites
 
 - Docker is running locally.
@@ -199,6 +210,25 @@ curl -X POST http://localhost:8787/api/sessions \
 # Inspect one session.
 curl http://localhost:8787/api/sessions/<session-id>
 
+# Read the transcript. Never wakes a container: a stopped one reports
+# `{"state":"sleeping","messages":[]}` instead of being started.
+curl http://localhost:8787/api/sessions/<session-id>/messages
+
+# Follow the session live. Also never wakes anything, and the stream is
+# expected to end — an EventSource reconnects, and the state frame it gets
+# back is how the page learns the session woke or went to sleep.
+curl -N http://localhost:8787/api/sessions/<session-id>/events
+
+# Continue the conversation. Requires an already-running container until M5
+# adds waking-on-send; `model` switches models, and `promptId` makes a retried
+# request the same prompt rather than a second one.
+curl -X POST http://localhost:8787/api/sessions/<session-id>/messages \
+  -H 'Content-Type: application/json' \
+  --data '{"prompt":"Now add a test for it"}'
+
+# Interrupt a running agent, leaving the conversation intact.
+curl -X POST http://localhost:8787/api/sessions/<session-id>/abort
+
 # Re-run a failed start sequence.
 curl -X POST http://localhost:8787/api/sessions/<session-id>/retry
 
@@ -206,9 +236,9 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/retry
 curl -X DELETE http://localhost:8787/api/sessions/<session-id>
 ```
 
-While the custom session view is still being built, open a running session's
-full OpenCode IDE from the dashboard; that link uses the instance wake route
-below.
+Reading a session — the list, the transcript, the event stream — never starts a
+container. Only creating a session, sending it a message, and opening the stock
+IDE do, because each is an explicit request for a running container.
 
 ## Instance API
 

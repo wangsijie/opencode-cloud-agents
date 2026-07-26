@@ -59,7 +59,12 @@ export function SessionPage({
   }, [refreshSession]);
 
   const awake = state === 'live';
-  const working = session?.status === 'working';
+  // Keyed to the container, not the folded status. Sending a message puts the
+  // session back through queued/starting while the agent is already generating,
+  // and the badge reports that dispatch — but there is plainly something to
+  // interrupt, so keying the button to the status would hide it exactly when it
+  // is first wanted.
+  const working = session?.instance.runtime.lifecycle === 'busy';
 
   async function send(event: FormEvent) {
     event.preventDefault();
