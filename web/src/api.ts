@@ -91,8 +91,13 @@ export interface ModelOption {
 }
 
 export interface Catalog {
+  /** Ordered by last use, so the first entry is the composer's default. */
   repos: RepoOption[];
   models: ModelOption[];
+  /** When the Hub last read the repository list from GitHub. */
+  reposFetchedAt?: string;
+  /** The stored list is past its TTL: worth one refresh once the page is up. */
+  reposStale?: boolean;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -316,9 +321,10 @@ export const keepSessionAwake = (id: string) =>
 /**
  * Repository and model choices.
  *
- * The repository list is GitHub's, cached by the Hub for ten minutes, so this
- * normally costs nothing. `refresh` skips that cache — for a repository created
- * a minute ago.
+ * The repository list is GitHub's, stored by the Hub, so this normally costs
+ * nothing and never waits on GitHub. `refresh` re-reads GitHub — what the page
+ * does once when the stored list is past its TTL, and what the composer's
+ * button does for a repository created a minute ago.
  */
 export const fetchCatalog = (refresh = false) =>
   call<Catalog>(refresh ? '/api/catalog?refresh=1' : '/api/catalog');

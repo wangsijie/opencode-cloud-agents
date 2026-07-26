@@ -3,7 +3,9 @@ import test from 'node:test'
 
 import {
   normalizeRepoKey,
-  repoDefinitionsFromGithub
+  orderReposByLastUse,
+  repoDefinitionsFromGithub,
+  withReposInUse
 } from '../src/github-catalog.ts'
 
 function repo(overrides = {}) {
@@ -86,4 +88,62 @@ test('a clone URL that is not a git remote is refused', () => {
     repoDefinitionsFromGithub([repo({ ssh_url: 'file:///etc/passwd; rm -rf /' })]),
     []
   )
+})
+
+test('repositories with sessions sort first, newest use first', () => {
+  const catalog = [{ repoKey: 'a' }, { repoKey: 'b' }, { repoKey: 'c' }]
+  const ordered = orderReposByLastUse(
+    catalog,
+    new Map([
+      ['a', '2026-07-01T00:00:00.000Z'],
+      ['c', '2026-07-20T00:00:00.000Z']
+    ])
+  )
+  assert.deepEqual(
+    ordered.map((entry) => entry.repoKey),
+    ['c', 'a', 'b']
+  )
+})
+
+test('repositories nobody has used keep GitHub order', () => {
+  const catalog = [{ repoKey: 'a' }, { repoKey: 'b' }]
+  assert.deepEqual(orderReposByLastUse(catalog, new Map()), catalog)
+})
+
+test('use recorded for a repository that left the catalog is ignored', () => {
+  const ordered = orderReposByLastUse(
+    [{ repoKey: 'a' }, { repoKey: 'b' }],
+    new Map([
+      ['gone', '2026-07-25T00:00:00.000Z'],
+      ['b', '2026-07-24T00:00:00.000Z']
+    ])
+  )
+  assert.deepEqual(
+    ordered.map((entry) => entry.repoKey),
+    ['b', 'a']
+  )
+})
+
+const definition = (repoKey, overrides = {}) => ({
+  repoKey,
+  displayName: `owner/${repoKey}`,
+  cloneUrl: `git@github.com:owner/${repoKey}.git`,
+  defaultBranch: 'main',
+  ...overrides
+})
+
+test('a repository in use that GitHub stopped listing is kept', () => {
+  const listed = [definition('a')]
+  const merged = withReposInUse(listed, [definition('a'), definition('gone')])
+  assert.deepEqual(
+    merged.map((entry) => entry.repoKey),
+    ['a', 'gone']
+  )
+})
+
+test('the listed entry wins over the pinned one, and only once', () => {
+  const listed = [definition('a', { displayName: 'owner/renamed' })]
+  const merged = withReposInUse(listed, [definition('a'), definition('a')])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].displayName, 'owner/renamed')
 })

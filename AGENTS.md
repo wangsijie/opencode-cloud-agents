@@ -18,11 +18,24 @@ When changing an OpenCode provider, model, capability or version:
 ## Repository catalog
 
 GitHub is the only catalog. The Hub lists the account's pushable repositories
-(`src/github-catalog.ts`) and caches them for ten minutes, using the token
-committed in that file — a `GITHUB_TOKEN` secret overrides it. That token only
-ever lists repositories; pushes and pull requests use the image's own `gh` login.
-`src/repos.ts` is no longer a catalog: it is the entry shape, the safety rules,
-and the `/workspace/<repoKey>` path convention.
+(`src/github-catalog.ts`) using the token committed in that file — a
+`GITHUB_TOKEN` secret overrides it. That token only ever lists repositories;
+pushes and pull requests use the image's own `gh` login. `src/repos.ts` is no
+longer a catalog: it is the entry shape, the safety rules, and the
+`/workspace/<repoKey>` path convention.
+
+GitHub's answer is stored in Hub storage for good, beside the session records,
+and every read is served from it without waiting on GitHub. `REPO_CATALOG_TTL_MS`
+is not a lifetime: past that age the Hub reports `stale`, and the SPA asks for
+one `?refresh=1` after it has rendered. Only a first-ever read and an explicit
+refresh block on GitHub. A repository pinned on an existing instance is merged
+back in, so work in a repository GitHub stopped listing can continue.
+
+The list is served in last-used order: the Hub derives, from its own session
+records, when each repository was last prompted in, and sorts those ahead of the
+rest. That is why the composer defaults to the repository the last session ran
+in. It is derived, not stored — do not add a parallel "recently used" list, in
+the browser or beside the catalog.
 
 The catalog is needed only to *start* a session. The chosen entry is copied onto
 the session, instance and Sandbox records, and everything afterwards reads the

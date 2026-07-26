@@ -11,7 +11,9 @@ import {
 import {
   BUNDLED_GITHUB_TOKEN,
   REPO_CATALOG_TTL_MS,
-  fetchGithubRepoCatalog
+  fetchGithubRepoCatalog,
+  orderReposByLastUse,
+  withReposInUse
 } from './github-catalog';
 import type { SessionRecord, SessionStatePatch } from './sessions';
 
@@ -22,9 +24,19 @@ const SESSION_KEY_PREFIX = 'session:';
 const REPO_CATALOG_KEY = 'hub:repo-catalog';
 const DELETE_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000;
 
+/** The stored answer from GitHub, kept until the next successful refresh. */
 interface CachedRepoCatalog {
   fetchedAt: string;
   repos: RepoDefinition[];
+}
+
+/** The catalog as the composer sees it, with the age it needs to act on. */
+export interface RepoCatalogView {
+  repos: RepoDefinition[];
+  /** When GitHub was last read successfully. */
+  fetchedAt: string;
+  /** True once the stored answer is older than the TTL: refresh when idle. */
+  stale: boolean;
 }
 
 class DeleteAttemptTimeoutError extends Error {}
@@ -95,31 +107,50 @@ export class Hub extends DurableObject<Env> {
   /**
    * The repositories a new session may choose from.
    *
-   * GitHub is the only source. Cached in the Hub rather than fetched per
-   * request: the composer asks on every page load and GitHub's answer does not
-   * change between two of them, so this costs two API calls per `TTL` no matter
-   * how many people are looking.
+   * GitHub is the only source, and the last answer it gave is kept in Hub
+   * storage for good — the same durable place the session records live, not a
+   * cache that expires into nothing. A read never waits on GitHub once there is
+   * something stored: the stored list is returned immediately and `stale` says
+   * it is older than the TTL, which the composer turns into one refresh after
+   * the page has rendered. Only the very first read of a fresh deployment, and
+   * an explicit `force`, go to GitHub with somebody waiting.
    *
    * A failed refresh serves the last good answer, because a GitHub outage
    * should not stop somebody starting a session on a repository that has been
-   * there all along. With nothing cached it raises: an empty picker that looks
+   * there all along. With nothing stored it raises: an empty picker that looks
    * like "you have no repositories" would be worse than an error saying the
    * listing failed.
    *
-   * `force` skips the cache — the composer's refresh, for a repository created
-   * a minute ago.
+   * The answer is ordered by what this Hub has actually been used for, so the
+   * composer's default is the repository the last session ran in. That is
+   * derived from the session records rather than stored beside the catalog:
+   * sessions already are the record of what was used and when, and they are the
+   * same on every browser somebody opens the Hub from.
    */
-  async listRepoCatalog(force = false): Promise<RepoDefinition[]> {
+  async listRepoCatalog(force = false): Promise<RepoCatalogView> {
+    const stored = await this.readRepoCatalog(force);
+    const [lastUsed, inUse] = await Promise.all([
+      this.repoLastUse(),
+      this.reposInUse()
+    ]);
+    return {
+      repos: orderReposByLastUse(
+        withReposInUse(stored.repos, inUse),
+        lastUsed
+      ),
+      fetchedAt: stored.fetchedAt,
+      stale: Date.now() - Date.parse(stored.fetchedAt) >= REPO_CATALOG_TTL_MS
+    };
+  }
+
+  /** The stored catalog, in GitHub's own order, refreshed only when asked. */
+  private async readRepoCatalog(force: boolean): Promise<CachedRepoCatalog> {
     await this.initialized;
-    const cached = await this.ctx.storage.get<CachedRepoCatalog>(
+    const stored = await this.ctx.storage.get<CachedRepoCatalog>(
       REPO_CATALOG_KEY
     );
-    if (
-      !force &&
-      cached &&
-      Date.now() - Date.parse(cached.fetchedAt) < REPO_CATALOG_TTL_MS
-    ) {
-      return cached.repos;
+    if (stored && !force) {
+      return stored;
     }
     // The secret is not declared in wrangler.jsonc, because it exists only
     // where somebody has set one; the bundled token is what this deployment
@@ -135,24 +166,69 @@ export class Hub extends DurableObject<Env> {
       if (repos.length === 0) {
         throw new Error('GitHub returned no repositories this token can push to');
       }
-      await this.ctx.storage.put(REPO_CATALOG_KEY, {
+      const refreshed: CachedRepoCatalog = {
         fetchedAt: new Date().toISOString(),
         repos
-      } satisfies CachedRepoCatalog);
-      return repos;
+      };
+      await this.ctx.storage.put(REPO_CATALOG_KEY, refreshed);
+      return refreshed;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (cached) {
+      if (stored) {
         console.warn('Serving a stale repository catalog', message);
-        return cached.repos;
+        return stored;
       }
       throw new Error(`Failed to read the repository catalog: ${message}`);
     }
   }
 
+  /**
+   * The repository entries pinned on existing instances.
+   *
+   * A repository somebody is working in has to stay in the picker even when
+   * GitHub stops listing it — a transfer, a revoked grant, a token swap — since
+   * the alternative is that starting another session in the repository you are
+   * currently living in becomes impossible.
+   */
+  private async reposInUse(): Promise<RepoDefinition[]> {
+    await this.initialized;
+    const stored = await this.ctx.storage.list<InstanceRecord>({
+      prefix: INSTANCE_KEY_PREFIX
+    });
+    return [...stored.values()]
+      .map((instance) => instance.repo)
+      .filter((repo): repo is RepoDefinition => isSafeRepoDefinition(repo));
+  }
+
+  /**
+   * When each repository was last worked in, by key.
+   *
+   * A session counts as used at its most recent prompt, not its creation: going
+   * back to a month-old session is exactly as good a signal that this is the
+   * repository somebody is living in.
+   */
+  private async repoLastUse(): Promise<Map<string, string>> {
+    await this.initialized;
+    const stored = await this.ctx.storage.list<SessionRecord>({
+      prefix: SESSION_KEY_PREFIX
+    });
+    const lastUsed = new Map<string, string>();
+    for (const session of stored.values()) {
+      const at =
+        session.lastPromptAt && session.lastPromptAt > session.createdAt
+          ? session.lastPromptAt
+          : session.createdAt;
+      const seen = lastUsed.get(session.repoKey);
+      if (!seen || seen < at) {
+        lastUsed.set(session.repoKey, at);
+      }
+    }
+    return lastUsed;
+  }
+
   /** Resolve a repository key against the catalog a session may be created from. */
   async findCatalogRepo(repoKey: string): Promise<RepoDefinition | undefined> {
-    return (await this.listRepoCatalog()).find(
+    return (await this.listRepoCatalog()).repos.find(
       (repo) => repo.repoKey === repoKey
     );
   }

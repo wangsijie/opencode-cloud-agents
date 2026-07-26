@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchCatalog, type Catalog } from './api';
 import { Composer } from './components/Composer';
 import { SessionCard } from './components/SessionCard';
@@ -10,14 +10,14 @@ import { useSessions } from './useSessions';
 /**
  * The Hub home page: what is running, and how to start something new.
  *
- * The catalog is fetched once — repositories and models come from static
- * configuration — while the session list polls, because its state changes
- * underneath the page as containers wake, work and sleep.
+ * The catalog is fetched once, and the session list polls, because its state
+ * changes underneath the page as containers wake, work and sleep.
  */
 export function App() {
   const route = useRoute();
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogError, setCatalogError] = useState<string>();
+  const refreshedStale = useRef(false);
 
   const loadCatalog = useCallback(async (refresh = false) => {
     try {
@@ -33,6 +33,21 @@ export function App() {
   useEffect(() => {
     void loadCatalog().catch(() => undefined);
   }, [loadCatalog]);
+
+  /*
+    The Hub keeps GitHub's answer for good and hands it over without asking
+    GitHub again, so somebody has to notice it has gone stale — that is the
+    page, once, after it has rendered with the stored list. Failing is fine:
+    the stored list is still what the composer is showing, and the next visit
+    tries again.
+  */
+  useEffect(() => {
+    if (!catalog?.reposStale || refreshedStale.current) {
+      return;
+    }
+    refreshedStale.current = true;
+    void loadCatalog(true).catch(() => undefined);
+  }, [catalog?.reposStale, loadCatalog]);
 
   return route.name === 'session' ? (
     <SessionPage sessionId={route.id} catalog={catalog} />
@@ -98,11 +113,12 @@ function SessionList({
       </div>
 
       {/*
-        The repository list has no local fallback: GitHub is the only source, so
-        a failure here means no session can be started, and saying so plainly
-        beats an empty picker that reads as "you have no repositories".
+        Only a failure that leaves nothing to pick from replaces the composer:
+        with a list in hand — stored by the Hub from an earlier visit — a failed
+        refresh changes nothing about what can be started, and the composer
+        reports the ones the user asked for itself.
       */}
-      {catalogError ? (
+      {catalogError && !catalog ? (
         <section className="card error">
           <h2>Could not load the repository list</h2>
           <p className="muted">{catalogError}</p>
@@ -115,13 +131,13 @@ function SessionList({
             </button>
           </div>
         </section>
-      ) : catalog ? (
+      ) : (
         <Composer
           catalog={catalog}
           onCreated={refresh}
           onRefreshRepos={onRefreshRepos}
         />
-      ) : null}
+      )}
 
       {actionError ? (
         <p className="banner error" role="alert">

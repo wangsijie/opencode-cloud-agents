@@ -75,14 +75,20 @@ export default {
       }
 
       if (url.pathname === '/api/catalog' && request.method === 'GET') {
-        // The repository list is GitHub's answer, cached by the Hub. A failure
-        // with nothing cached raises, and the dashboard renders that rather
-        // than an empty picker that would read as "you have no repositories".
+        // The repository list is GitHub's answer, stored by the Hub. This never
+        // waits on GitHub once something is stored: `reposStale` tells the
+        // composer the list wants a refresh, which it asks for with
+        // `?refresh=1` after the page has rendered. A failure with nothing
+        // stored raises, and the dashboard renders that rather than an empty
+        // picker that would read as "you have no repositories".
+        const catalog = await getHub(env).listRepoCatalog(
+          url.searchParams.get('refresh') === '1'
+        );
         return json({
-          repos: await getHub(env).listRepoCatalog(
-            url.searchParams.get('refresh') === '1'
-          ),
-          models: MODEL_OPTIONS
+          repos: catalog.repos,
+          models: MODEL_OPTIONS,
+          reposFetchedAt: catalog.fetchedAt,
+          reposStale: catalog.stale
         });
       }
 

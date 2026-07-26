@@ -31,7 +31,13 @@ import { isSafeRepoDefinition, type RepoDefinition } from './repos.ts';
 export const BUNDLED_GITHUB_TOKEN =
   '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';
 
-/** How long a fetched catalog is served before GitHub is asked again. */
+/**
+ * How old a stored catalog may be before it is worth re-reading GitHub.
+ *
+ * Not a lifetime: the stored answer is kept for good and always served without
+ * waiting. Past this age the Hub marks it stale, and the page asks for one
+ * refresh after it has rendered.
+ */
 export const REPO_CATALOG_TTL_MS = 10 * 60 * 1000;
 
 const GITHUB_API = 'https://api.github.com';
@@ -103,6 +109,52 @@ export function repoDefinitionsFromGithub(
     repos.push(repo);
   }
   return repos;
+}
+
+/**
+ * The catalog plus any repository already in use that GitHub no longer lists.
+ *
+ * The listing can lose a repository for reasons that have nothing to do with
+ * whether work is happening in it — a transfer, a revoked grant, a swapped
+ * token — and dropping it from the picker would mean the repository somebody is
+ * living in is the one repository they cannot start a session in. The pinned
+ * entry on the instance is used, since it still has the clone URL.
+ */
+export function withReposInUse(
+  repos: readonly RepoDefinition[],
+  inUse: readonly RepoDefinition[]
+): RepoDefinition[] {
+  const listed = new Set(repos.map((repo) => repo.repoKey));
+  const extra: RepoDefinition[] = [];
+  for (const repo of inUse) {
+    if (!listed.has(repo.repoKey)) {
+      listed.add(repo.repoKey);
+      extra.push(repo);
+    }
+  }
+  return [...repos, ...extra];
+}
+
+/**
+ * Repositories somebody has already worked in first, most recent first.
+ *
+ * People come back to the same handful of repositories, while GitHub sorts by
+ * last push — including pushes nobody here made — so without this the picker
+ * defaults to a repository the account merely owns and every new session needs
+ * a change. `lastUsedAt` maps a repository key to an ISO timestamp; keys with
+ * no entry keep GitHub's order behind the used ones.
+ */
+export function orderReposByLastUse<T extends { repoKey: string }>(
+  repos: readonly T[],
+  lastUsedAt: ReadonlyMap<string, string>
+): T[] {
+  const used = repos.filter((repo) => lastUsedAt.has(repo.repoKey));
+  used.sort((left, right) =>
+    (lastUsedAt.get(right.repoKey) ?? '').localeCompare(
+      lastUsedAt.get(left.repoKey) ?? ''
+    )
+  );
+  return [...used, ...repos.filter((repo) => !lastUsedAt.has(repo.repoKey))];
 }
 
 /** Lowercase, collapse anything unsafe, and trim to what a path may hold. */
