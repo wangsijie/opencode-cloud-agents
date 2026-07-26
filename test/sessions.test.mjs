@@ -11,6 +11,8 @@ import {
 import {
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
+  deriveLastActivityAt,
+  deriveSessionStatus,
   deriveSessionTitle,
   isSessionPhase,
   normalizeSessionPrompt
@@ -75,6 +77,58 @@ test('session phases are a closed set', () => {
   }
   assert.equal(isSessionPhase('running'), false)
   assert.equal(isSessionPhase(undefined), false)
+})
+
+const runtime = (lifecycle, deleting = false) => ({
+  container: 'unknown',
+  deleting,
+  lifecycle,
+  platformRunning: lifecycle !== 'sleeping',
+  persistence: { hasBackup: false, trackedBackupCount: 0 }
+})
+
+test('session badges follow the runtime once dispatch has handed everything over', () => {
+  assert.equal(deriveSessionStatus('working', runtime('busy')), 'working')
+  assert.equal(deriveSessionStatus('working', runtime('idle')), 'idle')
+  assert.equal(deriveSessionStatus('working', runtime('sleeping')), 'sleeping')
+  assert.equal(deriveSessionStatus('working', runtime('waking')), 'starting')
+  // Every step on the way down reads as sleeping; the UI hides the detail.
+  for (const lifecycle of ['quiescing', 'checkpointing', 'stopping']) {
+    assert.equal(deriveSessionStatus('working', runtime(lifecycle)), 'sleeping')
+  }
+})
+
+test('unfinished dispatch outranks the container it is waking', () => {
+  assert.equal(deriveSessionStatus('queued', runtime('sleeping')), 'queued')
+  assert.equal(deriveSessionStatus('starting', runtime('waking')), 'starting')
+  // A container that reached busy while dispatch is still starting is still
+  // starting: the opening prompt has not been handed over yet.
+  assert.equal(deriveSessionStatus('starting', runtime('busy')), 'starting')
+})
+
+test('failures and deletion outrank every other badge', () => {
+  assert.equal(deriveSessionStatus('failed', runtime('idle')), 'failed')
+  assert.equal(deriveSessionStatus('failed', runtime('sleeping')), 'failed')
+  assert.equal(deriveSessionStatus('working', runtime('error')), 'error')
+  assert.equal(deriveSessionStatus('failed', runtime('busy', true)), 'deleting')
+  assert.equal(deriveSessionStatus('working', runtime('idle', true)), 'deleting')
+})
+
+test('last activity is the newest timestamp on the record', () => {
+  const record = {
+    createdAt: '2026-07-26T10:00:00.000Z',
+    updatedAt: '2026-07-26T10:05:00.000Z'
+  }
+  assert.equal(deriveLastActivityAt(record), '2026-07-26T10:05:00.000Z')
+  assert.equal(
+    deriveLastActivityAt({ ...record, lastPromptAt: '2026-07-26T10:09:00.000Z' }),
+    '2026-07-26T10:09:00.000Z'
+  )
+  // A record that has never moved falls back to its creation time.
+  assert.equal(
+    deriveLastActivityAt({ createdAt: record.createdAt, updatedAt: record.createdAt }),
+    record.createdAt
+  )
 })
 
 test('session working directories are the catalog checkout paths', () => {

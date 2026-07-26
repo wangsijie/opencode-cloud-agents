@@ -27,6 +27,7 @@ import {
   InstanceWakePendingError,
   wakeInstanceRuntime,
   type CreateOpencodeSessionInput,
+  type ListOpencodeSessionMessagesInput,
   type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
@@ -49,9 +50,13 @@ import {
 } from './opencode-config';
 import { SessionAgent } from './session-agent';
 import {
+  deriveLastActivityAt,
+  deriveSessionStatus,
   deriveSessionTitle,
   normalizeSessionPrompt,
+  type SessionMessage,
   type SessionRecord,
+  type SessionTranscript,
   type SessionView
 } from './sessions';
 import {
@@ -815,6 +820,40 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to dispatch OpenCode prompt: ${describeSdkFailure(result)}`
         );
       }
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Read one session's full message history from the running container.
+   *
+   * This is a passive read: it takes no work lease and does not touch the idle
+   * deadline, so a session page left open never keeps a container alive. It
+   * also never starts a stopped container — callers must resolve the running
+   * runtime epoch first and treat its absence as "sleeping".
+   */
+  async listOpencodeSessionMessages(
+    runtimeEpoch: string,
+    input: ListOpencodeSessionMessagesInput
+  ): Promise<SessionMessage[]> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Reading OpenCode session messages'
+      );
+      const result = await client.session.messages({
+        sessionID: input.opencodeSessionId,
+        directory: input.directory
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to read OpenCode session messages: ${describeSdkFailure(result)}`
+        );
+      }
+      return result.data ?? [];
     } finally {
       this.finishActiveOperation();
     }
@@ -1841,6 +1880,18 @@ async function handleSessionApi(request: Request, env: Env): Promise<Response> {
     return methodNotAllowed('GET, DELETE');
   }
 
+  if (action === 'messages') {
+    if (request.method !== 'GET') {
+      return methodNotAllowed('GET');
+    }
+    const transcript = await readSessionTranscript(env, record);
+    return json(transcript, 200, {
+      'X-OpenCode-Hub-Transcript-State': transcript.state,
+      'X-OpenCode-Hub-Transcript-Source': transcript.source,
+      'X-OpenCode-Hub-Transcript-At': transcript.observedAt
+    });
+  }
+
   if (request.method !== 'POST') {
     return methodNotAllowed('POST');
   }
@@ -1945,20 +1996,120 @@ async function getSessionView(
   record: SessionRecord
 ): Promise<SessionView> {
   const instance = await getHub(env).getInstance(record.instanceId);
+  const view: InstanceView = instance
+    ? await getInstanceView(env, instance)
+    : {
+        id: record.instanceId,
+        name: record.instanceId,
+        repoKey: record.repoKey,
+        lifecycle: 'deleting',
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        runtime: unknownRuntimeStatus(true)
+      };
   return {
     ...record,
-    instance: instance
-      ? await getInstanceView(env, instance)
-      : {
-          id: record.instanceId,
-          name: record.instanceId,
-          repoKey: record.repoKey,
-          lifecycle: 'deleting',
-          createdAt: record.createdAt,
-          updatedAt: record.updatedAt,
-          runtime: unknownRuntimeStatus(true)
-        }
+    instance: view,
+    status: deriveSessionStatus(record.phase, view.runtime),
+    lastActivityAt: deriveLastActivityAt(record)
   };
+}
+
+/**
+ * Read a session's messages without ever starting a container.
+ *
+ * The session page and its polling are passive paths (see the lifecycle rules
+ * in [lifecycle.ts](lifecycle.ts)): a stopped runtime reports `sleeping` and an
+ * empty transcript rather than waking. Reading a sleeping session's history
+ * lands in M4, when the quiesce pipeline mirrors transcripts to R2.
+ */
+async function readSessionTranscript(
+  env: Env,
+  record: SessionRecord
+): Promise<SessionTranscript> {
+  const observedAt = new Date().toISOString();
+  const base = {
+    sessionId: record.id,
+    ...(record.opencodeSessionId
+      ? { opencodeSessionId: record.opencodeSessionId }
+      : {}),
+    observedAt,
+    messages: [] as SessionMessage[]
+  };
+
+  if (!record.opencodeSessionId) {
+    // Dispatch has not reached `session.create` yet, so there is nothing to
+    // read anywhere — not even a mirror once M4 exists.
+    return { ...base, state: 'pending', source: 'none' };
+  }
+
+  const repo = findRepo(record.repoKey);
+  if (!repo) {
+    return {
+      ...base,
+      state: 'error',
+      source: 'none',
+      error: `Unknown repository ${record.repoKey}`
+    };
+  }
+
+  const instance = await getHub(env).getInstance(record.instanceId);
+  if (!instance || instance.lifecycle !== 'ready') {
+    return { ...base, state: 'sleeping', source: 'none' };
+  }
+
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  if (!runtimeEpoch) {
+    return { ...base, state: 'sleeping', source: 'none' };
+  }
+
+  try {
+    const messages = await resolveSandbox(env, instance).listOpencodeSessionMessages(
+      runtimeEpoch,
+      {
+        opencodeSessionId: record.opencodeSessionId,
+        directory: repoWorkspaceDirectory(repo)
+      }
+    );
+    return { ...base, state: 'live', source: 'container', messages };
+  } catch (error) {
+    // The runtime can stop between the epoch read and the message read. That
+    // race is a sleeping session, not a failure worth showing the user.
+    const message = error instanceof Error ? error.message : String(error);
+    if (await isRuntimeGoneError(env, record.instanceId, runtimeEpoch)) {
+      return { ...base, state: 'sleeping', source: 'none' };
+    }
+    console.warn(`Failed to read session ${record.id} messages`, error);
+    return { ...base, state: 'error', source: 'none', error: message };
+  }
+}
+
+/**
+ * The current runtime generation of an already-running container, or undefined.
+ *
+ * This never wakes anything: it only initializes the coordinator record (which
+ * always starts `sleeping`) and reads its phase.
+ */
+async function resolveRunningRuntimeEpoch(
+  env: Env,
+  instanceId: string
+): Promise<string | undefined> {
+  try {
+    const status = await ensureLifecycleInitialized(env, instanceId);
+    return status.phase.startsWith('running_') ? status.runtimeEpoch : undefined;
+  } catch (error) {
+    console.warn(`Failed to read instance ${instanceId} lifecycle`, error);
+    return undefined;
+  }
+}
+
+/** Whether the runtime generation a failed read targeted is no longer current. */
+async function isRuntimeGoneError(
+  env: Env,
+  instanceId: string,
+  runtimeEpoch: string
+): Promise<boolean> {
+  return (await resolveRunningRuntimeEpoch(env, instanceId)) !== runtimeEpoch;
 }
 
 function resolveSessionAgent(env: Env, sessionId: string) {
@@ -2897,10 +3048,14 @@ function isSafeInstanceId(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
 }
 
-function json(value: unknown, status = 200): Response {
+function json(
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {}
+): Response {
   return Response.json(value, {
     status,
-    headers: { 'Cache-Control': 'no-store' }
+    headers: { 'Cache-Control': 'no-store', ...headers }
   });
 }
 

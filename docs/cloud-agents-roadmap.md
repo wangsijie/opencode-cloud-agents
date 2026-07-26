@@ -248,9 +248,39 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 （`LogtoSandbox` 已随 v6 消失），并用 `wrangler containers delete` 清掉残留的
 `opencode-cloud-logtosandbox` 容器应用。
 
-### M3 · 自定义会话页（醒着时的聊天视图） — 约 4–6 天
+### M3 · 自定义会话页（醒着时的聊天视图） — 约 4–6 天 — 🚧 进行中
 
-范围：
+拆成 7 步执行，后端先行（S1–S3 每步都能单独用 curl 验完），SPA 脚手架可与之并行：
+
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| S1 | `GET /api/sessions/:id/messages` 被动只读 + 会话徽章派生 | ✅ 2026-07-26 |
+| S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | 待做 |
+| S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 待做 |
+| S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | 待做 |
+| S5 | 列表页 + composer 迁入 SPA | 待做 |
+| S6 | 会话详情页 + message part 渲染器 | 待做 |
+| S7 | 并发 tab 验证、测试/类型、文档回填 | 待做 |
+
+**S1 实际交付（2026-07-26）**：`src/sessions.ts` 加 `deriveSessionStatus`（把 dispatch phase 与
+容器 runtime 两个状态机折成一个徽章：删除 > 派发失败 > runtime 错误 > 未完成的派发 >
+runtime 实况）、`deriveLastActivityAt` 与 `SessionMessage`/`SessionTranscript` 类型；
+`Sandbox.listOpencodeSessionMessages()` 经既有 epoch 门控 client 读消息，**不取 work lease
+也不碰 idle deadline**；`resolveRunningRuntimeEpoch()` 只读生命周期（`ensureLifecycleInitialized`
+建档一律从 `sleeping` 起，永不启容器），phase 非 `running_*` 即视为休眠；`SessionView` 补
+`status` / `lastActivityAt`。transcript 四态 `pending`（OpenCode 会话还没建）/ `sleeping` /
+`live` / `error`，响应头带 `X-OpenCode-Hub-Transcript-{State,Source,At}`；`source` 预留
+`mirror` 给 M4，届时只需在 `sleeping` 分支前插入镜像读取。
+
+本地实测（wrangler dev + 真实容器）：未建会话读到 `pending`；跑起来读到 `live` 与真实
+消息（agent 读完 logto checkout 后的回答）；idle 后连读 4 次 `idleDeadlineAt` 纹丝不动；
+force-stop 后连读 3 次全是 `sleeping` 且容器保持 `stopped` / `platformRunning: false`。
+
+**S1 发现（影响 S6）**：实际 part 类型比下面列的多，出现了 `step-start` / `step-finish`，
+渲染器应直接跳过而不是当未知类型显示占位；每个 part 自带稳定 `id`（`prt_…`），SSE 增量
+与全量拉取的合流可直接按它做 map，不必自造 key。
+
+原范围：
 
 - 搭 `web/` SPA 脚手架（Vite + React + TS，见 D6），构建产物接入 Wrangler 静态资源托管，
   取代 `hub-ui.ts` 的模板字符串页面；M2 的 composer 一并迁入（现有 composer 与会话卡片
