@@ -52,7 +52,6 @@ export function PillSelect({
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const selected = options?.find((option) => option.value === value);
@@ -85,7 +84,6 @@ export function PillSelect({
     if (!open) {
       return;
     }
-    searchRef.current?.focus();
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false);
@@ -156,7 +154,6 @@ export function PillSelect({
                 <>
                   <SearchIcon />
                   <input
-                    ref={searchRef}
                     type="text"
                     value={query}
                     placeholder={searchPlaceholder}
