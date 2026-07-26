@@ -2,23 +2,18 @@
 
 ## Repository role
 
-This repository is not only the OpenCode Cloud deployment. It is also the source of truth for OpenCode configuration across all managed machines and Sandbox runtimes.
+This repository builds and deploys OpenCode Cloud, and owns the OpenCode configuration its Sandbox runtime uses.
 
-- `src/opencode-config.ts` is the canonical provider/model configuration, including capabilities, limits, costs and variants.
-- `Dockerfile` is the canonical OpenCode version for Sandbox images.
-- `docs/opencode-fleet.md` is the fleet inventory and synchronization contract.
-- `docs/macmini-opencode.md` is the Mac Mini OpenCode Web operations guide.
-- Live machine files such as `~/.config/opencode/opencode.jsonc` are derived deployment copies, never the canonical source.
+- `src/opencode-config.ts` is the provider/model configuration, including capabilities, limits, costs and variants.
+- `Dockerfile` is the OpenCode version for Sandbox images.
 
 ## Configuration changes
 
 When changing an OpenCode provider, model, capability or version:
 
-1. Make the canonical change in this repository first.
-2. Keep all image-capable models explicitly configured with `modalities.input` containing both `text` and `image`; `attachment: true` alone is insufficient.
-3. Keep Sandbox and machine configurations semantically aligned. Document any intentional platform-specific difference.
-4. When rollout to a live machine is in scope, update its derived config, restart the service, and verify the runtime `/provider` result rather than trusting the file alone.
-5. Update fleet and machine documentation in the same change when ownership, paths, versions or deployment steps change.
+1. Keep all image-capable models explicitly configured with `modalities.input` containing both `text` and `image`; `attachment: true` alone is insufficient.
+2. Remember the Hub's session model picker derives from the same file: removing a model drops it from the composer and breaks any session still pinned to it.
+3. Keep OpenCode and SDK versions aligned unless a documented platform constraint requires otherwise.
 
 ## Local development
 
@@ -54,8 +49,6 @@ pnpm test
 pnpm run typecheck
 ```
 
-## Repository boundaries and secrets
-
-The sibling `v2ray-docker` repository owns FRP, nginx network ingress, proxy routing and VPS topology. Keep only OpenCode application/runtime operations here and link to network configuration there.
+## Secrets
 
 This is a private repository and intentionally contains narrowly scoped provider and deployment credentials. Do not print credentials in command output or send them to external tools. Preserve unrelated working-tree changes.

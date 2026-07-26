@@ -1,18 +1,8 @@
 # opencode-cloud
 
-OpenCode platform source of truth and Cloudflare deployment. The repository
-defines the shared provider/model configuration for all managed OpenCode
-runtimes and runs an OpenCode Hub on Cloudflare Workers, Durable Objects,
-Containers, and R2. One Worker hostname serves a session dashboard and routes
-traffic to any number of independently sleeping OpenCode containers.
-
-## Repository roles
-
-- Build and deploy independently sleeping OpenCode coding sessions on Cloudflare.
-- Maintain the canonical OpenCode provider, model, capability and version configuration for Sandbox and other machines.
-- Document and operate machine deployments such as Mac Mini OpenCode Web.
-
-See [`docs/opencode-fleet.md`](docs/opencode-fleet.md) for the synchronization contract and [`docs/macmini-opencode.md`](docs/macmini-opencode.md) for Mac Mini operations.
+An OpenCode Hub on Cloudflare Workers, Durable Objects, Containers, and R2. One
+Worker hostname serves a session dashboard and routes traffic to any number of
+independently sleeping OpenCode containers.
 
 The container integration follows Cloudflare's
 [`sandbox-sdk/examples/opencode`](https://github.com/cloudflare/sandbox-sdk/tree/main/examples/opencode)
@@ -368,12 +358,10 @@ the artifacts are exposed, and rebuild the image after a credential rotation.
 
 The complete configuration is in `src/opencode-config.ts`. The default and
 small model are both `vwnpc/ag/gemini-3.6-flash-high`. Provider endpoints, credentials, models,
-limits, costs, variants and input modalities are managed in that file. It is
-also the canonical source for equivalent configurations deployed to other
-machines; live machine files are derived copies.
-
-Fleet inventory and synchronization rules are documented in
-[`docs/opencode-fleet.md`](docs/opencode-fleet.md).
+limits, costs, variants and input modalities are managed in that file. The Hub
+also derives its session model picker from it: a model removed here disappears
+from the composer, and any existing session pinned to it fails on its next
+dispatch, so retire a model only after its sessions are finished or repointed.
 
 This private repository intentionally commits provider credentials. Rotate them
 before changing repository visibility or access.

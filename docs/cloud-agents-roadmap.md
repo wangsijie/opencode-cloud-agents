@@ -553,5 +553,5 @@ SPA 侧休眠横幅从「历史读不到」改成「以下是 <时间> 的历史
 
 - 交付前 `pnpm test && pnpm run typecheck`；生命周期相关改动补充 `test/` 下的单测。
 - DO 新类走 wrangler migration 递增编号（下一个是 v5），只加不改。
-- 行为变化同步更新 README 与 [opencode-fleet.md](opencode-fleet.md)（AGENTS.md 的同步契约）。
+- 行为变化同步更新 README 与 AGENTS.md。
 - 每个里程碑合并后在本文档勾掉对应条目并记录偏差，本文档即进度台账。
