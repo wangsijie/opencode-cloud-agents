@@ -17,7 +17,6 @@ import {
   wakeInstance
 } from './instance-access';
 import { ensureLifecycleInitialized } from './instance-runtime';
-import { UI_INSTANCE_PARAM, UI_RUNTIME_PARAM } from './stock-ui';
 
 export async function handleHubApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -73,10 +72,12 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
   const sandbox = resolveSandbox(env, record);
   const lifecycle = resolveLifecycle(env, record.id);
   switch (action) {
+    // Nothing in the UI wakes a container directly any more — sending a message
+    // does, through the session agent. This stays as the operator's manual
+    // start, and now answers with runtime state rather than a URL to enter.
     case 'wake': {
       const wake = await wakeInstance(env, record, lifecycle);
       return json({
-        launchUrl: `/?${UI_INSTANCE_PARAM}=${encodeURIComponent(record.id)}&${UI_RUNTIME_PARAM}=${encodeURIComponent(wake.runtimeEpoch)}`,
         runtime: await getMergedRuntimeStatus(sandbox, wake.status)
       });
     }

@@ -2,39 +2,27 @@
  * OpenCode Hub on Cloudflare Sandbox.
  *
  * This module is the single-domain HTTP router and nothing else: it validates
- * Cloudflare Access, dispatches to the API handlers and the stock-UI proxy, and
+ * Cloudflare Access, dispatches to the API handlers, serves the SPA shell, and
  * re-exports the Durable Object classes Wrangler binds. The container itself
  * lives in [sandbox.ts](sandbox.ts).
+ *
+ * Since M6 there is no public route into a container. The stock OpenCode UI and
+ * its proxies (`/ui/`, `/assets/`, `/gateway/`, `/hub/bootstrap.js`) are gone;
+ * everything a session needs — conversation, diff, files, terminal — is an
+ * `/api/sessions/*` route, and the only thing that reaches a container is a
+ * Durable Object RPC from inside this Worker.
  */
 import { ContainerProxy } from '@cloudflare/sandbox';
 import { validateHubAccess } from './access';
 import { handleHubApi } from './api-instances';
 import { handleSessionApi } from './api-sessions';
-import {
-  acceptsHtml,
-  decodeRouteSegment,
-  HttpError,
-  isSafeRuntimeEpoch,
-  json,
-  methodNotAllowed
-} from './http';
+import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
-import { getHub, requireReadyInstance } from './instance-access';
+import { getHub } from './instance-access';
 import { LifecycleCoordinator } from './lifecycle';
 import { MODEL_OPTIONS } from './opencode-config';
 import { Sandbox } from './sandbox';
 import { SessionAgent } from './session-agent';
-import {
-  isKnownRootUiAsset,
-  proxyGatewayRequest,
-  proxyGlobalUiAsset,
-  proxyScopedUiAsset,
-  runtimeEntryRequiredResponse,
-  serveOpencodeUi,
-  serveUiBootstrap,
-  UI_INSTANCE_PARAM,
-  UI_RUNTIME_PARAM
-} from './stock-ui';
 
 export { ContainerProxy, Hub, LifecycleCoordinator, Sandbox, SessionAgent };
 
@@ -96,53 +84,6 @@ export default {
           ),
           models: MODEL_OPTIONS
         });
-      }
-
-      if (url.pathname === '/hub/bootstrap.js') {
-        return serveUiBootstrap(url);
-      }
-
-      if (url.pathname.startsWith('/gateway/')) {
-        return await proxyGatewayRequest(request, env);
-      }
-
-      if (url.pathname.startsWith('/ui/')) {
-        return await proxyScopedUiAsset(request, env);
-      }
-
-      if (url.pathname === '/assets' || url.pathname.startsWith('/assets/')) {
-        return await proxyGlobalUiAsset(request, env);
-      }
-
-      const knownRootAsset = isKnownRootUiAsset(url.pathname);
-      if (knownRootAsset) {
-        return await proxyGlobalUiAsset(request, env);
-      }
-
-      const openMatch = /^\/instances\/([^/]+)\/?$/.exec(url.pathname);
-      if (openMatch) {
-        if (request.method !== 'GET') {
-          return methodNotAllowed('GET');
-        }
-        await requireReadyInstance(
-          env,
-          decodeRouteSegment(openMatch[1])
-        );
-        return Response.redirect(new URL('/', url).toString(), 302);
-      }
-
-      const uiInstanceId = url.searchParams.get(UI_INSTANCE_PARAM);
-      const uiRuntimeEpoch = url.searchParams.get(UI_RUNTIME_PARAM);
-      if (uiInstanceId && request.method === 'GET' && acceptsHtml(request)) {
-        if (!uiRuntimeEpoch || !isSafeRuntimeEpoch(uiRuntimeEpoch)) {
-          return runtimeEntryRequiredResponse();
-        }
-        return await serveOpencodeUi(
-          request,
-          env,
-          uiInstanceId,
-          uiRuntimeEpoch
-        );
       }
 
       if (url.pathname.startsWith(`/${SPA_ASSET_DIR}/`)) {

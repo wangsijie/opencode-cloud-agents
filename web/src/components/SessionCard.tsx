@@ -4,7 +4,6 @@ import {
   patchSession,
   retrySession,
   stopInstance,
-  wakeInstance,
   type SessionView
 } from '../api';
 import { formatIdleShutdown, formatRelative, formatUsage } from '../format';
@@ -40,20 +39,6 @@ export function SessionCard({
     } finally {
       setBusy(undefined);
     }
-  }
-
-  /**
-   * Opening the stock IDE is the one place the UI asks for a wake on purpose,
-   * so it navigates only once the container reports where to enter.
-   */
-  async function openIde() {
-    await run('ide', async () => {
-      const { launchUrl } = await wakeInstance(session.instance.id);
-      if (!launchUrl) {
-        throw new Error('唤醒成功，但服务器未返回访问地址');
-      }
-      location.assign(launchUrl);
-    });
   }
 
   return (
@@ -129,12 +114,17 @@ export function SessionCard({
       {session.lastError ? <p className="session-error">{session.lastError}</p> : null}
 
       <div className="actions">
+        {/*
+          The conversation is the session now — there is no second place to
+          open. Waking is not this button's job either: the session page sends
+          a message to a sleeping container and shows the wake as progress.
+        */}
         <button
           className="button primary"
-          disabled={!ready || Boolean(busy)}
-          onClick={openIde}
+          disabled={Boolean(busy)}
+          onClick={() => navigate(sessionPath(session.id))}
         >
-          {busy === 'ide' ? '正在进入…' : '打开完整 IDE ↗'}
+          进入会话
         </button>
         {session.phase === 'failed' ? (
           <button

@@ -1,4 +1,9 @@
-import type { SessionStatus, SessionUsage, SessionView } from './api';
+import type {
+  SessionStatus,
+  SessionUsage,
+  SessionView,
+  WakeTimings
+} from './api';
 
 const TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
@@ -35,6 +40,23 @@ export function formatRelative(value: string | undefined): string {
   return formatTime(value);
 }
 
+export function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Seconds with one decimal, for durations a person is waiting through. */
+export function formatDuration(ms: number): string {
+  return ms >= 60_000
+    ? `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`
+    : `${(ms / 1000).toFixed(1)} 秒`;
+}
+
 function formatTokens(value: number): string {
   return value >= 1_000_000
     ? `${(value / 1_000_000).toFixed(1)}M`
@@ -57,6 +79,26 @@ export function formatUsage(usage: SessionUsage): string {
   const cost =
     usage.cost >= 0.01 ? `$${usage.cost.toFixed(2)}` : `$${usage.cost.toFixed(4)}`;
   return `↑${formatTokens(input)} ↓${formatTokens(output)} · ${cost}`;
+}
+
+/**
+ * The wake's stage breakdown, for the tooltip behind its total.
+ *
+ * Which stage dominates is the only actionable part of a cold-start number, and
+ * it is developer detail rather than something the line itself should carry.
+ */
+export function describeWakeStages(wake: WakeTimings): string {
+  const stages: string[] = [];
+  if (wake.restoreMs !== undefined) {
+    stages.push(`容器启动 + 快照恢复 ${formatDuration(wake.restoreMs)}`);
+  }
+  if (wake.repoMs !== undefined) {
+    stages.push(`仓库置备 ${formatDuration(wake.repoMs)}`);
+  }
+  if (wake.serverMs !== undefined) {
+    stages.push(`OpenCode 启动 ${formatDuration(wake.serverMs)}`);
+  }
+  return `${formatTime(wake.at)} · ${stages.join(' · ')}`;
 }
 
 export const STATUS_LABELS: Record<SessionStatus, string> = {

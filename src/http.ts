@@ -67,6 +67,35 @@ export function isWebSocketUpgrade(request: Request): boolean {
   );
 }
 
+/**
+ * Strip the Hub's own front-door credentials from a request being forwarded
+ * into a container. Cloudflare Access identity ends at the Worker: nothing
+ * inside the sandbox needs it, and forwarding it would hand a session's shell a
+ * token for the Hub itself.
+ */
+export function stripAccessCredentials(headers: Headers): Headers {
+  for (const name of [...headers.keys()]) {
+    const lower = name.toLowerCase();
+    if (lower.startsWith('cf-access-') || lower === 'cf-authorization') {
+      headers.delete(name);
+    }
+  }
+  const cookie = headers.get('cookie');
+  if (cookie) {
+    const sanitized = cookie
+      .split(';')
+      .map((part) => part.trim())
+      .filter((part) => !part.toLowerCase().startsWith('cf_authorization='))
+      .join('; ');
+    if (sanitized) {
+      headers.set('cookie', sanitized);
+    } else {
+      headers.delete('cookie');
+    }
+  }
+  return headers;
+}
+
 export function truncateOutput(value: string, limit = 600): string {
   const collapsed = value.trim();
   return collapsed.length > limit

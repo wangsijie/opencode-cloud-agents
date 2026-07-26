@@ -10,7 +10,6 @@ import {
   normalizeKnownOpenCodeLocations,
   normalizeOpenCodeLocation,
   openCodeLocationsFromGlobalSessions,
-  openCodeRouteRequiresWorkLease,
   queryOpenCodeActivity,
 } from '../src/opencode-activity.ts'
 
@@ -135,61 +134,6 @@ test('aggregates with active > unknown > idle precedence', () => {
     { state: 'active', activeSessionIds: ['session-1', 'session-2'] },
   )
   assert.equal(aggregateActivityClassifications([]).state, 'unknown')
-})
-
-test('recognizes only OpenCode routes that can start or resume work', () => {
-  const workRoutes = [
-    '/session/s1/message',
-    '/session/s1/prompt_async',
-    '/session/s1/command',
-    '/session/s1/shell',
-    '/session/s1/init',
-    '/session/s1/summarize',
-    '/session/s1/fork',
-    '/session/s1/abort',
-    '/session/s1/revert',
-    '/session/s1/unrevert',
-    '/session/s1/permissions/p1',
-    '/question/q1/reply',
-    '/question/q1/reject',
-    '/permission/p1/reply',
-    '/api/session/s1/prompt',
-    '/api/session/s1/compact',
-    '/api/session/s1/wait',
-    '/api/session/s1/interrupt',
-    '/api/session/s1/revert/stage',
-    '/api/session/s1/revert/clear',
-    '/api/session/s1/revert/commit',
-    '/api/session/s1/permission/p1/reply',
-    '/api/session/s1/question/q1/reply',
-    '/api/session/s1/question/q1/reject',
-    '/gateway/instance-1/123e4567-e89b-42d3-a456-426614174000/session/s1/message?directory=/workspace',
-  ]
-  for (const url of workRoutes) {
-    assert.equal(
-      openCodeRouteRequiresWorkLease({ method: 'POST', url }),
-      true,
-      url,
-    )
-  }
-
-  const passiveRoutes = [
-    '/global/event',
-    '/event',
-    '/session/status',
-    '/api/session/active',
-    '/session/s1/message',
-    '/session',
-    '/log',
-  ]
-  for (const url of passiveRoutes) {
-    const method = url === '/session/s1/message' ? 'GET' : 'POST'
-    assert.equal(
-      openCodeRouteRequiresWorkLease({ method, url }),
-      false,
-      `${method} ${url}`,
-    )
-  }
 })
 
 test('queries all legacy locations and the process-wide v2 source', async () => {

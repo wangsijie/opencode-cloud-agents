@@ -38,8 +38,8 @@ function Reasoning({ text }: { text: string }) {
 /**
  * A tool call, as one line.
  *
- * The full input and output belong in the stock IDE; here the useful signal is
- * which tool ran, on what, and whether it finished.
+ * The full input and output are in the workspace panel's files and terminal;
+ * here the useful signal is which tool ran, on what, and whether it finished.
  */
 function ToolCall({ part }: { part: MessagePart }) {
   const status = part.state?.status;

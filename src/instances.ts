@@ -36,6 +36,29 @@ export interface InstanceRecord {
   deleteOperationId?: string;
 }
 
+/**
+ * How long each stage of the last wake took.
+ *
+ * Kept as three numbers rather than a log because the question this answers is
+ * comparative — which stage dominates, and did a change move it — and because
+ * it has to be cheap enough to carry on every runtime status read.
+ */
+export interface WakeStageTimings {
+  /** Container start plus R2 workspace restore; the two cannot be separated. */
+  restoreMs?: number;
+  /** Repository provisioning: a clone on the first wake, nothing later. */
+  repoMs?: number;
+  /** OpenCode server start, overlapped with the resumed checkout's fetch. */
+  serverMs?: number;
+}
+
+export interface WakeTimings extends WakeStageTimings {
+  totalMs: number;
+  at: string;
+  /** False when the container was already running and only the server restarted. */
+  cold: boolean;
+}
+
 export interface InstanceRuntimeStatus {
   container: 'running' | 'stopping' | 'stopped' | 'healthy' | 'stopped_with_code' | 'unknown';
   containerLastChangedAt?: string;
@@ -61,6 +84,11 @@ export interface InstanceRuntimeStatus {
       message: string;
     };
   };
+  /**
+   * How long the last wake took, per stage. Present once this instance has
+   * woken at least once since wakes started being measured.
+   */
+  lastWake?: WakeTimings;
   /**
    * The last transcript export, present once this instance has run a session.
    * It is what makes a sleeping session readable without waking anything.

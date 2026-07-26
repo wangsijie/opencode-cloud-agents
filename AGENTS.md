@@ -37,6 +37,21 @@ and never onto the repository's default branch. Anything interpolated into a
 container shell command goes through `shellQuote`/`isSafeBranchName` in
 `src/session-changes.ts`; commit messages and pull request bodies are user text.
 
+## No public route into a container
+
+Since M6 the stock OpenCode UI and its proxies (`/ui/`, `/assets/`, `/gateway/`,
+`/hub/bootstrap.js`) are deleted. The browser talks only to `/api/*` and the SPA
+shell; containers are reached exclusively by Durable Object RPC from inside the
+Worker. Keep it that way — do not add a route that forwards browser traffic to a
+container port. Files and terminals are `/api/sessions/:id/files` and
+`/api/sessions/:id/terminal`, and both refuse a sleeping session rather than
+waking one.
+
+The terminal is the exception to "passive traffic never keeps a container
+alive", and deliberately so: a shell is invisible to the OpenCode activity
+probe, so the panel renews a work lease through `POST /api/sessions/:id/keepalive`
+and lets it expire on its own when the tab closes.
+
 ## Local development
 
 `pnpm dev` starts `wrangler dev` with a real container. It hangs after

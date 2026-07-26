@@ -18,8 +18,8 @@ const STATUS_LABELS: Record<string, string> = {
 /**
  * What the agent changed, and the way out of the container.
  *
- * This is the panel that makes a session's output reviewable without opening
- * the stock IDE: the file list and diff come from git in the checkout, and
+ * This is the panel that makes a session's output reviewable without leaving
+ * the conversation: the file list and diff come from git in the checkout, and
  * publishing commits, pushes and (optionally) opens a pull request in one step.
  *
  * It loads on demand rather than with the page. Reading a diff runs commands in
@@ -159,7 +159,9 @@ export function ChangesPanel({
                   <summary>查看 diff</summary>
                   <pre className="diff mono">{changes.diff}</pre>
                   {changes.diffTruncated ? (
-                    <p className="muted">diff 过长，已截断；完整内容请用 IDE 查看。</p>
+                    <p className="muted">
+                      diff 过长，已截断；完整内容可在工作区终端里 git diff 查看。
+                    </p>
                   ) : null}
                 </details>
               ) : null}

@@ -28,10 +28,21 @@ export type RuntimeLifecycle =
   | 'stopping'
   | 'error';
 
+/** Mirrors `WakeTimings` in the Worker's `src/instances.ts`. */
+export interface WakeTimings {
+  restoreMs?: number;
+  repoMs?: number;
+  serverMs?: number;
+  totalMs: number;
+  at: string;
+  cold: boolean;
+}
+
 export interface InstanceRuntime {
   container: string;
   lifecycle: RuntimeLifecycle;
   idleDeadlineAt?: string;
+  lastWake?: WakeTimings;
 }
 
 export interface InstanceView {
@@ -53,6 +64,8 @@ export interface SessionUsage {
 export interface SessionView {
   id: string;
   repoKey: string;
+  /** The checkout inside the container; pinned on the record since M6. */
+  directory?: string;
   model: string;
   /** The record's own title: the first line of the opening prompt. */
   title: string;
@@ -177,6 +190,30 @@ export interface SessionChanges {
   remoteBranch?: string;
 }
 
+/** Mirrors `WorkspaceListing` in the Worker's `src/workspace-files.ts`. */
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory' | 'symlink' | 'other';
+  size: number;
+  modifiedAt?: string;
+}
+
+export interface WorkspaceListing {
+  path: string;
+  parent?: string;
+  entries: WorkspaceEntry[];
+  truncated: boolean;
+}
+
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  content?: string;
+  binary: boolean;
+  truncated: boolean;
+}
+
 export interface PublishResult {
   branch: string;
   commit?: { sha: string; subject: string };
@@ -243,6 +280,40 @@ export const publishChanges = (
   });
 
 /**
+ * Browse the checkout inside a running container.
+ *
+ * Like the diff, these need the container up: there is no mirror of a working
+ * tree, so a sleeping session answers 409 and the panel says to send a message.
+ */
+export const listWorkspaceFiles = (id: string, path = '') =>
+  call<WorkspaceListing>(
+    `/api/sessions/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`
+  );
+
+export const readWorkspaceFile = (id: string, path: string) =>
+  call<WorkspaceFile>(
+    `/api/sessions/${encodeURIComponent(id)}/files?read=1&path=${encodeURIComponent(path)}`
+  );
+
+/** Where the browser attaches a shell to this session's container. */
+export const terminalSocketUrl = (id: string, origin: string) =>
+  `${origin}/api/sessions/${encodeURIComponent(id)}/terminal`;
+
+/**
+ * Renew a work lease so an attached terminal is not stopped for being idle.
+ *
+ * The lifecycle only watches OpenCode's execution state, so a shell running a
+ * build looks like an empty container to it. The lease is renewed on a timer
+ * and never explicitly ended: a closed tab stops renewing, and the container
+ * goes back to its ordinary idle window.
+ */
+export const keepSessionAwake = (id: string) =>
+  call<{ heldUntil: string }>(
+    `/api/sessions/${encodeURIComponent(id)}/keepalive`,
+    { method: 'POST' }
+  );
+
+/**
  * Repository and model choices.
  *
  * The repository list is GitHub's, cached by the Hub for ten minutes, so this
@@ -269,13 +340,3 @@ export const retrySession = (id: string) =>
 export const stopInstance = (id: string) =>
   call<unknown>(`/api/instances/${encodeURIComponent(id)}/stop`, { method: 'POST' });
 
-/**
- * Wake a container and return where the stock UI can be entered.
- *
- * This is the one place the UI deliberately triggers a wake: opening the full
- * IDE is an explicit request for a running container.
- */
-export const wakeInstance = (id: string) =>
-  call<{ launchUrl?: string }>(`/api/instances/${encodeURIComponent(id)}/wake`, {
-    method: 'POST'
-  });

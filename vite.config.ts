@@ -11,7 +11,7 @@ import { defineConfig } from 'vite';
 const WORKER_ORIGIN = 'http://localhost:8787';
 
 /** Paths the Worker owns. Everything else is the SPA. */
-const WORKER_ROUTES = ['/api', '/gateway', '/ui', '/assets', '/hub', '/instances'];
+const WORKER_ROUTES = ['/api'];
 
 export default defineConfig({
   root: 'web',
@@ -19,9 +19,8 @@ export default defineConfig({
   build: {
     outDir: '../web/dist',
     emptyOutDir: true,
-    // Not Vite's default `assets`: that path already belongs to the stock
-    // OpenCode UI's global asset proxy, which stays routed to the container
-    // until this SPA replaces it in M6.
+    // Not Vite's default `assets`: that path belonged to the retired stock UI's
+    // asset proxy, and the prefix is now baked into every deployed asset URL.
     assetsDir: 'hub-assets'
   },
   server: {

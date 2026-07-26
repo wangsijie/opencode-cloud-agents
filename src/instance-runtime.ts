@@ -106,8 +106,8 @@ export async function ensureLifecycleInitialized(
 
 /**
  * The only helper allowed to start a stopped runtime. Callers must represent
- * explicit user intent: opening the stock UI, creating a session, or sending a
- * session message.
+ * explicit user intent: creating a session, sending a session message, or an
+ * operator starting the container by hand.
  */
 export async function wakeInstanceRuntime(
   env: Env,

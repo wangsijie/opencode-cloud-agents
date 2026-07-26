@@ -86,7 +86,7 @@ export const MAX_PULL_REQUEST_BODY_LENGTH = 60_000;
 /**
  * How much diff text is returned. The file list is what the UI navigates by, so
  * a diff long enough to be unreadable is cut rather than paged: the escape hatch
- * for a change that size is the full IDE.
+ * for a change that size is the workspace panel, or a checkout of the branch.
  */
 export const MAX_DIFF_LENGTH = 200_000;
 

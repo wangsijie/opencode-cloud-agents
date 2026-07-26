@@ -24,9 +24,9 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
   own event stream and re-exports a few seconds after each burst, so a container
   that dies without quiescing loses seconds rather than a probe interval. The
   page also shows what the agent changed — branch, changed files, diff — and
-  commits, pushes and opens a pull request from there. The stock OpenCode IDE
-  remains one click away for terminals and file browsing until the self-built UI
-  covers them.
+  commits, pushes and opens a pull request from there. A workspace panel below
+  it browses the checkout and attaches a shell to the container, which is what
+  retired the stock OpenCode IDE.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -40,37 +40,39 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 - Instances are provisioned lazily: creating a session records a stopped logical
   instance immediately, and its container starts on the first explicit wake.
 
-### Why the single-domain router is path based
+### One origin, one API surface
 
-The stock OpenCode SPA cannot be mounted transparently below
-`/instances/<id>`: it uses root-relative assets, root SPA routes, and
-`location.origin` as its default server. The Hub therefore separates UI and
-server routing:
+The Hub is a single Worker hostname and nothing behind it is publicly routable.
+Every browser request is either the SPA shell, its hashed assets, or an
+`/api/*` route; the only thing that reaches a container is a Durable Object RPC
+made inside the Worker.
 
-- `POST /api/instances/<id>/wake` is the only external operation that may
-  start a stopped runtime. It returns a launch URL containing a fresh runtime
-  epoch.
-- `/?_hub=<id>&_runtime=<epoch>` loads that instance's OpenCode UI shell.
-- `/ui/<id>/<epoch>/__hub-v<version>/*` serves a versioned UI asset graph from the
-  selected instance. Versioning the path, rather than only the entry module's
-  query string, keeps lazy ESM chunks and their shared context providers in one
-  browser module graph.
-- `/gateway/<id>/<epoch>/*` is the OpenCode server base URL. The Worker strips the
-  prefix and streams HTTP, SSE, and terminal WebSocket traffic to that
-  instance's port 4096.
+That was not always true. Until M6 the stock OpenCode SPA was served through
+this Worker as an escape hatch for terminals and file browsing, which needed a
+public container gateway (`/gateway/<id>/<epoch>/*`), a versioned asset proxy
+(`/ui/...`, `/assets/...`), a bootstrap script that virtualized `localStorage`,
+and a regex patch of OpenCode's entry bundle. All of it is deleted. The two
+capabilities it existed for are now first-party:
 
-The small bootstrap loaded with the UI selects the path-based gateway as
-OpenCode's default server and keeps the instance marker on SPA history URLs.
-This avoids cookies, so separate tabs do not use a cookie to decide which
-instance receives API traffic.
+- `GET /api/sessions/<id>/files?path=` lists a directory of the checkout, and
+  `&read=1` returns one file's content (text capped at 256 KB, binaries
+  described rather than rendered).
+- `GET /api/sessions/<id>/terminal` upgrades to a WebSocket and proxies the
+  Sandbox SDK's PTY. The browser half is that SDK's own `SandboxAddon` driving
+  xterm.js, so the wire protocol is not reimplemented here.
 
-The Worker and Sandbox both validate the runtime epoch before forwarding. Once
-the coordinator begins shutdown, old tabs receive HTTP 410; reconnecting an
-event stream or keeping the UI open cannot restart the container.
+Both refuse a sleeping session (HTTP 409) rather than waking one, and both
+validate the runtime epoch before any container call — a tab left open across a
+shutdown cannot restart the container.
 
-Wildcard subdomains would be simpler if they become available: the Worker
-could route `<instance>.example.com` directly and stock OpenCode could use that
-origin without UI adaptation. The current design works with one exact hostname.
+An attached terminal renews a short work lease every 45 seconds
+(`POST /api/sessions/<id>/keepalive`). The idle probe only watches OpenCode's
+execution state, so without it a shell running a test suite would look exactly
+like an empty container. Nothing releases the lease explicitly: closing the tab
+stops the renewals and the ordinary ten-minute idle window resumes.
+
+The upside of the retirement is that OpenCode upgrades are no longer coupled to
+a bundle patch, and `/gateway/` no longer exists as a public route.
 
 ## Workspaces and repository provisioning
 
@@ -236,9 +238,11 @@ repository. Stale `cloudflare/proxy-everything` helper containers from crashed
 `wrangler dev` sessions can also wedge startup; remove them with `docker rm -f`
 if the dev server never becomes ready.
 
-The shared Base stage installs OpenCode, `gh`, and Wrangler. OpenCode data,
-state, and cache are kept below `/workspace`, so they are part of each instance
-snapshot alongside any checked-out repositories.
+The shared Base stage installs OpenCode, `gh`, and Wrangler. OpenCode data and
+state are kept below `/workspace`, so they are part of each instance snapshot
+alongside any checked-out repositories; its cache lives there too but is
+excluded from the snapshot, because restoring a cache costs more than rebuilding
+one (see [Cold start](#cold-start)).
 
 ## Session API
 
@@ -302,6 +306,18 @@ curl -X PATCH http://localhost:8787/api/sessions/<session-id> \
 # `?archived=all` shows everything.
 curl 'http://localhost:8787/api/sessions?archived=1'
 
+# Browse the checkout inside a running container. `path` is relative to it and
+# cannot leave it; `&read=1` returns one file (text capped at 256 KB).
+curl 'http://localhost:8787/api/sessions/<session-id>/files?path=src'
+curl 'http://localhost:8787/api/sessions/<session-id>/files?read=1&path=src/index.ts'
+
+# Attach a shell. A WebSocket upgrade; the browser side is the Sandbox SDK's
+# xterm addon, and `POST .../keepalive` is what stops the idle probe from
+# stopping a container that is only busy in the shell.
+curl -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  'http://localhost:8787/api/sessions/<session-id>/terminal?cols=100&rows=30'
+
 # Interrupt a running agent, leaving the conversation intact.
 curl -X POST http://localhost:8787/api/sessions/<session-id>/abort
 
@@ -322,9 +338,10 @@ session out of the default list while keeping its container, history and mirror
 fires when an agent stops working, which needs no push service and no
 server-side subscription, and therefore only works while a tab is open.
 
-Reading a session — the list, the transcript, the event stream — never starts a
-container. Only creating a session, sending it a message, and opening the stock
-IDE do, because each is an explicit request for a running container.
+Reading a session — the list, the transcript, the event stream, the diff, the
+files, the terminal — never starts a container. Only creating a session and
+sending it a message do, because those are the explicit requests for a running
+one; everything else refuses a sleeping session instead of waking it.
 
 ## Instance API
 
@@ -339,7 +356,9 @@ curl http://localhost:8787/api/instances
 # Inspect one instance.
 curl http://localhost:8787/api/instances/<instance-id>
 
-# Explicitly wake it and receive the epoch-bearing UI launch URL.
+# Explicitly start the container. Nothing in the UI calls this any more —
+# sending a session a message is what wakes one — so this is the manual start.
+# It answers with the merged runtime status, including the wake's stage timings.
 curl -X POST http://localhost:8787/api/instances/<instance-id>/wake
 
 # Create a snapshot without stopping.
@@ -365,8 +384,9 @@ runtime.
   `/session/status` responses and the process-wide v2 `/api/session/active`
   response agree that no session is executing. Probe failure is treated as
   unknown and fails safe by keeping the container running.
-- Work-starting gateway calls carry a short durable lease so a fast task that
-  starts and finishes between probes still resets the idle window.
+- Work-starting calls carry a short durable lease so a fast task that starts
+  and finishes between probes still resets the idle window. An attached terminal
+  renews the same kind of lease, because a shell is invisible to the probe.
 - At the deadline, admission closes first; Sandbox waits for admitted request
   handshakes to drain, confirms OpenCode is still idle, checkpoints, and stops.
 - Open browser tabs, SSE streams, WebSockets, and status polling do not count as
@@ -392,6 +412,32 @@ runtime.
   container teardown out of the client request lifetime.
 - If any deletion step fails, the record becomes `delete_failed`; the dashboard
   can retry while the backup ledger is still available.
+
+### Cold start
+
+Waking a sleeping session is the one wait with nothing to show but a spinner, so
+it is measured. Every wake records its stages — container start plus snapshot
+restore, repository provisioning, OpenCode server start — and the totals ride
+out on the instance runtime status (`runtime.lastWake`), which the session list
+already reads. The session page prints the last cold start under the title, with
+the per-stage split in its tooltip. Wakes that only restarted the server on an
+already-running container are marked `cold: false` and not shown, because mixing
+them into the number would flatter it.
+
+Two things were done with that measurement in hand:
+
+- A resumed checkout's `git fetch origin` no longer sits in front of the server
+  start. Nothing the server needs depends on it, so it runs alongside and the
+  wake pays for whichever is slower instead of both.
+- Regenerable caches are excluded from the snapshot (`.opencode-state/cache`).
+  Snapshot size is restore time and restore time is the cold start, so anything
+  in the archive is paid for on every wake forever. Only caches are excluded:
+  re-creating an installed `node_modules` costs the user far more than the
+  seconds a smaller archive saves.
+
+Compression was left alone deliberately — the SDK already writes these archives
+with lz4, which is the fastest of its options to decompress, and that is the
+side of the trade that lands in the cold start.
 
 No distributed transaction can cover both R2 and Durable Object storage. The
 ordering above prevents losing backup handles before R2 confirms deletion. An

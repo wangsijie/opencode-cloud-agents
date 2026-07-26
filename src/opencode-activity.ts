@@ -62,11 +62,6 @@ export interface QueryOpenCodeActivityOptions {
   observedAt?: number;
 }
 
-export interface OpenCodeRouteLike {
-  method: string;
-  url: string | URL;
-}
-
 const URL_PARSE_BASE = 'http://opencode.invalid';
 
 /**
@@ -137,10 +132,7 @@ export function openCodeLocationsFromGlobalSessions(
   );
 }
 
-/**
- * Read OpenCode's location query parameters from either a rewritten upstream
- * URL or the original `/gateway/<instance>/<runtime-epoch>/...` URL.
- */
+/** Read OpenCode's location query parameters from a container request URL. */
 export function extractOpenCodeLocation(
   input: string | URL | Request,
   defaultDirectory: string
@@ -314,40 +306,6 @@ export async function queryOpenCodeActivity(
   };
 }
 
-/**
- * True only for OpenCode requests that may start or resume agent work. Passive
- * browser traffic, SSE, status probes, abort/interrupt, and wait requests do
- * not need a work lease.
- */
-export function openCodeRouteRequiresWorkLease(
-  request: OpenCodeRouteLike
-): boolean {
-  if (request.method.toUpperCase() !== 'POST') {
-    return false;
-  }
-  const url =
-    request.url instanceof URL
-      ? request.url
-      : new URL(request.url, URL_PARSE_BASE);
-  const path = stripGatewayPrefix(url.pathname).replace(/\/+$/, '') || '/';
-
-  return (
-    /^\/session\/[^/]+\/(?:message|prompt_async|command|shell|init|summarize)$/.test(
-      path
-    ) ||
-    /^\/session\/[^/]+\/(?:fork|abort|revert|unrevert)$/.test(path) ||
-    /^\/session\/[^/]+\/permissions\/[^/]+$/.test(path) ||
-    /^\/question\/[^/]+\/(?:reply|reject)$/.test(path) ||
-    /^\/permission\/[^/]+\/reply$/.test(path) ||
-    /^\/api\/session\/[^/]+\/(?:prompt|compact|wait|interrupt)$/.test(path) ||
-    /^\/api\/session\/[^/]+\/revert\/(?:stage|clear|commit)$/.test(path) ||
-    /^\/api\/session\/[^/]+\/permission\/[^/]+\/reply$/.test(path) ||
-    /^\/api\/session\/[^/]+\/question\/[^/]+\/(?:reply|reject)$/.test(
-      path
-    )
-  );
-}
-
 async function queryJsonActivity(
   fetcher: OpenCodeActivityFetcher,
   url: URL,
@@ -392,11 +350,6 @@ function normalizeAbsolutePosixPath(value: string): string | undefined {
     }
   }
   return `/${segments.join('/')}`;
-}
-
-function stripGatewayPrefix(pathname: string): string {
-  const match = /^\/gateway\/[^/]+\/[^/]+(\/.*)?$/.exec(pathname);
-  return match ? match[1] || '/' : pathname;
 }
 
 function idleActivity(): ActivityClassification {

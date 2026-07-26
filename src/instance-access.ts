@@ -27,11 +27,24 @@ import {
 import type { LifecycleStatus } from './lifecycle';
 import type { Sandbox } from './sandbox';
 
-export function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
+/**
+ * `terminal()` exists on the stub `getSandbox()` returns, not on the Durable
+ * Object class: it is a client-side proxy that upgrades a WebSocket onto the
+ * container's PTY endpoint. Declaring it here is what lets the session API call
+ * it without casting at the call site.
+ */
+type SandboxStub = Sandbox & {
+  terminal(
+    request: Request,
+    options?: { cols?: number; rows?: number; shell?: string }
+  ): Promise<Response>;
+};
+
+export function resolveSandbox(env: Env, instance: InstanceRecord): SandboxStub {
   return getSandbox(env.Sandbox, instance.id, {
     normalizeId: true,
     keepAlive: true
-  });
+  }) as SandboxStub;
 }
 
 export function resolveLifecycle(env: Env, instanceId: string) {

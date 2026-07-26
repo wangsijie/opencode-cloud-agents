@@ -757,3 +757,112 @@ select:focus-visible,
   font-size: 14px;
   color: var(--text-dim);
 }
+
+/* ---------- workspace panel ---------- */
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workspace-tabs {
+  display: flex;
+  gap: 12px;
+}
+
+.workspace-tabs .link-button.active {
+  color: var(--accent);
+}
+
+.file-path {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.file-path .refresh {
+  margin-left: auto;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 45vh;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.file-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.file-entry:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.file-icon {
+  flex: 0 0 auto;
+}
+
+.file-size {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.file-view-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+/* Source lines are as wide as they are: the viewer scrolls, the page does not. */
+.file-content {
+  max-height: 45vh;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminal-status {
+  font-size: 12px;
+}
+
+.terminal-host {
+  height: 42vh;
+  min-height: 220px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}

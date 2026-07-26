@@ -19,7 +19,7 @@
 | 工作区持久化 | ✅ `/workspace` 完整快照到 R2，含 OpenCode 会话数据（`XDG_DATA_HOME=/workspace/.opencode-state`），唤醒时自动恢复；备份台账保证可重试清理 |
 | 防陈旧访问 | ✅ runtime epoch 机制，休眠后旧 tab 收 410，被动流量永远无法拉起容器 |
 | 认证 | ✅ Cloudflare Access JWT 校验，单入口 |
-| stock UI 单域名代理 | ✅ `/ui/<id>/<epoch>/...` + `/gateway/<id>/<epoch>/...` + bootstrap 补丁 |
+| stock UI 单域名代理 | ✅ `/ui/<id>/<epoch>/...` + `/gateway/<id>/<epoch>/...` + bootstrap 补丁（**M6 已整体退役**，见下） |
 | 模型目录 | ✅ [opencode-config.ts](../src/opencode-config.ts) 集中定义 provider/model/能力/成本 |
 | 仓库凭据 | ✅ 镜像内置 SSH key（可 push、可签名）、`gh`、Wrangler 凭据 |
 | SDK 驱动会话 | ✅ `runSdkTest` 已验证从 Worker 侧 `session.create` + `session.prompt`（[index.ts](../src/index.ts)） |
@@ -136,6 +136,8 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 - **stock UI 退役路径**：过渡期保留每会话"打开完整 IDE"链接（terminal/文件浏览/diff 先
   白嫖现成的）；自建 UI 覆盖 diff 与终端后（M6）整体退役，连带删除 `/ui/` 资产代理、
   bootstrap、bundle 补丁，并把 `/gateway/` 从公网路由收敛为 Worker 内部通信。
+  **已于 2026-07-26 执行完毕**：四条路由与整个 `stock-ui.ts` 删除，公网只剩 `/api/*` 与
+  SPA 外壳，进容器只能走 Worker 内部 DO RPC。
 
 ### 决策记录（2026-07-25 已拍板）
 
@@ -152,9 +154,9 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 ## 四、里程碑
 
 > 开工顺序：最先做 M2 里的 promptAsync spike（见决策记录），然后 M1 → M2 → M3 → M4 → M5。
-> M1–M5 已全部完成（2026-07-26），目标形态闭环。M6 选做池里的实时事件镜像、代码产出闭环、
-> 动态仓库列表、会话管理四项也已完成（2026-07-26），余下冷启动优化、终端/文件浏览、
-> 退役 stock UI 与清理。
+> M1–M5 已全部完成（2026-07-26），目标形态闭环。M6 选做池八项亦已全部完成（2026-07-26）：
+> 实时事件镜像、代码产出闭环、动态仓库列表、会话管理、终端/文件浏览、退役 stock UI、
+> 冷启动测量与优化、清理。stock UI 下线后，公网不再有通往容器的路由。
 
 ### M1 · 运行时 repo 置备（去模板化） — ✅ 完成（2026-07-25）
 
@@ -587,7 +589,7 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
 
 ### M6 · 打磨与增强（按需排期的选做池）
 
-四项已完成（2026-07-26），余下三项仍在池子里。
+八项全部完成（2026-07-26）。
 
 - ✅ **实时事件镜像**：Sandbox DO 在 gate 进入 `running` 后订阅容器 `/event`，命中本会话的
   帧把 transcript 标脏并触发一次 3s 尾随防抖导出（`reason: 'live'`）。探针驱动的 60s
@@ -615,12 +617,33 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
   token 用量与成本（从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）、
   完成时通知（浏览器原生 Notification，不引入 push 服务与服务端订阅，代价是只在标签页
   开着时有效——这一点在 README 里明说了）。
-- **冷启动优化**：测量并压缩 wake→可响应耗时（镜像瘦身、快照策略）。
-- **自建 UI 补齐逃生舱能力**：终端（PTY WebSocket 已可代理）、文件浏览。（diff 已随
-  产出闭环落地。）
-- **退役 stock UI**：补齐后删除 `/ui/` 资产代理、bootstrap、入口 bundle 补丁，
-  `/gateway/` 收敛为 Worker 内部通信；OpenCode 升级不再受 UI 补丁牵制。
-- **清理**：退役 Logto 模板镜像与 `LogtoSandbox`、文档收敛。
+- ✅ **自建 UI 补齐逃生舱能力**：新增 `src/workspace-files.ts`（纯逻辑：相对路径规范化与
+  越界拒绝、目录排序、文本/二进制与截断判定）+ Sandbox `listWorkspaceDirectory`/
+  `readWorkspaceFile` + `GET /api/sessions/:id/files`（`&read=1` 读单文件，文本上限
+  256 KB，`.git` 不列）；终端走 `GET /api/sessions/:id/terminal` 升级 WebSocket，服务端
+  是 SDK 的 `sandbox.terminal()` PTY 直通，浏览器端直接用 SDK 自带的 `SandboxAddon` +
+  xterm.js（协议不自己实现）。会话页新增 `WorkspacePanel`（文件/终端两个页签，默认收起，
+  xterm 走 lazy chunk 不进入口包）。
+  **活着的终端不被误判空闲**：探针只看 OpenCode 执行状态，shell 里跑测试对它是隐形的，
+  所以终端面板每 45 秒 `POST /api/sessions/:id/keepalive` 续一次 work lease，且从不显式
+  归还——关标签页即停止续租，容器回到正常的 10 分钟空闲窗口。
+- ✅ **退役 stock UI**：删掉 `src/stock-ui.ts` 整个文件与 `/ui/`、`/assets/`、`/gateway/`、
+  `/hub/bootstrap.js` 四条路由、`_hub`/`_runtime` 入口、入口 bundle 正则补丁、
+  `/instances/:id` 重定向；`POST /api/instances/:id/wake` 不再返回 `launchUrl`；
+  列表页与会话页的"打开完整 IDE"按钮下线。**公网不再有任何通往容器的路由**：浏览器只
+  见 `/api/*` 与 SPA 外壳，进容器一律是 Worker 内部的 DO RPC。顺带删掉随之失效的
+  `openCodeRouteRequiresWorkLease`（网关的租约策略）及其单测。
+- ✅ **冷启动测量与优化**：wake 分阶段埋点（容器启动+快照恢复 / 仓库置备 / OpenCode 启动
+  与总耗时），存 Sandbox DO 并随 `runtime.lastWake` 搭现有 runtime status 的顺风车出去，
+  会话页标题下显示上次冷启动耗时、tooltip 给分段。容器本来就醒着的"只重启 server"记为
+  `cold: false` 且不显示，免得把平均数拉好看。两处实打实的优化：resumed checkout 的
+  `git fetch` 不再挡在 server 启动前面（改为并行，取二者较慢者）；快照排除可再生缓存
+  （`.opencode-state/cache`）——快照体积就是恢复时间，恢复时间就是冷启动。
+  压缩格式故意没动：SDK 默认已是 lz4，解压最快，而解压这一侧才落在冷启动上。
+- ✅ **清理**：`LogtoSandbox` 与模板镜像早在 2026-07-26 的 M1 收尾里就已退役（migration
+  `v6` 已应用），本轮补掉的是随 stock UI 一起失效的死代码与全套文档收敛
+  （README 的路由章节重写为「一个 origin、一套 API」，新增 Cold start 小节；
+  AGENTS.md 新增「不给容器留公网路由」约束）。
 
 M6 偏差与备注：
 
@@ -638,6 +661,14 @@ M6 偏差与备注：
   零外部依赖的一半；真正的离线推送要引入推送服务与订阅存储，等有实际需要再排。
 - `tsconfig.json` 打开了 `allowImportingTsExtensions`：`src/github-catalog.ts` 需要在运行时
   从 `src/repos.ts` 取校验函数，而 node 的测试运行器按字面解析相对路径。
+- 终端与文件浏览的**服务端逻辑有单测（21 例路径/列表/截断），但整条链路尚未在真实容器上
+  跑过**——本轮改动没有做本地 `wrangler dev` + 容器实测，PTY 的 `sessionId` 是否总能命中
+  容器默认 session、`cd` 到 checkout 的首条命令表现如何，都要在首次实跑时确认。
+- 冷启动优化同理：埋点已经在，但**还没有生产数字**。"镜像瘦身"这条因此仍然悬着——在
+  知道恢复/启动各占多少之前，砍镜像里的 `gh`/wrangler 是凭感觉动刀。等 `lastWake` 攒够
+  样本再决定。
+- 终端只在容器醒着时可用（睡着返回 409），没有做"打开终端即唤醒"。理由与 abort 一致：
+  socket 已经连上却卡几十秒，体感是挂了而不是在唤醒。
 
 ## 五、风险与开放问题
 

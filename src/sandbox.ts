@@ -23,7 +23,11 @@ import {
   isWebSocketUpgrade,
   truncateOutput
 } from './http';
-import type { InstanceRuntimeStatus } from './instances';
+import type {
+  InstanceRuntimeStatus,
+  WakeStageTimings,
+  WakeTimings
+} from './instances';
 import {
   OPENCODE_PORT,
   RUNTIME_EPOCH_HEADER,
@@ -68,6 +72,14 @@ import {
   type SessionChangesHead
 } from './session-changes';
 import { frameBelongsToSession, SseFrameBuffer } from './session-events';
+import {
+  buildWorkspaceFile,
+  buildWorkspaceListing,
+  normalizeWorkspaceRelativePath,
+  resolveWorkspacePath,
+  type WorkspaceFile,
+  type WorkspaceListing
+} from './workspace-files';
 import type { SessionMessage } from './sessions';
 import {
   buildTranscriptMirror,
@@ -92,6 +104,16 @@ const RUNTIME_GATE_STORAGE_KEY = 'runtime:gate';
 const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
 const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
 const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
+const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
+
+/**
+ * Paths left out of the workspace snapshot.
+ *
+ * Regenerable caches only. OpenCode rebuilds its own cache on demand, and the
+ * archive is what every later wake downloads and unpacks — so anything in here
+ * is paid for on every cold start, forever, in exchange for nothing.
+ */
+const CHECKPOINT_EXCLUDES = ['.opencode-state/cache'];
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
@@ -275,6 +297,8 @@ export class Sandbox extends BaseSandbox<Env> {
   ]);
   private transcriptTarget: TranscriptTarget | undefined;
   private transcriptMirror: TranscriptMirrorSummary | undefined;
+  /** Stage timings of the most recent wake, surfaced on the runtime status. */
+  private lastWake: WakeTimings | undefined;
   private mirrorInProgress: Promise<TranscriptMirrorSummary | undefined> | undefined;
   /**
    * Whether anything may have happened since the last export. It starts true so
@@ -304,20 +328,23 @@ export class Sandbox extends BaseSandbox<Env> {
         runtimeGate,
         knownLocations,
         transcriptTarget,
-        transcriptMirror
+        transcriptMirror,
+        lastWake
       ] = await Promise.all([
         ctx.storage.get<boolean>(PURGE_STORAGE_KEY),
         ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY),
         ctx.storage.get<RuntimeGate>(RUNTIME_GATE_STORAGE_KEY),
         ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY),
         ctx.storage.get<TranscriptTarget>(TRANSCRIPT_TARGET_STORAGE_KEY),
-        ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY)
+        ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY),
+        ctx.storage.get<WakeTimings>(WAKE_TIMINGS_STORAGE_KEY)
       ]);
       this.purgeRequested = Boolean(purgeRequested);
       this.instanceIdentity = identity;
       this.runtimeGate = runtimeGate;
       this.transcriptTarget = transcriptTarget;
       this.transcriptMirror = transcriptMirror;
+      this.lastWake = lastWake;
       this.locationsNeedDiscovery =
         identity?.state === 'active' && knownLocations === undefined;
       for (const location of knownLocations ?? []) {
@@ -427,21 +454,60 @@ export class Sandbox extends BaseSandbox<Env> {
       revision
     });
 
+    // Wake is the one thing a user waits through, so it is measured. The clock
+    // starts here rather than in the coordinator: this is where the work is,
+    // and attributing it per stage is what makes "the cold start is slow" an
+    // answerable question instead of a complaint.
+    const startedAt = Date.now();
+    const timings: WakeStageTimings = {};
+    const since = (mark: number) => Date.now() - mark;
+    // A wake that finds the container already up is a restart of the OpenCode
+    // server, not a cold start, and mixing the two would make the number
+    // meaningless.
+    const cold = this.persistenceState.container?.running !== true;
+
     try {
+      const restoreStartedAt = Date.now();
       await this.ensureWorkspaceRestored();
-      await this.withControlPlaneAccess(() => this.ensureRepoProvisioned());
-      await this.withControlPlaneAccess(() =>
-        createOpencodeServer(this, {
-          port: OPENCODE_PORT,
-          directory: WORKSPACE_DIRECTORY,
-          config: OPENCODE_CONFIG,
-          env: OPENCODE_ENV
-        })
-      );
+      // Container boot is inside this number: the first call into a stopped
+      // container is what starts it, and that call is the restore.
+      timings.restoreMs = since(restoreStartedAt);
+
+      // Provisioning and the server start share one control-plane scope. The
+      // resumed-checkout fetch outlives the call that started it, and the scope
+      // is what admits its container traffic — closing it in between would fail
+      // the fetch on the next command it issues.
+      await this.withControlPlaneAccess(async () => {
+        const provisionStartedAt = Date.now();
+        const deferredFetch = await this.ensureRepoProvisioned();
+        timings.repoMs = since(provisionStartedAt);
+
+        const serverStartedAt = Date.now();
+        // That fetch gates nothing the server needs, so it runs alongside the
+        // server start instead of in front of it. On a warm wake this takes the
+        // fetch — seconds against an SSH remote — off the serial path.
+        await Promise.all([
+          createOpencodeServer(this, {
+            port: OPENCODE_PORT,
+            directory: WORKSPACE_DIRECTORY,
+            config: OPENCODE_CONFIG,
+            env: OPENCODE_ENV
+          }),
+          deferredFetch ?? Promise.resolve()
+        ]);
+        timings.serverMs = since(serverStartedAt);
+      });
+
       await this.setRuntimeGate({
         phase: 'running',
         runtimeEpoch: input.runtimeEpoch,
         revision
+      });
+      await this.recordWakeTimings({
+        ...timings,
+        totalMs: since(startedAt),
+        at: new Date().toISOString(),
+        cold
       });
       return await this.inspectExecutionIfRunning();
     } catch (error) {
@@ -451,14 +517,29 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   /**
+   * Remember how long the last wake took, per stage.
+   *
+   * Kept on the Sandbox rather than the coordinator because this object is the
+   * one that performs the stages, and it rides out to the UI on the runtime
+   * status the session list already reads — so measuring costs no extra call.
+   */
+  private async recordWakeTimings(timings: WakeTimings): Promise<void> {
+    this.lastWake = timings;
+    await this.persistenceState.storage.put(WAKE_TIMINGS_STORAGE_KEY, timings);
+  }
+
+  /**
    * Provision the instance's catalog repository below /workspace during wake.
    * The first wake clones; later wakes see the snapshot-restored checkout and
    * only run a best-effort fetch, never touching the working tree.
+   *
+   * Returns the fetch when there was already a checkout: it is deliberately not
+   * awaited here so the caller can overlap it with starting the server.
    */
-  private async ensureRepoProvisioned(): Promise<void> {
+  private async ensureRepoProvisioned(): Promise<Promise<void> | undefined> {
     const identity = this.instanceIdentity;
     if (!identity) {
-      return;
+      return undefined;
     }
     const { repo, repoKey, directory } = this.requireCheckout();
     const checkout = await this.exists(`${directory}/.git`);
@@ -469,17 +550,25 @@ export class Sandbox extends BaseSandbox<Env> {
       // working exactly as it did.
       //
       // A fetch failure (offline remote, revoked key) must not block resuming
-      // the already-restored workspace.
-      const fetched = await this.exec(
-        `git -C ${shellQuote(directory)} fetch origin --prune`,
-        { timeout: REPO_FETCH_TIMEOUT_MS }
+      // the already-restored workspace — and neither must its latency, so this
+      // is handed back unawaited for the caller to overlap with the server
+      // start. Nothing downstream reads the refs it updates.
+      return this.exec(`git -C ${shellQuote(directory)} fetch origin --prune`, {
+        timeout: REPO_FETCH_TIMEOUT_MS
+      }).then(
+        (fetched) => {
+          if (!fetched.success) {
+            console.warn(
+              `Repo fetch failed for ${repoKey}: ${truncateOutput(fetched.stderr)}`
+            );
+          }
+        },
+        (error) => {
+          // A timed-out or refused fetch is a warning, not a failed wake: the
+          // checkout it was refreshing is already restored and usable.
+          console.warn(`Repo fetch failed for ${repoKey}`, error);
+        }
       );
-      if (!fetched.success) {
-        console.warn(
-          `Repo fetch failed for ${repoKey}: ${truncateOutput(fetched.stderr)}`
-        );
-      }
-      return;
     }
 
     if (!repo) {
@@ -498,6 +587,7 @@ export class Sandbox extends BaseSandbox<Env> {
         `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
       );
     }
+    return undefined;
   }
 
   async getExecutionSnapshotIfRunning(
@@ -798,6 +888,7 @@ export class Sandbox extends BaseSandbox<Env> {
             this.persistenceState.container?.running === true
           ),
       persistence,
+      ...(this.lastWake ? { lastWake: this.lastWake } : {}),
       ...(this.transcriptMirror ? { transcript: this.transcriptMirror } : {})
     };
   }
@@ -1035,6 +1126,60 @@ export class Sandbox extends BaseSandbox<Env> {
       // running to abort. Anything else is not a confirmation, so it is not
       // reported as one.
       return result.data === true;
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * List one directory of the session's checkout.
+   *
+   * A read, in the lifecycle sense: it needs a container that is already
+   * running and never starts one, and it takes no work lease — browsing files
+   * is looking at the session, not working in it.
+   */
+  async listWorkspaceDirectory(
+    runtimeEpoch: string,
+    path?: string
+  ): Promise<WorkspaceListing> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Listing workspace files');
+    this.beginActiveOperation();
+    try {
+      const { directory } = this.requireCheckout();
+      const relative = normalizeWorkspaceRelativePath(path);
+      const target = resolveWorkspacePath(directory, relative);
+      const listing = await this.withControlPlaneAccess(() =>
+        this.listFiles(target, { includeHidden: true })
+      );
+      return buildWorkspaceListing(relative, listing.files);
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /** Read one file of the session's checkout, under the same rules as listing. */
+  async readWorkspaceFile(
+    runtimeEpoch: string,
+    path: string
+  ): Promise<WorkspaceFile> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Reading a workspace file');
+    this.beginActiveOperation();
+    try {
+      const { directory } = this.requireCheckout();
+      const relative = normalizeWorkspaceRelativePath(path);
+      if (!relative) {
+        throw new Error('A file path is required');
+      }
+      const result = await this.withControlPlaneAccess(() =>
+        this.readFile(resolveWorkspacePath(directory, relative))
+      );
+      return buildWorkspaceFile({
+        path: relative,
+        content: result.content,
+        ...(result.encoding ? { encoding: result.encoding } : {})
+      });
     } finally {
       this.finishActiveOperation();
     }
@@ -1811,8 +1956,10 @@ export class Sandbox extends BaseSandbox<Env> {
     }
     this.beginActiveOperation();
     try {
-      // WebSockets must cross the Durable Object fetch boundary. The Worker
-      // reaches this method via getSandbox(...).wsConnect(), not JSRPC.
+      // WebSockets must cross the Durable Object fetch boundary rather than
+      // JSRPC. Since the stock UI's gateway was retired this path carries
+      // exactly one thing: the terminal's PTY socket, opened by the session
+      // API through getSandbox(...).terminal().
       return await super.fetch(request);
     } finally {
       this.finishActiveOperation();
@@ -2097,6 +2244,11 @@ export class Sandbox extends BaseSandbox<Env> {
         dir: WORKSPACE_ROOT,
         name: `opencode:${this.instanceIdentity!.id}:${reason}`,
         ttl: BACKUP_TTL_SECONDS,
+        // Snapshot size is restore time, and restore time is the cold start.
+        // Only caches are excluded: everything a session might have installed
+        // or built stays, because re-creating it costs the user far more than
+        // the seconds the smaller archive saves.
+        excludes: CHECKPOINT_EXCLUDES,
         localBucket: this.persistenceEnv.PERSISTENCE_LOCAL_BUCKET === 'true'
       });
       const storedBackup: StoredBackup = {

@@ -13,12 +13,16 @@ import {
   patchSession,
   retrySession,
   sendMessage,
-  wakeInstance,
   type Catalog,
   type RuntimeLifecycle,
   type SessionView
 } from '../api';
-import { formatTime, formatUsage } from '../format';
+import {
+  describeWakeStages,
+  formatDuration,
+  formatTime,
+  formatUsage
+} from '../format';
 import {
   lastMessageId,
   reconcileOptimisticPrompts,
@@ -30,6 +34,7 @@ import { useTranscript } from '../useTranscript';
 import { ChangesPanel } from './ChangesPanel';
 import { MessageList } from './MessageList';
 import { StatusBadge } from './StatusBadge';
+import { WorkspacePanel } from './WorkspacePanel';
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -70,8 +75,8 @@ export function SessionPage({
 
   // The composer is fixed over the conversation, so the page has to reserve
   // exactly its height or the last message stays hidden behind it. That height
-  // is not a constant: the controls wrap by width, and the abort and IDE
-  // buttons come and go with the container's state.
+  // is not a constant: the controls wrap by width, and the abort button comes
+  // and goes with the container's state.
   //
   // Measured on every commit rather than through a ResizeObserver. Both
   // triggers that change the height are covered — a re-render for the buttons,
@@ -258,6 +263,17 @@ export function SessionPage({
             session.transcript.usage.assistantMessages > 0
               ? ` · ${formatUsage(session.transcript.usage)}`
               : ''}
+            {/*
+              The cold start is the one wait with no progress to show beyond a
+              spinner, so the last one's cost is stated rather than left to
+              memory. Only cold wakes are reported: a server restart on a live
+              container is a different number and would flatter the average.
+            */}
+            {session.instance.runtime.lastWake?.cold ? (
+              <span title={describeWakeStages(session.instance.runtime.lastWake)}>
+                {` · 上次唤醒 ${formatDuration(session.instance.runtime.lastWake.totalMs)}`}
+              </span>
+            ) : null}
           </p>
         </div>
       ) : null}
@@ -268,11 +284,18 @@ export function SessionPage({
         is the point of the session, not a footnote to it.
       */}
       {session ? (
-        <ChangesPanel
-          sessionId={sessionId}
-          attached={attached}
-          sessionTitle={session.title}
-        />
+        <>
+          <ChangesPanel
+            sessionId={sessionId}
+            attached={attached}
+            sessionTitle={session.title}
+          />
+          <WorkspacePanel
+            sessionId={sessionId}
+            attached={attached}
+            directory={session.directory ?? `/workspace/${session.repoKey}`}
+          />
+        </>
       ) : null}
 
       {loadError ? (
@@ -375,29 +398,6 @@ export function SessionPage({
               中断
             </button>
           ) : null}
-          {/*
-            The stock IDE is still reachable from a sleeping session, but it is
-            no longer the way back into the conversation — that is the composer
-            now, so this stops being the primary action.
-          */}
-          {attached || !session ? null : (
-            <button
-              className="button"
-              type="button"
-              disabled={busy || !ready}
-              onClick={() =>
-                run(async () => {
-                  const { launchUrl } = await wakeInstance(session.instance.id);
-                  if (!launchUrl) {
-                    throw new Error('唤醒成功，但服务器未返回访问地址');
-                  }
-                  location.assign(launchUrl);
-                })
-              }
-            >
-              打开 IDE ↗
-            </button>
-          )}
           <button
             className="button primary"
             type="submit"
