@@ -27,6 +27,7 @@ import type { InstanceRuntimeStatus } from './instances';
 import {
   OPENCODE_PORT,
   RUNTIME_EPOCH_HEADER,
+  type AbortOpencodeSessionInput,
   type CreateOpencodeSessionInput,
   type ListOpencodeSessionMessagesInput,
   type PromptOpencodeSessionInput
@@ -813,6 +814,39 @@ export class Sandbox extends BaseSandbox<Env> {
         );
       }
       return result.data ?? [];
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Stop whatever the agent is currently doing in this session.
+   *
+   * Abort is deliberately not treated as work: it ends activity rather than
+   * creating it, so it takes no work lease and lets the idle window start
+   * running as soon as the container settles.
+   */
+  async abortOpencodeSession(
+    runtimeEpoch: string,
+    input: AbortOpencodeSessionInput
+  ): Promise<boolean> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Aborting an OpenCode session'
+      );
+      const result = await client.session.abort({
+        sessionID: input.opencodeSessionId,
+        directory: input.directory
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to abort OpenCode session: ${describeSdkFailure(result)}`
+        );
+      }
+      return result.data !== false;
     } finally {
       this.finishActiveOperation();
     }

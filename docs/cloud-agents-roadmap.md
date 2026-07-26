@@ -256,7 +256,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 |------|------|------|
 | S1 | `GET /api/sessions/:id/messages` 被动只读 + 会话徽章派生 | ✅ 2026-07-26 |
 | S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | ✅ 2026-07-26 |
-| S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 待做 |
+| S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 🟡 已实现，abort 待补验 |
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | 待做 |
 | S5 | 列表页 + composer 迁入 SPA | 待做 |
 | S6 | 会话详情页 + message part 渲染器 | 待做 |
@@ -298,6 +298,30 @@ sessionID 归属）拆成纯函数并单测，共 32 个用例。`OPENCODE_PORT`
 一帧 `sleeping` 且容器保持 `stopped`；idle 但醒着的会话挂流 90 秒不断不报错。
 **跨会话隔离实测**：在同一容器里另开一个 OpenCode 会话并发 prompt，网关原始流收到它的
 36 帧，本会话的 `/events` 转发 0 帧。
+
+**S3 实际交付（2026-07-26）**：`POST /api/sessions/:id/messages` 续聊、`POST /api/sessions/:id/abort`
+中断。续聊复用 SessionAgent 已有的持久队列（新增 `queuePrompt`），走的就是开场 prompt 那条
+路径——逐条出队，因此连发按序投递；带 `model` 可换模型，新模型同时写回 SessionRecord，
+列表与 composer 都能看到；发消息也顺带清掉 `lastError` 并重新入队，等于「发送即重试」。
+abort 走新的 `Sandbox.abortOpencodeSession` RPC，**不取 work lease**——它是结束活动而不是
+制造活动，取租约反而会推迟空闲窗口。
+
+**M3 边界**：两条写路径都要求容器已经醒着，睡着返回 409。队列本身其实能顺手唤醒（派发时
+就会 wake），但「发消息触发一次要等的唤醒」需要前端进度条，那是 M5。这个检查是产品决策
+不是保证：检查与派发之间容器停掉的话，agent 照样会唤醒它，这个竞态无害，M5 之后它就是正路。
+
+本地实测（wrangler dev + 真实容器）：多轮对话连续 7 条消息全部按序落地；中途从
+gemini 切到 grok-4.5，transcript 里两条 assistant 消息的 `modelID` 确实不同；连发 3 条
+→ 队列 `pending 3` 后按 1/2/3 顺序投递；睡着 / 未开工 / 空 prompt / 未知模型分别 409/409/400/400。
+
+**S3 发现**：最初的幂等只查了队列里的 `pending`，**漏掉了已派发的**——而客户端重试恰恰
+大多发生在派发之后，实测同一个 `promptId` 被投递了两次。已改为在 agent 状态里额外记一份
+有界的 `deliveredPromptIds`（保留最近 50 条），队列与已投递都查；补测同一 promptId 在派发
+后重发，transcript 里只出现一次。
+
+**待补验**：abort 的实际中断效果没验成。端点本身通到容器、OpenCode 接受并返回 `aborted:
+true`，但连续几次长生成都被上游模型供应商的 TLS 错误（`unknown certificate verification
+error`）打断，拿不到一次「正在流式输出时打断」的干净观测。等供应商恢复后补一次。
 
 **S2 发现（两条都很坑）**：
 

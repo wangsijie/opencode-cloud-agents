@@ -51,6 +51,8 @@ export interface SessionRecord {
 /** Partial state reported back by the SessionAgent after each dispatch step. */
 export interface SessionStatePatch {
   phase?: SessionPhase;
+  /** Follows the model of the most recent prompt, which the UI may switch. */
+  model?: string;
   opencodeSessionId?: string;
   pendingPromptCount?: number;
   lastPromptAt?: string;

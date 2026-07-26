@@ -43,6 +43,11 @@ export interface ListOpencodeSessionMessagesInput {
   directory: string;
 }
 
+export interface AbortOpencodeSessionInput {
+  opencodeSessionId: string;
+  directory: string;
+}
+
 /** The subset of Sandbox RPC the session dispatcher depends on. */
 export interface InstanceSandboxRpc {
   getInstanceRuntimeStatus(): Promise<InstanceRuntimeStatus>;

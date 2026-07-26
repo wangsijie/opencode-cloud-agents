@@ -23,9 +23,10 @@ import {
   OPENCODE_PORT,
   RUNTIME_EPOCH_HEADER
 } from './instance-runtime';
-import type { InstanceView } from './instances';
+import type { InstanceRecord, InstanceView } from './instances';
 import { DEFAULT_MODEL_REF, isModelRef } from './opencode-config';
 import { findRepo, isRepoKey, repoWorkspaceDirectory } from './repos';
+import type { QueuePromptInput } from './session-agent';
 import {
   closedSessionEventStream,
   forwardSessionEventStream,
@@ -95,15 +96,18 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   }
 
   if (action === 'messages') {
-    if (request.method !== 'GET') {
-      return methodNotAllowed('GET');
+    if (request.method === 'GET') {
+      const transcript = await readSessionTranscript(env, record);
+      return json(transcript, 200, {
+        'X-OpenCode-Hub-Transcript-State': transcript.state,
+        'X-OpenCode-Hub-Transcript-Source': transcript.source,
+        'X-OpenCode-Hub-Transcript-At': transcript.observedAt
+      });
     }
-    const transcript = await readSessionTranscript(env, record);
-    return json(transcript, 200, {
-      'X-OpenCode-Hub-Transcript-State': transcript.state,
-      'X-OpenCode-Hub-Transcript-Source': transcript.source,
-      'X-OpenCode-Hub-Transcript-At': transcript.observedAt
-    });
+    if (request.method === 'POST') {
+      return await sendSessionPrompt(request, env, record);
+    }
+    return methodNotAllowed('GET, POST');
   }
 
   if (action === 'events') {
@@ -115,6 +119,9 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 
   if (request.method !== 'POST') {
     return methodNotAllowed('POST');
+  }
+  if (action === 'abort') {
+    return await abortSession(env, record);
   }
   if (action !== 'retry') {
     throw new HttpError(404, 'Session action not found');
@@ -234,6 +241,130 @@ async function getSessionView(
     status: deriveSessionStatus(record.phase, view.runtime),
     lastActivityAt: deriveLastActivityAt(record)
   };
+}
+
+/**
+ * Continue an existing conversation.
+ *
+ * The prompt goes onto the SessionAgent's durable queue, the same path the
+ * opening prompt takes: prompts leave that queue one at a time, so messages
+ * sent in quick succession arrive in order and a retried request carrying the
+ * same `promptId` is not delivered twice.
+ *
+ * M3 requires the container to already be awake. The queue would happily wake
+ * it — that is exactly what the agent does on dispatch — but sending to a
+ * sleeping session means a wake the user waits on, and the progress UI for that
+ * is M5. Until then this reports the state instead of starting a silent
+ * minute-long wake behind an unchanged page.
+ *
+ * The check is therefore a product decision, not a guarantee: a container that
+ * stops in the gap between it and the dispatch is still woken by the agent.
+ * That race is harmless, and M5 makes it the normal path.
+ */
+async function sendSessionPrompt(
+  request: Request,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  const input = await readSendPromptInput(request);
+  await requireAwakeRuntime(env, record, 'send a message to');
+  await resolveSessionAgent(env, record.id).queuePrompt(input);
+  return json(await getSessionView(env, await requireSession(env, record.id)), 202);
+}
+
+/** Stop the agent mid-run, leaving the conversation intact. */
+async function abortSession(env: Env, record: SessionRecord): Promise<Response> {
+  if (!record.opencodeSessionId) {
+    throw new HttpError(409, 'This session has not started working yet');
+  }
+  const repo = findRepo(record.repoKey);
+  if (!repo) {
+    throw new HttpError(400, `Unknown repository ${record.repoKey}`);
+  }
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    'abort'
+  );
+
+  const aborted = await resolveSandbox(env, instance).abortOpencodeSession(
+    runtimeEpoch,
+    {
+      opencodeSessionId: record.opencodeSessionId,
+      directory: repoWorkspaceDirectory(repo)
+    }
+  );
+  return json({
+    aborted,
+    session: await getSessionView(env, await requireSession(env, record.id))
+  });
+}
+
+/**
+ * Resolve the running container behind a session, or refuse.
+ *
+ * Both writing paths need a container that is already up: neither may wake one,
+ * because a wake takes long enough that the caller has to be told about it, and
+ * that conversation belongs to M5.
+ */
+async function requireAwakeRuntime(
+  env: Env,
+  record: SessionRecord,
+  intent: string
+): Promise<{ instance: InstanceRecord; runtimeEpoch: string }> {
+  const instance = await getHub(env).getInstance(record.instanceId);
+  if (!instance || instance.lifecycle !== 'ready') {
+    throw new HttpError(409, `This session is not ready to ${intent}`);
+  }
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  if (!runtimeEpoch) {
+    throw new HttpError(
+      409,
+      `This session is sleeping; wake it before trying to ${intent} it`
+    );
+  }
+  return { instance, runtimeEpoch };
+}
+
+async function readSendPromptInput(request: Request): Promise<QueuePromptInput> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object');
+  }
+
+  const { prompt, model, promptId } = value as {
+    prompt?: unknown;
+    model?: unknown;
+    promptId?: unknown;
+  };
+  const text = normalizeSessionPrompt(prompt);
+  if (!text) {
+    throw new HttpError(400, 'A prompt of up to 32000 characters is required');
+  }
+  if (model !== undefined && !isModelRef(model)) {
+    throw new HttpError(400, 'Unknown model');
+  }
+  if (promptId !== undefined && !isSafePromptId(promptId)) {
+    throw new HttpError(400, 'Invalid prompt id');
+  }
+  return {
+    prompt: text,
+    ...(model === undefined ? {} : { model }),
+    ...(promptId === undefined ? {} : { promptId })
+  };
+}
+
+/**
+ * Prompt ids come from the client, so they are bounded and constrained before
+ * being persisted in the agent's queue.
+ */
+function isSafePromptId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 }
 
 /**

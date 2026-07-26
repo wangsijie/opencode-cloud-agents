@@ -190,6 +190,7 @@ export class Hub extends DurableObject<Env> {
       const updated: SessionRecord = {
         ...record,
         ...(patch.phase ? { phase: patch.phase } : {}),
+        ...(patch.model ? { model: patch.model } : {}),
         ...(patch.opencodeSessionId
           ? { opencodeSessionId: patch.opencodeSessionId }
           : {}),

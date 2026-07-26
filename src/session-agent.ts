@@ -40,6 +40,15 @@ const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000] as const;
  */
 const DISPATCH_WORK_LEASE_MS = 90_000;
 
+/**
+ * How many delivered prompt ids to remember for deduplication.
+ *
+ * A client retry usually lands after the prompt has already been dispatched and
+ * left the queue, so checking the queue alone would deliver it twice. The list
+ * only has to outlive a retry, not the conversation.
+ */
+const MAX_DELIVERED_PROMPT_IDS = 50;
+
 interface PendingPrompt {
   id: string;
   text: string;
@@ -59,6 +68,11 @@ interface StoredSessionAgentState {
   opencodeSessionId?: string;
   phase: SessionPhase;
   pending: PendingPrompt[];
+  /**
+   * Ids of prompts already handed to the container, most recent last. Absent on
+   * states written before deduplication covered delivered prompts.
+   */
+  deliveredPromptIds?: string[];
   attempt: number;
   lastError?: string;
   lastPromptAt?: string;
@@ -74,6 +88,14 @@ export interface StartSessionInput {
   model: string;
   title: string;
   prompt: string;
+  promptId?: string;
+}
+
+export interface QueuePromptInput {
+  prompt: string;
+  /** Switches the session's model when present; otherwise the current one. */
+  model?: string;
+  /** Supplied by a client that may retry, so a resend is not a second prompt. */
   promptId?: string;
 }
 
@@ -155,6 +177,50 @@ export class SessionAgent extends DurableObject<Env> {
       updatedAt: now
     };
     await this.persist();
+    await this.agentState.storage.setAlarm(Date.now());
+    return this.snapshot();
+  }
+
+  /**
+   * Queue a follow-up prompt on an existing session.
+   *
+   * This takes the same path as the opening prompt: the queue is durable, the
+   * alarm dispatches it, and prompts leave the queue one at a time, so several
+   * messages sent in quick succession arrive in order and none is delivered
+   * twice. Sending is also how a user retries after a failure — it is an
+   * explicit intent to proceed, so it clears the recorded error rather than
+   * requiring a separate retry first.
+   */
+  async queuePrompt(input: QueuePromptInput): Promise<SessionAgentSnapshot> {
+    await this.ready;
+    const state = this.requireState();
+    const model = input.model ?? state.model;
+    if (!isModelRef(model)) {
+      throw new Error(`Unknown model: ${model}`);
+    }
+
+    const id = input.promptId ?? crypto.randomUUID();
+    if (
+      state.pending.some((queued) => queued.id === id) ||
+      (state.deliveredPromptIds ?? []).includes(id)
+    ) {
+      // A retried request carrying a known id is the same prompt, not a second
+      // one — whether it is still queued or has already been delivered.
+      return this.snapshot();
+    }
+
+    const now = new Date().toISOString();
+    this.state = {
+      ...state,
+      model,
+      pending: [...state.pending, { id, text: input.prompt, model, queuedAt: now }],
+      phase: 'queued',
+      attempt: 0,
+      updatedAt: now
+    };
+    delete this.state.lastError;
+    await this.persist();
+    await this.reportToHub();
     await this.agentState.storage.setAlarm(Date.now());
     return this.snapshot();
   }
@@ -282,6 +348,10 @@ export class SessionAgent extends DurableObject<Env> {
       });
       await this.update({
         pending: this.state.pending.filter((queued) => queued.id !== prompt.id),
+        deliveredPromptIds: [
+          ...(this.state.deliveredPromptIds ?? []),
+          prompt.id
+        ].slice(-MAX_DELIVERED_PROMPT_IDS),
         lastPromptAt: new Date().toISOString()
       });
     }
@@ -293,6 +363,7 @@ export class SessionAgent extends DurableObject<Env> {
         StoredSessionAgentState,
         | 'phase'
         | 'pending'
+        | 'deliveredPromptIds'
         | 'attempt'
         | 'opencodeSessionId'
         | 'lastPromptAt'
@@ -329,6 +400,7 @@ export class SessionAgent extends DurableObject<Env> {
     }
     const update: SessionStatePatch = {
       phase: state.phase,
+      model: state.model,
       pendingPromptCount: state.pending.length,
       lastError: state.lastError ?? null,
       ...(state.opencodeSessionId
