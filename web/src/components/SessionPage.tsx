@@ -390,23 +390,29 @@ export function SessionPage({
               ))}
             </select>
           ) : null}
+          {/*
+            One button, because at any moment there is only one thing to do
+            with a running agent: stop it, or — when it is not running — send
+            the next message.
+          */}
           {working ? (
             <button
-              className="button"
+              className="button primary"
               type="button"
               disabled={busy}
               onClick={() => run(() => abortSession(sessionId))}
             >
-              Abort
+              Stop
             </button>
-          ) : null}
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || !canSend || !prompt.trim()}
-          >
-            Send
-          </button>
+          ) : (
+            <button
+              className="button primary"
+              type="submit"
+              disabled={busy || !canSend || !prompt.trim()}
+            >
+              Send
+            </button>
+          )}
         </div>
       </form>
     </main>
