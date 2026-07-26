@@ -846,7 +846,10 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to abort OpenCode session: ${describeSdkFailure(result)}`
         );
       }
-      return result.data !== false;
+      // OpenCode answers with a plain boolean: false means there was nothing
+      // running to abort. Anything else is not a confirmation, so it is not
+      // reported as one.
+      return result.data === true;
     } finally {
       this.finishActiveOperation();
     }

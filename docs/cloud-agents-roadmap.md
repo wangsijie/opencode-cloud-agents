@@ -256,7 +256,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 |------|------|------|
 | S1 | `GET /api/sessions/:id/messages` 被动只读 + 会话徽章派生 | ✅ 2026-07-26 |
 | S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | ✅ 2026-07-26 |
-| S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | 🟡 已实现，abort 待补验 |
+| S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | ✅ 2026-07-26 |
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | ✅ 2026-07-26 |
 | S5 | 列表页 + composer 迁入 SPA | 待做 |
 | S6 | 会话详情页 + message part 渲染器 | 待做 |
@@ -319,9 +319,13 @@ gemini 切到 grok-4.5，transcript 里两条 assistant 消息的 `modelID` 确�
 有界的 `deliveredPromptIds`（保留最近 50 条），队列与已投递都查；补测同一 promptId 在派发
 后重发，transcript 里只出现一次。
 
-**待补验**：abort 的实际中断效果没验成。端点本身通到容器、OpenCode 接受并返回 `aborted:
-true`，但连续几次长生成都被上游模型供应商的 TLS 错误（`unknown certificate verification
-error`）打断，拿不到一次「正在流式输出时打断」的干净观测。等供应商恢复后补一次。
+**abort 补验（2026-07-26，供应商恢复后）**：让 agent 从 1 数到 5000，输出到一半时打断
+——最终停在 **1367**，消息上带 `MessageAbortedError`。作为对照，自然写完的长文
+`error` 是 `null`。中途还踩到一次假阳性：第一次用「写 2000 字散文」验，模型太快，在我
+第一次轮询之前就写完了，`aborted` 虽然返回 true 但文章是自然收尾的——所以判定 abort
+是否真的生效，要看消息上的 `MessageAbortedError`，不能只看端点返回值。顺带把
+`abortOpencodeSession` 的返回从 `result.data !== false` 收紧成 `=== true`：OpenCode 这个
+接口返回纯布尔，false 表示当时没有可打断的运行，含糊的取值不该被报成「已打断」。
 
 **S4 实际交付（2026-07-26）**：`web/`（Vite 8 + React 19 + TS）+ 根 `vite.config.ts`；
 `wrangler.jsonc` 加 `assets`，产物 `web/dist` 由同一个 Worker 同域托管。
