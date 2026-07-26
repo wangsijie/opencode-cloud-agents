@@ -320,6 +320,8 @@ now-retired `LogtoSandbox` class, `v4` adds the per-instance lifecycle
 coordinator, `v5` adds the per-session dispatch agent, and `v6` deletes
 `LogtoSandbox` together with its Durable Object storage.
 
-Because `v6` destroys that storage, delete every remaining `logto-v1` instance
-through the Hub *before* deploying it. Deletion is what removes an instance's R2
-snapshots, and the backup handles live in the storage the migration erases.
+`v6` was applied on 2026-07-26 after every pre-session instance had been deleted
+through the Hub. That order was required: deletion is what removes an instance's
+R2 snapshots, and the backup handles lived in the storage the migration erases.
+The orphaned `opencode-cloud-logtosandbox` container application was removed with
+`wrangler containers delete` in the same pass.

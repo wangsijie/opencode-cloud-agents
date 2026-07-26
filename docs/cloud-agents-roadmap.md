@@ -243,6 +243,11 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 清理后本地复测：全新状态下不再自动出现 legacy 实例，`POST /api/instances` 返回 405，
 会话创建 → clone → 执行 → 回答 → idle → 删除全链路正常。
 
+**生产落地（2026-07-26）**：先在 Hub 上删光存量实例（连带清 R2 快照），再 `pnpm run deploy`；
+部署后确认线上 Worker 绑定只剩 `Hub` / `LifecycleCoordinator` / `Sandbox` / `SessionAgent`
+（`LogtoSandbox` 已随 v6 消失），并用 `wrangler containers delete` 清掉残留的
+`opencode-cloud-logtosandbox` 容器应用。
+
 ### M3 · 自定义会话页（醒着时的聊天视图） — 约 4–6 天
 
 范围：
