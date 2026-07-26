@@ -98,6 +98,24 @@ export function CheckIcon() {
   );
 }
 
+/** Opens and closes the details panel: a page with a pane down its right side. */
+export function PanelIcon() {
+  return (
+    <Icon>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+    </Icon>
+  );
+}
+
+export function CloseIcon() {
+  return (
+    <Icon size={16}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </Icon>
+  );
+}
+
 /** The mark on the new-session page: a four-point spark, drawn filled. */
 export function SparkIcon() {
   return (

@@ -48,6 +48,7 @@
 
   --gap: 12px;
   --sidebar-width: 288px;
+  --aside-width: 380px;
   --column: 48rem;
   --shadow: 0 4px 16px rgb(0 0 0 / 0.12);
 
@@ -156,14 +157,53 @@ code {
   border-bottom: 0;
 }
 
+/* Title and tags share the header's flexible middle: the title gives way first,
+   because a truncated name is still recognisable and a truncated repo is not. */
+.content-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .content-title {
   margin: 0;
   min-width: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The session's repo and model: facts about the run rather than headings, so
+   they read as labels beside the title. */
+.tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 14rem;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The tags are the first thing a narrow header can do without: the title and
+   the status say more in the same space. */
+@media (max-width: 599px) {
+  .content-heading .tag {
+    display: none;
+  }
+}
+
+.icon-button.active {
+  background: var(--surface-raised);
+  color: var(--text);
 }
 
 .content-body {
@@ -202,6 +242,115 @@ code {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* Below the header the page splits: the conversation, and the details panel
+   when it is open. The header stays across both so the panel's toggle keeps its
+   corner. */
+.session-split {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.session-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+/* ---------- session details panel ---------- */
+
+/*
+  Narrow enough and there is no room to dock it beside the conversation without
+  making both unreadable, so it slides over the top instead. The breakpoint is
+  wider than the sidebar's: this panel needs a diff's worth of width, not a
+  list's.
+*/
+.session-aside {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: min(92vw, var(--aside-width));
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  padding-right: env(safe-area-inset-right);
+  box-shadow: var(--shadow);
+  animation: aside-in 0.2s ease;
+}
+
+@keyframes aside-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+.aside-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 0.4);
+}
+
+@media (min-width: 1100px) {
+  .session-aside {
+    position: static;
+    width: var(--aside-width);
+    box-shadow: none;
+    animation: none;
+  }
+
+  .aside-backdrop {
+    display: none;
+  }
+}
+
+.aside-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex: none;
+  padding: 6px 8px 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.aside-tabs {
+  display: flex;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aside-tabs .link-button.active {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.aside-meta {
+  flex: none;
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.aside-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
 }
 
 /* ---------- sidebar ---------- */
@@ -874,11 +1023,6 @@ summary:focus-visible {
   flex: 1 1 auto;
 }
 
-.session-meta-line {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 /* ---------- messages ---------- */
 
 .messages {
@@ -1119,11 +1263,17 @@ summary:focus-visible {
   gap: 10px;
 }
 
+/* Refresh, or the workspace's own tabs: the panel's heading is the sidebar tab
+   now, so this row only carries controls and hangs to the right. */
 .changes-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--gap);
+}
+
+.changes-panel > .changes-header {
+  justify-content: flex-end;
 }
 
 .changes-header .link-button {
@@ -1381,5 +1531,9 @@ summary:focus-visible {
 
   .sidebar {
     transition: none;
+  }
+
+  .session-aside {
+    animation: none;
   }
 }

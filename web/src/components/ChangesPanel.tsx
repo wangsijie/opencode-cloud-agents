@@ -22,7 +22,8 @@ const STATUS_LABELS: Record<string, string> = {
  * the conversation: the file list and diff come from git in the checkout, and
  * publishing commits, pushes and (optionally) opens a pull request in one step.
  *
- * It loads on demand rather than with the page. Reading a diff runs commands in
+ * It is a tab in the details sidebar, and it reads the workspace when it is
+ * mounted rather than with the session page. Reading a diff runs commands in
  * the container, so paying for it on every session view — and on every poll —
  * would make looking at a conversation more expensive than having one.
  */
@@ -35,7 +36,6 @@ export function ChangesPanel({
   attached: boolean;
   sessionTitle: string;
 }) {
-  const [open, setOpen] = useState(false);
   const [changes, setChanges] = useState<SessionChanges>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -57,13 +57,13 @@ export function ChangesPanel({
     }
   }, [sessionId]);
 
-  // Opening is the request to read; a sleeping container has nothing to read
-  // and must not be woken by a panel being expanded.
+  // Choosing the tab is the request to read; a sleeping container has nothing
+  // to read and must not be woken by a panel being opened.
   useEffect(() => {
-    if (open && attached && !changes && !loading) {
+    if (attached && !changes && !loading) {
       void load();
     }
-  }, [open, attached, changes, loading, load]);
+  }, [attached, changes, loading, load]);
 
   async function publish(event: FormEvent) {
     event.preventDefault();
@@ -99,17 +99,9 @@ export function ChangesPanel({
   const canPublish = dirty || (changes?.unpushedCommits ?? 0) > 0;
 
   return (
-    <section className="card changes-panel">
-      <header className="changes-header">
-        <button
-          className="link-button"
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-        >
-          {open ? '▾' : '▸'} Changes
-        </button>
-        {open && attached ? (
+    <section className="changes-panel">
+      {attached ? (
+        <header className="changes-header">
           <button
             className="link-button"
             type="button"
@@ -118,10 +110,10 @@ export function ChangesPanel({
           >
             Refresh
           </button>
-        ) : null}
-      </header>
+        </header>
+      ) : null}
 
-      {!open ? null : !attached ? (
+      {!attached ? (
         <p className="muted">
           This session is asleep. Send a message to wake the container, then the
           changes show up here.

@@ -17,9 +17,9 @@ type Tab = 'files' | 'terminal';
  * could not, which is what its retirement was waiting on. Both need the
  * container up and neither wakes it — a sleeping session says so instead.
  *
- * Collapsed by default, like the changes panel: opening it is the request, and
- * a session page that listed files on every poll would run container commands
- * for a user who came to read a conversation.
+ * It is a tab in the details sidebar, which is collapsed by default: opening it
+ * is the request, and a session page that listed files on every poll would run
+ * container commands for a user who came to read a conversation.
  */
 export function WorkspacePanel({
   sessionId,
@@ -30,21 +30,12 @@ export function WorkspacePanel({
   attached: boolean;
   directory: string;
 }) {
-  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('files');
 
   return (
-    <section className="card workspace-panel">
-      <header className="changes-header">
-        <button
-          className="link-button"
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-        >
-          {open ? '▾' : '▸'} Workspace
-        </button>
-        {open && attached ? (
+    <section className="workspace-panel">
+      {attached ? (
+        <header className="changes-header">
           <div className="workspace-tabs" role="tablist">
             <button
               className={`link-button${tab === 'files' ? ' active' : ''}`}
@@ -65,10 +56,10 @@ export function WorkspacePanel({
               Terminal
             </button>
           </div>
-        ) : null}
-      </header>
+        </header>
+      ) : null}
 
-      {!open ? null : !attached ? (
+      {!attached ? (
         <p className="muted">
           This session is asleep. Send a message to wake the container, then you
           can browse files or open a terminal.
