@@ -21,6 +21,7 @@
   --surface-sunken: #f5f4ee;
   --border: rgba(31, 30, 26, 0.1);
   --border-strong: rgba(31, 30, 26, 0.2);
+  --border-focus: rgba(31, 30, 26, 0.38);
   --text: #1a1915;
   --text-dim: #6e6b64;
 
@@ -62,6 +63,7 @@
     --surface-sunken: #1f1e1d;
     --border: rgba(255, 255, 255, 0.09);
     --border-strong: rgba(255, 255, 255, 0.17);
+    --border-focus: rgba(255, 255, 255, 0.38);
     --text: #f5f4ef;
     --text-dim: #a8a49c;
 
@@ -569,9 +571,15 @@ textarea {
   color: var(--text-dim);
 }
 
+/* Fields carry focus on their own border; only the outline-drawn controls below
+   need a ring. */
 textarea:focus-visible,
 select:focus-visible,
-input:focus-visible,
+input:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
 a:focus-visible,
 .button:focus-visible,
 .link-button:focus-visible,
@@ -596,8 +604,7 @@ summary:focus-visible {
 }
 
 .composer-box:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--border-focus);
 }
 
 /* The box carries the focus ring for everything inside it, so the field itself
