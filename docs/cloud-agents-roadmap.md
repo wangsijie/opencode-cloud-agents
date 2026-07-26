@@ -258,7 +258,7 @@ M2 落地后确认「还在测试阶段、不需要向后兼容」，把过渡�
 | S2 | `GET /api/sessions/:id/events` SSE 转发（按会话过滤容器事件流） | ✅ 2026-07-26 |
 | S3 | `POST /api/sessions/:id/messages` 续聊 + `.../abort` | ✅ 2026-07-26 |
 | S4 | `web/` Vite + React + TS 脚手架、Wrangler 静态资源托管接线 | ✅ 2026-07-26 |
-| S5 | 列表页 + composer 迁入 SPA | 待做 |
+| S5 | 列表页 + composer 迁入 SPA | ✅ 2026-07-26 |
 | S6 | 会话详情页 + message part 渲染器 | 待做 |
 | S7 | 并发 tab 验证、测试/类型、文档回填 | 待做 |
 
@@ -352,6 +352,25 @@ SPA 暂时挂在 `/app`，`/` 保持现有 Hub 不动——S5 才把列表与 co
 `/`｜`/api/*`｜`/hub/bootstrap.js`｜`/?_hub=…` 全部行为不变、`/nope` 仍是 404；
 浏览器里 375px 与 1100px 两个宽度都正常渲染，控制台无报错，统计数字来自真实 API；
 `pnpm dev:web` 的 5173 能正确代理到 8787。
+
+**S5 实际交付（2026-07-26）**：SPA 接管 `/`，`src/hub-ui.ts`（491 行模板字符串）整体删除。
+composer（仓库 / 模型 / prompt）与会话列表迁入 React；卡片显示一个状态徽章、最后活动时间、
+自动休眠倒计时，以及打开完整 IDE / 重试开工 / 停止 / 删除。徽章直接用 S1 的服务端
+`session.status`，不再像旧 UI 那样在客户端从 lifecycle+phase 拼——这正是 S1 那部分工作的意义。
+
+路由收尾：`/hub-assets/*` 直接走 `env.ASSETS`；其余「浏览器会导航到的」GET 请求返回 SPA
+外壳由前端解析路由；**非 HTML 请求仍然是 JSON 404**，所以敲错的 API 路径不会被回一个页面。
+`/`+`_hub` 进 stock UI、`/assets/*` 走容器代理这两条都在 SPA 之前判定，行为不变。
+
+本地实测（浏览器实操）：375px 下用 composer 真建了一个会话，卡片从「正在开工」跟到
+「任务执行中」；停容器后徽章变「已休眠」且「停止」按钮自动消失；点删除后列表清空；
+1100px 下 meta 变四列、composer 控件同排。
+
+**S5 发现**：两个都在浏览器里才暴露。① flex 子项默认 `min-width: auto`，模型名较长时
+select 不肯收缩，把整行顶出视口（375px 视口渲染成 405px 宽）——补 `min-width: 0`。
+② 轮询原本只在 `!document.hidden` 时跑，从后台切回来最多要等一个周期才更新；补了
+`visibilitychange` 立即刷新。顺带一提，自动化浏览器把页面恒定报成 hidden，所以轮询这条
+必须手动把 `document.hidden` 打开才验得到——直接看截图会误以为轮询坏了。
 
 **S2 发现（两条都很坑）**：
 

@@ -21,12 +21,10 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 
 ## Hub architecture
 
-- `/` is the Hub dashboard. Its composer starts a session from a repository, a
-  model and a prompt; below it, the dashboard lists every session with its
-  dispatch phase and container state.
-- `/app` is the self-built SPA (`web/`, Vite + React), served from the same
-  Worker on the same origin. It is a shell today; it takes over `/` once the
-  session list and the session view move into it.
+- `/` is the Hub dashboard, a self-built SPA (`web/`, Vite + React) served from
+  the same Worker on the same origin. Its composer starts a session from a
+  repository, a model and a prompt; below it, the dashboard lists every session
+  with one status badge and its last activity.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the

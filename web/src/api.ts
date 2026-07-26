@@ -1,9 +1,9 @@
 /**
  * The Hub API, as seen from the browser.
  *
- * Per decision D6 the UI only ever talks to `/api/sessions*` on its own origin.
- * Whether a session is awake (proxied live) or asleep (served from a mirror,
- * once M4 lands) is the Worker's problem, not this layer's.
+ * Per decision D6 the UI only ever talks to its own origin. Whether a session is
+ * awake (proxied live) or asleep (served from a mirror, once M4 lands) is the
+ * Worker's problem, not this layer's.
  */
 
 /** Mirrors `SessionStatus` in the Worker's `src/sessions.ts`. */
@@ -17,14 +17,28 @@ export type SessionStatus =
   | 'error'
   | 'deleting';
 
-export interface SessionSummary {
+export interface InstanceRuntime {
+  container: string;
+  lifecycle: string;
+  idleDeadlineAt?: string;
+}
+
+export interface InstanceView {
+  id: string;
+  lifecycle: 'ready' | 'deleting' | 'delete_failed';
+  runtime: InstanceRuntime;
+}
+
+export interface SessionView {
   id: string;
   repoKey: string;
   model: string;
   title: string;
+  phase: 'queued' | 'starting' | 'working' | 'failed';
   status: SessionStatus;
   lastActivityAt: string;
   lastError?: string;
+  instance: InstanceView;
 }
 
 export interface RepoOption {
@@ -42,19 +56,51 @@ export interface Catalog {
   models: ModelOption[];
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { accept: 'application/json' } });
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      accept: 'application/json',
+      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+      ...init?.headers
+    }
+  });
+  const body: unknown =
+    response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
-    // The Worker reports failures as `{ error }`, but an unauthenticated
-    // request can be intercepted by Access and answer with HTML instead.
-    const detail = await response
-      .json()
-      .then((body: { error?: string }) => body.error)
-      .catch(() => undefined);
-    throw new Error(detail ?? `${path} failed with ${response.status}`);
+    const detail = (body as { error?: string } | null)?.error;
+    throw new Error(detail ?? `请求失败 (${response.status})`);
   }
-  return (await response.json()) as T;
+  return body as T;
 }
 
-export const listSessions = () => getJson<SessionSummary[]>('/api/sessions');
-export const fetchCatalog = () => getJson<Catalog>('/api/catalog');
+export const listSessions = () => call<SessionView[]>('/api/sessions');
+export const fetchCatalog = () => call<Catalog>('/api/catalog');
+
+export const createSession = (input: {
+  repoKey: string;
+  model: string;
+  prompt: string;
+}) => call<SessionView>('/api/sessions', { method: 'POST', body: JSON.stringify(input) });
+
+export const deleteSession = (id: string) =>
+  call<unknown>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const retrySession = (id: string) =>
+  call<SessionView>(`/api/sessions/${encodeURIComponent(id)}/retry`, {
+    method: 'POST'
+  });
+
+export const stopInstance = (id: string) =>
+  call<unknown>(`/api/instances/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+
+/**
+ * Wake a container and return where the stock UI can be entered.
+ *
+ * This is the one place the UI deliberately triggers a wake: opening the full
+ * IDE is an explicit request for a running container.
+ */
+export const wakeInstance = (id: string) =>
+  call<{ launchUrl?: string }>(`/api/instances/${encodeURIComponent(id)}/wake`, {
+    method: 'POST'
+  });

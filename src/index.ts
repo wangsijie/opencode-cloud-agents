@@ -19,7 +19,6 @@ import {
   methodNotAllowed
 } from './http';
 import { Hub } from './hub';
-import { renderHubHtml } from './hub-ui';
 import { requireReadyInstance } from './instance-access';
 import { LifecycleCoordinator } from './lifecycle';
 import { MODEL_OPTIONS } from './opencode-config';
@@ -40,18 +39,15 @@ import {
 
 export { ContainerProxy, Hub, LifecycleCoordinator, Sandbox, SessionAgent };
 
-/** Where the self-built SPA answers until it takes over `/` in S5. */
-const APP_PREFIX = '/app';
-
 /** Matches `build.assetsDir` in [vite.config.ts](../vite.config.ts). */
 const SPA_ASSET_DIR = 'hub-assets';
 
 /**
- * Serve the SPA's HTML for any route below its prefix.
+ * Serve the SPA's HTML.
  *
- * Client-side routes have no file behind them, so the shell is returned for all
- * of them and the SPA reads the path itself. Asset requests never reach here:
- * they carry the hashed `hub-assets` prefix and are served directly.
+ * Client-side routes have no file behind them, so the shell answers for all of
+ * them and the SPA reads the path itself. Asset requests never reach here: they
+ * carry the hashed `hub-assets` prefix and are served directly.
  */
 async function serveAppShell(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -142,18 +138,15 @@ export default {
         );
       }
 
-      if (url.pathname === '/' && request.method === 'GET') {
-        return renderHubHtml();
-      }
-
-      // The SPA. It answers on its own prefix while it is still a shell; S5
-      // moves the session list here and takes over `/`, at which point
-      // `hub-ui.ts` goes away.
-      if (url.pathname === APP_PREFIX || url.pathname.startsWith(`${APP_PREFIX}/`)) {
-        return await serveAppShell(request, env);
-      }
       if (url.pathname.startsWith(`/${SPA_ASSET_DIR}/`)) {
         return await env.ASSETS.fetch(request);
+      }
+
+      // Everything left that a browser would navigate to belongs to the SPA,
+      // which resolves the route itself. Anything else is a genuine 404: a
+      // mistyped API path must not be answered with a page.
+      if (request.method === 'GET' && acceptsHtml(request)) {
+        return await serveAppShell(request, env);
       }
 
       return Response.json({ error: 'Not Found' }, { status: 404 });
