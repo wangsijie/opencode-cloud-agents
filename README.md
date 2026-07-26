@@ -380,10 +380,19 @@ before changing repository visibility or access.
 
 ## Verify and deploy
 
+Pushing to `master` deploys to production. `.github/workflows/deploy.yml` runs
+the tests, the typecheck and `pnpm run deploy` on every push, so there is no
+separate release step — run the same gates locally first:
+
 ```bash
+pnpm test
 pnpm run typecheck
-pnpm run deploy
 ```
+
+`pnpm run deploy` is still available for an out-of-band rollout, and needs
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment. Anything
+a deploy cannot undo — a Durable Object migration, a change of R2 key layout —
+has to be prepared before the push, not after it.
 
 The `v2` Durable Object migration creates the Hub registry, `v3` added the
 now-retired `LogtoSandbox` class, `v4` adds the per-instance lifecycle

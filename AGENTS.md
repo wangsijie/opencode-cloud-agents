@@ -38,16 +38,21 @@ a stale one before assuming the proxy is at fault. `.wrangler/state` holds only
 local Durable Object and R2 data; deleting it is the way to recover from a
 wedged local run.
 
+## Deployment is automatic on push to master
+
+`.github/workflows/deploy.yml` runs `pnpm test`, `pnpm run typecheck` and
+`pnpm run deploy` on every push to `master`. **Pushing to `master` ships to
+production.** There is no separate release step and no manual `pnpm run deploy`
+to offer afterwards.
+
 ## Verification
 
-Run before deployment:
+Run before pushing, because the same commands gate the deploy:
 
 ```bash
 pnpm test
 pnpm run typecheck
 ```
-
-Use `pnpm run deploy` for Cloudflare Worker/Sandbox rollout. After deployment, verify the target Sandbox actually started from the new image and that image-capable models report `capabilities.input.image: true`.
 
 ## Repository boundaries and secrets
 
