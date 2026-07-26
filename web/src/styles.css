@@ -381,8 +381,11 @@ select:focus-visible,
 /* ---------- session page ---------- */
 
 .session-page {
-  /* Room for the composer pinned to the bottom of the viewport. */
-  padding-bottom: 140px;
+  /* Room for the composer pinned to the bottom of the viewport. Its height is
+     measured and published by the session page, because it genuinely varies:
+     the controls wrap differently by width, and the abort button comes and
+     goes. The fallback only has to cover the first paint. */
+  padding-bottom: calc(var(--composer-height, 200px) + 16px);
 }
 
 .session-masthead {
@@ -565,6 +568,49 @@ select:focus-visible,
   margin: 0;
   color: #ff9b9b;
   font-size: 13px;
+}
+
+/* A sent message the container has not acknowledged yet. It reads as the user's
+   own words already, so it is dimmed rather than restyled. */
+.message.pending .message-body {
+  opacity: 0.6;
+}
+
+.message.pending .part-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- wake progress ---------- */
+
+.banner.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
 }
 
 .sticky-composer {

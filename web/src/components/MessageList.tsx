@@ -1,8 +1,21 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { SessionMessage } from '../api';
 import { isRenderablePart, PartView } from './PartView';
 
-export function MessageList({ messages }: { messages: SessionMessage[] }) {
+/**
+ * The conversation.
+ *
+ * `trailing` holds messages the user has sent that the transcript does not
+ * carry yet. They belong inside this list rather than after it so they scroll,
+ * wrap and follow the bottom exactly like the real ones.
+ */
+export function MessageList({
+  messages,
+  trailing
+}: {
+  messages: SessionMessage[];
+  trailing?: ReactNode;
+}) {
   const end = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
@@ -24,7 +37,7 @@ export function MessageList({ messages }: { messages: SessionMessage[] }) {
     if (pinned.current) {
       end.current?.scrollIntoView({ block: 'end' });
     }
-  }, [messages]);
+  }, [messages, trailing]);
 
   return (
     <div className="messages">
@@ -49,6 +62,7 @@ export function MessageList({ messages }: { messages: SessionMessage[] }) {
           </article>
         );
       })}
+      {trailing}
       <div ref={end} />
     </div>
   );

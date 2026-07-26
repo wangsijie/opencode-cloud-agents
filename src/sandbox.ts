@@ -30,6 +30,7 @@ import {
   type AbortOpencodeSessionInput,
   type CreateOpencodeSessionInput,
   type ListOpencodeSessionMessagesInput,
+  type OpencodeSessionActivityInput,
   type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
@@ -38,8 +39,10 @@ import {
   OPENCODE_CONFIG
 } from './opencode-config';
 import {
+  classifyLegacySessionStatuses,
   extractOpenCodeLocation,
   GLOBAL_SESSION_LIST_PATH,
+  LEGACY_SESSION_STATUS_PATH,
   openCodeLocationsFromGlobalSessions,
   openCodeLocationKey,
   queryOpenCodeActivity,
@@ -856,6 +859,48 @@ export class Sandbox extends BaseSandbox<Env> {
       // An accepted prompt is the one moment this object knows for certain that
       // the transcript is about to move, even before the probe observes it.
       this.transcriptDirty = true;
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Whether the container is currently running agent work for one session.
+   *
+   * This reads the same `/session/status` the activity probe classifies, so it
+   * is a passive observation: no work lease, no effect on the idle deadline,
+   * and no ability to start a stopped container. The dispatcher uses it to
+   * confirm one prompt has taken hold before handing over the next — see
+   * [session-agent.ts](session-agent.ts) for why that ordering matters.
+   */
+  async isOpencodeSessionActive(
+    runtimeEpoch: string,
+    input: OpencodeSessionActivityInput
+  ): Promise<boolean> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const url = new URL(
+        LEGACY_SESSION_STATUS_PATH,
+        `http://localhost:${OPENCODE_PORT}`
+      );
+      url.searchParams.set('directory', input.directory);
+      const response = await this.containerFetch(
+        new Request(url.toString(), {
+          headers: {
+            accept: 'application/json',
+            [RUNTIME_EPOCH_HEADER]: runtimeEpoch
+          }
+        }),
+        OPENCODE_PORT
+      );
+      if (!response.ok) {
+        throw new Error(
+          `Failed to read OpenCode session status (${response.status})`
+        );
+      }
+      const activity = classifyLegacySessionStatuses(await response.json());
+      return activity.activeSessionIds.includes(input.opencodeSessionId);
     } finally {
       this.finishActiveOperation();
     }

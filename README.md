@@ -104,6 +104,22 @@ starts inside the container:
    holds a connection while the agent works. The semantic activity probe sees
    the run as busy and the usual 10-minute idle stop follows completion.
 
+Continuing a session takes the same path, whether or not its container is still
+running. `POST /api/sessions/<id>/messages` puts the prompt on the agent's
+durable queue and answers 202; if the container is asleep the agent wakes it,
+restores the workspace and continues the *same* OpenCode session, so the whole
+conversation is still there. The session page renders that wait as progress
+instead of asking the user to press a wake button first.
+
+Several messages sent during a wake are delivered in order and none twice. Two
+mechanisms do that: prompts leave the queue one at a time and a `promptId` a
+client resends is recognised whether it is still queued or already delivered;
+and the agent waits for the first prompt of a batch to make the session busy
+before handing over the next, because prompts arriving at an *idle* session
+simultaneously race, while prompts arriving at a busy one join OpenCode's own
+ordered queue. That queue may answer several messages in one agent turn — the
+order is guaranteed, one turn per message is not.
+
 Dispatch failures (a repository that cannot be cloned, a runtime that will not
 wake) are retried three times with backoff, then the session stays `failed` with
 the underlying error on the record and a retry button in the dashboard.
@@ -227,9 +243,10 @@ curl http://localhost:8787/api/sessions/<session-id>/messages
 # back is how the page learns the session woke or went to sleep.
 curl -N http://localhost:8787/api/sessions/<session-id>/events
 
-# Continue the conversation. Requires an already-running container until M5
-# adds waking-on-send; `model` switches models, and `promptId` makes a retried
-# request the same prompt rather than a second one.
+# Continue the conversation. Returns HTTP 202 whether the container is running
+# or asleep: a prompt to a sleeping session is queued and wakes it. `model`
+# switches models, and `promptId` makes a retried request the same prompt
+# rather than a second one.
 curl -X POST http://localhost:8787/api/sessions/<session-id>/messages \
   -H 'Content-Type: application/json' \
   --data '{"prompt":"Now add a test for it"}'

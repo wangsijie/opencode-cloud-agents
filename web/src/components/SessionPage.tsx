@@ -1,19 +1,40 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent
+} from 'react';
 import {
   abortSession,
   getSession,
+  retrySession,
   sendMessage,
   wakeInstance,
   type Catalog,
+  type RuntimeLifecycle,
   type SessionView
 } from '../api';
 import { formatTime } from '../format';
+import {
+  lastMessageId,
+  reconcileOptimisticPrompts,
+  type OptimisticPrompt
+} from '../optimistic';
 import { navigate } from '../router';
 import { useTranscript } from '../useTranscript';
 import { MessageList } from './MessageList';
 import { StatusBadge } from './StatusBadge';
 
 const POLL_INTERVAL_MS = 5_000;
+
+/** While a wake is in flight the page is a progress indicator, so it polls harder. */
+const WAKING_POLL_INTERVAL_MS = 2_000;
+
+/** Runtime states in which the container can serve the conversation live. */
+const ATTACHED: readonly RuntimeLifecycle[] = ['busy', 'idle'];
 
 /**
  * One conversation.
@@ -22,6 +43,11 @@ const POLL_INTERVAL_MS = 5_000;
  * stream; the session record itself still polls, because status changes
  * (idle, sleeping) are lifecycle transitions the container does not announce
  * on that stream.
+ *
+ * Sending a message never depends on the container being up. A prompt to a
+ * sleeping session is queued and wakes it, so the page's job during that
+ * minute is to show the message as sent and the sandbox as coming back — not
+ * to send the user elsewhere to press a wake button.
  */
 export function SessionPage({
   sessionId,
@@ -36,12 +62,46 @@ export function SessionPage({
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<OptimisticPrompt[]>([]);
+  const composer = useRef<HTMLFormElement>(null);
+
+  // The composer is fixed over the conversation, so the page has to reserve
+  // exactly its height or the last message stays hidden behind it. That height
+  // is not a constant: the controls wrap by width, and the abort and IDE
+  // buttons come and go with the container's state.
+  //
+  // Measured on every commit rather than through a ResizeObserver. Both
+  // triggers that change the height are covered — a re-render for the buttons,
+  // the resize listener for the wrapping — and a layout effect runs
+  // synchronously before paint, so the reservation is never one frame stale.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const node = composer.current;
+      if (node) {
+        // The border box, not the content box: the composer's own padding,
+        // which includes the phone's home-indicator inset, is part of what it
+        // covers.
+        document.documentElement.style.setProperty(
+          '--composer-height',
+          `${node.getBoundingClientRect().height}px`
+        );
+      }
+    };
+    measure();
+    addEventListener('resize', measure);
+    return () => removeEventListener('resize', measure);
+  });
+
+  const runtime = session?.instance.runtime.lifecycle;
+  const attached = runtime !== undefined && ATTACHED.includes(runtime);
   const {
     messages,
     state,
     mirroredAt,
     error: transcriptError
-  } = useTranscript(sessionId);
+    // Keyed to the runtime so a wake the user just triggered re-attaches the
+    // event stream at once, rather than after the browser's reconnect delay.
+  } = useTranscript(sessionId, attached ? 'attached' : runtime);
 
   const refreshSession = useCallback(async () => {
     try {
@@ -54,43 +114,91 @@ export function SessionPage({
     }
   }, [sessionId]);
 
+  // Dispatch is unfinished: the prompt is durable but the container has not
+  // been handed it yet. Which of the two it is waiting on decides the wording.
+  const dispatching = session?.phase === 'queued' || session?.phase === 'starting';
+  const waking = dispatching && !attached;
+
   useEffect(() => {
     void refreshSession();
+    const interval = waking ? WAKING_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
     const timer = setInterval(() => {
       if (!document.hidden) {
         void refreshSession();
       }
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [refreshSession]);
+    }, interval);
+    // Coming back to a backgrounded tab should not wait out a whole interval.
+    const onVisible = () => {
+      if (!document.hidden) {
+        void refreshSession();
+      }
+    };
+    addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshSession, waking]);
 
-  const awake = state === 'live';
+  // Optimistic bubbles disappear as the real messages arrive, whether that is
+  // seconds later on a running container or a cold start later on a sleeping
+  // one. Reconciling against the transcript rather than against the send's
+  // response is what makes both cases the same code path.
+  useEffect(() => {
+    setPending((current) => reconcileOptimisticPrompts(current, messages));
+  }, [messages]);
+
+  const ready = session?.instance.lifecycle === 'ready';
+  const canSend = Boolean(session) && ready && session?.status !== 'deleting';
   // Keyed to the container, not the folded status. Sending a message puts the
   // session back through queued/starting while the agent is already generating,
   // and the badge reports that dispatch — but there is plainly something to
   // interrupt, so keying the button to the status would hide it exactly when it
   // is first wanted.
-  const working = session?.instance.runtime.lifecycle === 'busy';
+  const working = runtime === 'busy';
+
+  const optimistic = useMemo(
+    () =>
+      pending.map((entry) => (
+        <article key={entry.id} className="message user pending">
+          <div className="message-body">
+            <p className="part-text">{entry.text}</p>
+          </div>
+        </article>
+      )),
+    [pending]
+  );
 
   async function send(event: FormEvent) {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text || busy) {
+    if (!text || busy || !canSend) {
       return;
     }
     setBusy(true);
     setActionError(undefined);
-    try {
+    const entry: OptimisticPrompt = {
       // The id makes a retried request the same prompt rather than a second
       // one, which matters because sending is the least reversible action here.
+      id: crypto.randomUUID(),
+      text,
+      sentAt: new Date().toISOString(),
+      ...(lastMessageId(messages) ? { afterMessageId: lastMessageId(messages)! } : {})
+    };
+    setPending((current) => [...current, entry]);
+    setPrompt('');
+    try {
       await sendMessage(sessionId, {
         prompt: text,
         ...(model ? { model } : {}),
-        promptId: crypto.randomUUID()
+        promptId: entry.id
       });
-      setPrompt('');
       await refreshSession();
     } catch (cause) {
+      // The message never reached the queue, so withdraw the bubble and give
+      // the text back rather than leaving a message that will never be answered.
+      setPending((current) => current.filter((queued) => queued.id !== entry.id));
+      setPrompt((current) => (current ? current : text));
       setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
@@ -139,20 +247,52 @@ export function SessionPage({
         </section>
       ) : null}
 
-      {state === 'sleeping' ? (
+      {/*
+        A sleeping session is only worth calling out while it is still asleep.
+        Once a message has queued a wake, the progress bar below says everything
+        this banner would, and more usefully.
+      */}
+      {state === 'sleeping' && !dispatching ? (
         <p className="banner">
           {mirroredAt
-            ? `这个会话已休眠，以下是 ${formatTime(mirroredAt)} 的历史镜像。继续对话需要先唤醒它。`
-            : '这个会话已休眠，且还没有留下历史镜像。唤醒后即可看到完整对话。'}
+            ? `这个会话已休眠，以下是 ${formatTime(mirroredAt)} 的历史镜像。直接发消息即可唤醒并继续。`
+            : '这个会话已休眠，且还没有留下历史镜像。直接发消息即可唤醒并继续。'}
         </p>
       ) : null}
-      {state === 'pending' ? <p className="banner">正在开工，还没有消息。</p> : null}
+      {state === 'pending' && !dispatching ? (
+        <p className="banner">正在开工，还没有消息。</p>
+      ) : null}
       {transcriptError ? <p className="banner error">{transcriptError}</p> : null}
 
-      {messages && messages.length > 0 ? (
-        <MessageList messages={messages} />
+      {(messages && messages.length > 0) || optimistic.length > 0 ? (
+        <MessageList messages={messages ?? []} trailing={optimistic} />
       ) : state === 'live' ? (
         <p className="muted">还没有消息。</p>
+      ) : null}
+
+      {dispatching ? (
+        <p className="banner progress" role="status">
+          <i className="spinner" aria-hidden="true" />
+          {waking
+            ? '正在唤醒沙箱…冷启动通常需要几十秒，消息会在恢复后自动发出。'
+            : '沙箱已就绪，正在把消息交给 agent…'}
+        </p>
+      ) : null}
+
+      {session?.phase === 'failed' ? (
+        <section className="card error">
+          <h2>开工失败</h2>
+          {session.lastError ? <p className="muted mono">{session.lastError}</p> : null}
+          <div className="actions">
+            <button
+              className="button"
+              disabled={busy}
+              onClick={() => run(() => retrySession(sessionId))}
+            >
+              重试
+            </button>
+          </div>
+        </section>
       ) : null}
 
       {actionError ? (
@@ -161,13 +301,18 @@ export function SessionPage({
         </p>
       ) : null}
 
-      <form className="card composer sticky-composer" onSubmit={send} aria-busy={busy}>
+      <form
+        ref={composer}
+        className="card composer sticky-composer"
+        onSubmit={send}
+        aria-busy={busy}
+      >
         <textarea
           className="prompt"
           rows={2}
-          placeholder={awake ? '继续说点什么…' : '会话休眠中，唤醒后可继续'}
+          placeholder={attached ? '继续说点什么…' : '会话已休眠，发送即唤醒并继续'}
           value={prompt}
-          disabled={busy || !awake}
+          disabled={busy || !canSend}
           onChange={(event) => setPrompt(event.target.value)}
         />
         <div className="composer-controls">
@@ -175,7 +320,7 @@ export function SessionPage({
             <select
               aria-label="模型"
               value={model ?? ''}
-              disabled={busy || !awake}
+              disabled={busy || !canSend}
               onChange={(event) => setModel(event.target.value)}
             >
               {catalog.models.map((option) => (
@@ -195,30 +340,36 @@ export function SessionPage({
               中断
             </button>
           ) : null}
-          {awake ? (
-            <button className="button primary" type="submit" disabled={busy || !prompt.trim()}>
-              发送
-            </button>
-          ) : (
+          {/*
+            The stock IDE is still reachable from a sleeping session, but it is
+            no longer the way back into the conversation — that is the composer
+            now, so this stops being the primary action.
+          */}
+          {attached || !session ? null : (
             <button
-              className="button primary"
+              className="button"
               type="button"
-              disabled={busy || !session}
+              disabled={busy || !ready}
               onClick={() =>
                 run(async () => {
-                  const { launchUrl } = await wakeInstance(session!.instance.id);
+                  const { launchUrl } = await wakeInstance(session.instance.id);
                   if (!launchUrl) {
                     throw new Error('唤醒成功，但服务器未返回访问地址');
                   }
-                  // Waking without leaving the page is M5; for now the stock UI
-                  // is where an explicit wake lands.
                   location.assign(launchUrl);
                 })
               }
             >
-              唤醒并打开 IDE ↗
+              打开 IDE ↗
             </button>
           )}
+          <button
+            className="button primary"
+            type="submit"
+            disabled={busy || !canSend || !prompt.trim()}
+          >
+            发送
+          </button>
         </div>
       </form>
     </main>

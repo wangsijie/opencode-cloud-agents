@@ -48,7 +48,16 @@ interface OpencodeEvent {
   properties: Record<string, unknown>;
 }
 
-export function useTranscript(sessionId: string) {
+/**
+ * The transcript for one session: a full read, kept current by the event stream.
+ *
+ * `runtimeKey` is any value that changes when the container behind the session
+ * does. A closed stream is only retried by the browser every 15 seconds, which
+ * is the right cadence for noticing a wake nobody asked for — but far too slow
+ * for a wake the user just triggered by sending a message. Changing this
+ * re-attaches immediately instead of waiting that interval out.
+ */
+export function useTranscript(sessionId: string, runtimeKey?: string) {
   const [messages, setMessages] = useState<SessionMessage[]>();
   const [state, setState] = useState<TranscriptState>();
   const [mirroredAt, setMirroredAt] = useState<string>();
@@ -154,7 +163,7 @@ export function useTranscript(sessionId: string) {
     });
 
     return () => source.close();
-  }, [sessionId, load]);
+  }, [sessionId, load, runtimeKey]);
 
   return { messages, state, mirroredAt, error, reload: load };
 }

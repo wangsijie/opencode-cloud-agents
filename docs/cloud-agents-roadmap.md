@@ -74,6 +74,8 @@ busy 并自动保活，干完自然进入 10 分钟空闲倒计时。
   保活/空闲机制零改动可用。
 - **busy 期间再次 `prompt_async` 同样 204 立即返回，消息进入服务端队列串行执行**：前一任务
   一完成，排队消息立刻开始处理。M5 的消息投递因此无需自建顺序队列，只需保证"唤醒后投递"。
+  **M5 修正**：这条结论的前提是「会话已经 busy」——本次 spike 恰好是在 busy 期间补发的。
+  打到 **idle** 会话上的并发 prompt 不排队而是互相竞争，M5 实测出现乱序，见该里程碑记录。
 - 任务完成后实例准时进入 10 分钟 idle 倒计时。
 - 附带发现：网关会透传上游 `Content-Encoding: gzip`；Worker 内 fetch 自动解压不受影响，
   但脚本/镜像消费方需注意。
@@ -150,6 +152,7 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 ## 四、里程碑
 
 > 开工顺序：最先做 M2 里的 promptAsync spike（见决策记录），然后 M1 → M2 → M3 → M4 → M5。
+> M1–M5 已全部完成（2026-07-26），目标形态闭环；余下的 M6 是按需排期的选做池。
 
 ### M1 · 运行时 repo 置备（去模板化） — ✅ 完成（2026-07-25）
 
@@ -309,6 +312,7 @@ abort 走新的 `Sandbox.abortOpencodeSession` RPC，**不取 work lease**——
 **M3 边界**：两条写路径都要求容器已经醒着，睡着返回 409。队列本身其实能顺手唤醒（派发时
 就会 wake），但「发消息触发一次要等的唤醒」需要前端进度条，那是 M5。这个检查是产品决策
 不是保证：检查与派发之间容器停掉的话，agent 照样会唤醒它，这个竞态无害，M5 之后它就是正路。
+（**M5 已解除**：发消息这条路径的 409 已删除，abort 仍保留该检查。）
 
 本地实测（wrangler dev + 真实容器）：多轮对话连续 7 条消息全部按序落地；中途从
 gemini 切到 grok-4.5，transcript 里两条 assistant 消息的 `modelID` 确实不同；连发 3 条
@@ -506,9 +510,64 @@ SPA 侧休眠横幅从「历史读不到」改成「以下是 <时间> 的历史
 - 休眠会话点开秒出完整历史，容器保持 stopped（用 `/api/instances` 确认无唤醒）。
 - 强杀容器（模拟 crash）后历史最多丢最后一个探测周期内的增量。
 
-### M5 · 无感恢复（睡着直接续聊） — 约 3–4 天
+### M5 · 无感恢复（睡着直接续聊） — ✅ 完成（2026-07-26）
 
-范围：
+**实际交付**：`POST /api/sessions/:id/messages` 去掉「容器必须醒着」的 409 门（M3 边界），
+只保留「实例不在 `ready`（正在删除）」这一条真正无解的拒绝；其余一律入 SessionAgent 持久队列
+并返回 202。**后端投递路径本身几乎没动**——agent 派发时一直都会 `wakeInstanceRuntime`，
+M5 做的是把这条一直存在的路径从「竞态」提升为「正路」。abort 仍然要求容器醒着，因为
+睡着的会话没有东西可打断，为了中断而启动容器是南辕北辙。
+
+前端 `web/src/components/SessionPage.tsx` 重做：输入框不再按 transcript 状态禁用，休眠时
+placeholder 变「发送即唤醒并继续」；发送后立刻插入乐观气泡（`web/src/optimistic.ts`，
+纯函数 + 9 个单测），并在派发未完成且容器未就绪时显示「正在唤醒沙箱…」进度条；
+`phase === 'failed'` 时页面内直接给出错误与重试按钮。「唤醒并打开 IDE」从主按钮降级为
+次要的「打开 IDE ↗」，主按钮永远是「发送」。唤醒期间轮询从 5s 收紧到 2s，
+`useTranscript` 新增 `runtimeKey` 参数——容器状态一变就立刻重连 SSE，
+不必等 `EventSource` 那 15 秒的 `retry`（那个间隔是为「别人把它弄醒了」设计的，
+对「用户刚刚亲手触发的唤醒」太慢）。
+
+**踩到的真问题：连发多条会乱序。** 第一轮实测向休眠会话连发 3 条，transcript 里的顺序是
+**2、3、1**，而且三条被合并进同一个 assistant turn。原因是 `prompt_async` 的 204 只表示
+「已接收」，不表示「已开始」：三条在毫秒级内打到一个 **idle** 会话上，各自去抢着开一个
+turn，于是 OpenCode 记录 user message 的顺序就是竞态结果（三条 created 时间戳只差 44ms）。
+D1 spike 结论「排队串行执行」成立的前提是**会话已经 busy**，而那次 spike 正是在 busy 期间
+补发的，所以没暴露这条。
+
+修法是把不变式收窄到刚好够用：**绝不同时把两条 prompt 交给一个 idle 会话**。新增
+`Sandbox.isOpencodeSessionActive()`（读活动探测同一个 `/session/status`，因此同样不取
+work lease、不影响 idle deadline、不能拉起停止的容器），派发批次里每交出一条就等到会话
+变 busy 再交下一条；只在「后面还有排队」时才等，所以单条消息这个绝大多数情况零额外开销。
+第一条一旦让会话 busy，后面的都落进 OpenCode 自己的有序队列，首次检查即返回。
+等待有上界（250ms × 40 = 10s），超时就继续发并告警——顺序值得有限等待，不值得卡死队列。
+重测 4/5/6 顺序正确。**注意 5 和 6 仍被合并进一个 assistant turn**：这是 OpenCode 队列的
+行为，保证的是顺序而不是「一条消息一个 turn」，已写进 README。
+
+本地实测（wrangler dev + 真实容器，小仓库 octocat/Hello-World 绕开 localBucket 413 限制）：
+
+- 会话跑完 → 停容器 → 确认 `source: mirror` 读到历史 → **直接 POST 消息得到 202，
+  phase `queued`、runtime `sleeping`** → 自动 `starting/waking` → `working/busy`，
+  pending 归零。transcript 里 `opencodeSessionId` 不变，前两轮对话完整保留，
+  新回答接在后面——**上下文来自快照恢复，不是重建**（验收项一）。
+- 派发完成后用同一个 `promptId` 重发：202，transcript 消息数不变，没有第二条（验收项二·不重复）。
+- 向休眠会话连发 3 条：三条全 202，`pendingPromptCount` 到 3，唤醒后按序投递（验收项二·按序）。
+- 被动路径未变：读 transcript / 挂 SSE / 轮询列表在整个过程中依然不唤醒容器（M4 已验，本次未回归改动这些路径）。
+
+**顺手修掉的一个存量 bug**：sticky composer 用的是写死的 `padding-bottom: 140px`，而它在
+375px 下实际有 202px 高——对话末尾约 60px 一直藏在输入框后面（M5 又往这个区域加了进度条，
+更明显）。改为由会话页测量后写进 `--composer-height`：高度真的会变（控件按宽度换行、
+中断/IDE 按钮随状态出现消失、还要算进手机 home indicator 的安全区）。用 `useLayoutEffect`
+每次提交后量一次 + `resize` 监听，而不是 `ResizeObserver`——因为**在自动化浏览器面板里
+ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照测试，元素从 202px 变到
+301px，回调触发 0 次），验证不了的机制不该发出去。layout effect 这条实测有效：
+桌面 154px → 预留 170px，移动 202px → 预留 218px，末条消息底边 580 < 输入框顶边 610。
+（`resize_window` 同样不向页面派发 `resize` 事件，手工 `dispatchEvent` 后监听器正常工作，
+所以那也是面板的限制而非代码问题。）
+
+**范围外**：`RETRY_BACKOFF_MS` 维持 3 次（5s/20s/60s）。冷启动失败 3 次后停在 `failed`
+并在会话页内可见可重试，这是诚实的呈现；在没有证据说明它太紧之前不加旋钮。
+
+原范围：
 
 - `POST /api/sessions/:id/messages`：醒 → 直接 promptAsync；睡 → 202 + SessionAgent
   排队（幂等 id），alarm 驱动 wake → restore → fetch repo → 以同一 `opencodeSessionId`
@@ -542,7 +601,7 @@ SPA 侧休眠横幅从「历史读不到」改成「以下是 <时间> 的历史
 | 风险 | 影响 | 对策 |
 |------|------|------|
 | ~~`promptAsync` 在 1.18.4 的确切语义未验证~~ | ~~M2 根基~~ | 已消解：spike + M2 本地端到端均验证通过 |
-| 冷启动耗时决定"无感"体感 | M5 体验 | 先测量并在 UI 明示进度；优化项进 M6 |
+| 冷启动耗时决定"无感"体感 | M5 体验 | 已在 UI 明示进度（唤醒进度条 + 乐观气泡）；耗时优化进 M6 |
 | 长对话镜像体积 | M4 存储 | 正文进 R2、DO 只存索引；分页读取 |
 | 一实例被 stock UI 开出多个 OpenCode session | 镜像/状态聚焦 | 会话页只聚焦主 `opencodeSessionId`，其余 session 照常被活动探测保活，镜像可顺带导出 |
 | Containers 并发实例上限与 standard-4 成本 | 规模化 | 会话数上来后评估更小 instance type / 并发上限与排队 |

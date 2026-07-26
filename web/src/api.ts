@@ -17,9 +17,20 @@ export type SessionStatus =
   | 'error'
   | 'deleting';
 
+/** Mirrors `RuntimeLifecycle` in the Worker's `src/instances.ts`. */
+export type RuntimeLifecycle =
+  | 'sleeping'
+  | 'waking'
+  | 'busy'
+  | 'idle'
+  | 'quiescing'
+  | 'checkpointing'
+  | 'stopping'
+  | 'error';
+
 export interface InstanceRuntime {
   container: string;
-  lifecycle: string;
+  lifecycle: RuntimeLifecycle;
   idleDeadlineAt?: string;
 }
 

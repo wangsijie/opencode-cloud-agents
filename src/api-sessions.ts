@@ -257,22 +257,24 @@ async function getSessionView(
 }
 
 /**
- * Continue an existing conversation.
+ * Continue an existing conversation, whether or not the container is running.
  *
  * The prompt goes onto the SessionAgent's durable queue, the same path the
  * opening prompt takes: prompts leave that queue one at a time, so messages
  * sent in quick succession arrive in order and a retried request carrying the
  * same `promptId` is not delivered twice.
  *
- * M3 requires the container to already be awake. The queue would happily wake
- * it — that is exactly what the agent does on dispatch — but sending to a
- * sleeping session means a wake the user waits on, and the progress UI for that
- * is M5. Until then this reports the state instead of starting a silent
- * minute-long wake behind an unchanged page.
+ * Sending to a sleeping session wakes it. That is not a new capability — the
+ * agent has always woken the container on dispatch — but it is now the normal
+ * path rather than a race: sending a message *is* the explicit intent the
+ * lifecycle rules require, so this no longer refuses and asks the user to wake
+ * the container first. Every other path into a session stays passive; reading
+ * the transcript, reconnecting the event stream and polling the list still
+ * never start a container.
  *
- * The check is therefore a product decision, not a guarantee: a container that
- * stops in the gap between it and the dispatch is still woken by the agent.
- * That race is harmless, and M5 makes it the normal path.
+ * The response is 202 either way. The caller cannot be kept waiting for a cold
+ * start, so the session view it gets back reports a queued dispatch and the
+ * session page renders the wake as progress.
  */
 async function sendSessionPrompt(
   request: Request,
@@ -280,7 +282,11 @@ async function sendSessionPrompt(
   record: SessionRecord
 ): Promise<Response> {
   const input = await readSendPromptInput(request);
-  await requireAwakeRuntime(env, record, 'send a message to');
+  const instance = await getHub(env).getInstance(record.instanceId);
+  if (!instance || instance.lifecycle !== 'ready') {
+    // A container being deleted is the one state no amount of waking fixes.
+    throw new HttpError(409, 'This session is not ready to receive messages');
+  }
   await resolveSessionAgent(env, record.id).queuePrompt(input);
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
@@ -316,9 +322,9 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
 /**
  * Resolve the running container behind a session, or refuse.
  *
- * Both writing paths need a container that is already up: neither may wake one,
- * because a wake takes long enough that the caller has to be told about it, and
- * that conversation belongs to M5.
+ * Aborting needs a container that is already up, and must not wake one: there
+ * is nothing to interrupt in a sleeping session, so starting a container in
+ * order to stop work in it would be the opposite of the request.
  */
 async function requireAwakeRuntime(
   env: Env,

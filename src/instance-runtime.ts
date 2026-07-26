@@ -48,6 +48,11 @@ export interface AbortOpencodeSessionInput {
   directory: string;
 }
 
+export interface OpencodeSessionActivityInput {
+  opencodeSessionId: string;
+  directory: string;
+}
+
 /** The subset of Sandbox RPC the session dispatcher depends on. */
 export interface InstanceSandboxRpc {
   getInstanceRuntimeStatus(): Promise<InstanceRuntimeStatus>;
@@ -59,6 +64,10 @@ export interface InstanceSandboxRpc {
     runtimeEpoch: string,
     input: PromptOpencodeSessionInput
   ): Promise<void>;
+  isOpencodeSessionActive(
+    runtimeEpoch: string,
+    input: OpencodeSessionActivityInput
+  ): Promise<boolean>;
 }
 
 /** Raised when a wake is queued behind an in-flight shutdown barrier. */

@@ -8,6 +8,12 @@
  * container has accepted the task, so no Worker or Durable Object holds a
  * connection for the lifetime of an agent run.
  *
+ * The queue is also how a sleeping session is continued: a prompt is durable
+ * before the container exists, and the wake happens here rather than in the
+ * request the user is waiting on. That is what lets the session page accept a
+ * message during a cold start instead of sending the user off to wake the
+ * container first.
+ *
  * This object deliberately holds no runtime lifecycle policy. It only calls the
  * LifecycleCoordinator's explicit wake path, and takes a short work lease so a
  * task that starts between two activity probes still resets the idle window.
@@ -17,7 +23,9 @@ import { HUB_DURABLE_OBJECT_ID } from './instances';
 import {
   resolveInstanceLifecycle,
   resolveInstanceSandbox,
-  wakeInstanceRuntime
+  wakeInstanceRuntime,
+  type InstanceSandboxRpc,
+  type OpencodeSessionActivityInput
 } from './instance-runtime';
 import { isModelRef, parseModelRef } from './opencode-config';
 import { findRepo } from './repos';
@@ -48,6 +56,29 @@ const DISPATCH_WORK_LEASE_MS = 90_000;
  * only has to outlive a retry, not the conversation.
  */
 const MAX_DELIVERED_PROMPT_IDS = 50;
+
+/**
+ * How long to wait for the first prompt of a batch to make the session busy,
+ * and how often to check.
+ *
+ * `prompt_async` answers 204 as soon as the container has *accepted* a task,
+ * which is not the same as having started it. OpenCode serializes prompts that
+ * arrive while a session is already running — but prompts that arrive at an
+ * *idle* session within milliseconds of each other each try to start a turn and
+ * race. Measured locally before this wait existed, three messages sent to a
+ * sleeping session were recorded in the order 2, 3, 1.
+ *
+ * So the invariant to hold is narrow: never hand two prompts to an idle
+ * session at once. Waiting for busy before the second prompt establishes it,
+ * and the session stays busy for the rest of the batch, which puts every
+ * remaining prompt on OpenCode's own ordered queue. (That queue may answer
+ * several of them in one agent turn — order is preserved, one-turn-per-message
+ * is not promised.)
+ *
+ * Giving up is deliberate: ordering is worth a bounded wait, not a stuck queue.
+ */
+const PROMPT_SETTLE_POLL_INTERVAL_MS = 250;
+const PROMPT_SETTLE_POLL_ATTEMPTS = 40;
 
 interface PendingPrompt {
   id: string;
@@ -339,9 +370,10 @@ export class SessionAgent extends DurableObject<Env> {
       if (!model) {
         throw new Error(`Unknown model: ${prompt.model}`);
       }
+      const directory = this.state.directory;
       await sandbox.promptOpencodeSessionAsync(wake.runtimeEpoch, {
         opencodeSessionId,
-        directory: this.state.directory,
+        directory,
         providerID: model.providerID,
         modelID: model.modelID,
         text: prompt.text
@@ -354,7 +386,47 @@ export class SessionAgent extends DurableObject<Env> {
         ].slice(-MAX_DELIVERED_PROMPT_IDS),
         lastPromptAt: new Date().toISOString()
       });
+      if (this.state && this.state.pending.length > 0) {
+        await this.awaitPromptSettled(sandbox, wake.runtimeEpoch, {
+          opencodeSessionId,
+          directory
+        });
+      }
     }
+  }
+
+  /**
+   * Wait until the session is running work before handing over another prompt.
+   *
+   * Only called when more prompts are still queued, so the ordinary
+   * one-message case costs nothing. Once this returns the session normally
+   * stays busy for the rest of the batch, so later iterations return on their
+   * first check. Failure to observe it is logged and ignored: sending the next
+   * prompt slightly too early risks the wrong order, while refusing to send it
+   * at all loses the message.
+   */
+  private async awaitPromptSettled(
+    sandbox: InstanceSandboxRpc,
+    runtimeEpoch: string,
+    target: OpencodeSessionActivityInput
+  ): Promise<void> {
+    for (let attempt = 0; attempt < PROMPT_SETTLE_POLL_ATTEMPTS; attempt += 1) {
+      try {
+        if (await sandbox.isOpencodeSessionActive(runtimeEpoch, target)) {
+          return;
+        }
+      } catch (error) {
+        console.warn('Failed to observe session activity between prompts', {
+          sessionId: this.state?.sessionId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
+      await scheduler.wait(PROMPT_SETTLE_POLL_INTERVAL_MS);
+    }
+    console.warn('Prompt did not become active before the next was sent', {
+      sessionId: this.state?.sessionId
+    });
   }
 
   private async update(
