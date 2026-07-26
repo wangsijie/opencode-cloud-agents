@@ -42,6 +42,7 @@ import {
   type SessionTranscript,
   type SessionView
 } from './sessions';
+import { getTranscriptMirror } from './transcript-mirror';
 
 /**
  * Session API.
@@ -101,7 +102,12 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       return json(transcript, 200, {
         'X-OpenCode-Hub-Transcript-State': transcript.state,
         'X-OpenCode-Hub-Transcript-Source': transcript.source,
-        'X-OpenCode-Hub-Transcript-At': transcript.observedAt
+        'X-OpenCode-Hub-Transcript-At': transcript.observedAt,
+        // How current the data is, which for a mirror is not the same as when
+        // it was read.
+        ...(transcript.mirroredAt
+          ? { 'X-OpenCode-Hub-Transcript-Mirrored-At': transcript.mirroredAt }
+          : {})
       });
     }
     if (request.method === 'POST') {
@@ -239,7 +245,14 @@ async function getSessionView(
     ...record,
     instance: view,
     status: deriveSessionStatus(record.phase, view.runtime),
-    lastActivityAt: deriveLastActivityAt(record)
+    lastActivityAt: deriveLastActivityAt(record),
+    // The summary rides along on the runtime status the list already reads, so
+    // knowing how much history a session has costs no extra round trip and no
+    // contact with the container.
+    ...(view.runtime.transcript &&
+    view.runtime.transcript.opencodeSessionId === record.opencodeSessionId
+      ? { transcript: view.runtime.transcript }
+      : {})
   };
 }
 
@@ -440,9 +453,11 @@ async function streamSessionEvents(
  * Read a session's messages without ever starting a container.
  *
  * The session page and its polling are passive paths (see the lifecycle rules
- * in [lifecycle.ts](lifecycle.ts)): a stopped runtime reports `sleeping` and an
- * empty transcript rather than waking. Reading a sleeping session's history
- * lands in M4, when the quiesce pipeline mirrors transcripts to R2.
+ * in [lifecycle.ts](lifecycle.ts)): a stopped runtime is never woken to answer a
+ * read. A running container is read live; a sleeping one is served from the R2
+ * mirror the Sandbox exported on its way down (see
+ * [transcript-mirror.ts](transcript-mirror.ts)), which is what makes a sleeping
+ * session's history readable at all.
  */
 async function readSessionTranscript(
   env: Env,
@@ -460,7 +475,7 @@ async function readSessionTranscript(
 
   if (!record.opencodeSessionId) {
     // Dispatch has not reached `session.create` yet, so there is nothing to
-    // read anywhere — not even a mirror once M4 exists.
+    // read anywhere — not in a container and not in a mirror.
     return { ...base, state: 'pending', source: 'none' };
   }
 
@@ -476,12 +491,12 @@ async function readSessionTranscript(
 
   const instance = await getHub(env).getInstance(record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
-    return { ...base, state: 'sleeping', source: 'none' };
+    return sleepingTranscript(env, record, base);
   }
 
   const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
   if (!runtimeEpoch) {
-    return { ...base, state: 'sleeping', source: 'none' };
+    return sleepingTranscript(env, record, base);
   }
 
   try {
@@ -498,10 +513,64 @@ async function readSessionTranscript(
     // race is a sleeping session, not a failure worth showing the user.
     const message = error instanceof Error ? error.message : String(error);
     if (await isRuntimeGoneError(env, record.instanceId, runtimeEpoch)) {
-      return { ...base, state: 'sleeping', source: 'none' };
+      return sleepingTranscript(env, record, base);
     }
     console.warn(`Failed to read session ${record.id} messages`, error);
-    return { ...base, state: 'error', source: 'none', error: message };
+    // A container that is up but unreadable still has a mirror behind it.
+    // Showing the older history alongside the error beats showing nothing.
+    const mirrored = await readTranscriptMirrorFor(env, record);
+    return {
+      ...base,
+      ...(mirrored ?? { source: 'none' as const }),
+      state: 'error',
+      error: message
+    };
+  }
+}
+
+type TranscriptBase = Pick<
+  SessionTranscript,
+  'sessionId' | 'opencodeSessionId' | 'observedAt' | 'messages'
+>;
+
+/** A sleeping session answers from its mirror, or with nothing at all. */
+async function sleepingTranscript(
+  env: Env,
+  record: SessionRecord,
+  base: TranscriptBase
+): Promise<SessionTranscript> {
+  const mirrored = await readTranscriptMirrorFor(env, record);
+  return { ...base, ...(mirrored ?? { source: 'none' }), state: 'sleeping' };
+}
+
+/**
+ * The mirrored history for a session, if one exists for its current
+ * conversation.
+ *
+ * The stored conversation id is compared with the record's: a mirror left over
+ * from an earlier OpenCode session in the same instance is not this session's
+ * history, and showing it would be worse than showing none.
+ */
+async function readTranscriptMirrorFor(
+  env: Env,
+  record: SessionRecord
+): Promise<
+  | { source: 'mirror'; mirroredAt: string; messages: SessionMessage[] }
+  | undefined
+> {
+  try {
+    const mirror = await getTranscriptMirror(env.BACKUP_BUCKET, record.id);
+    if (!mirror || mirror.opencodeSessionId !== record.opencodeSessionId) {
+      return undefined;
+    }
+    return {
+      source: 'mirror',
+      mirroredAt: mirror.mirroredAt,
+      messages: mirror.messages
+    };
+  } catch (error) {
+    console.warn(`Failed to read session ${record.id} transcript mirror`, error);
+    return undefined;
   }
 }
 

@@ -52,6 +52,14 @@ import {
   WORKSPACE_ROOT
 } from './repos';
 import type { SessionMessage } from './sessions';
+import {
+  buildTranscriptMirror,
+  deleteTranscriptMirror,
+  putTranscriptMirror,
+  transcriptMirrorSummary,
+  type TranscriptMirrorReason,
+  type TranscriptMirrorSummary
+} from './transcript-mirror';
 
 const WORKSPACE_DIRECTORY = WORKSPACE_ROOT;
 const PERSISTENCE_MARKER = `${WORKSPACE_ROOT}/.opencode-persistence-ready`;
@@ -65,12 +73,25 @@ const PURGE_STORAGE_KEY = 'instance:purge-requested';
 const IDENTITY_STORAGE_KEY = 'instance:identity';
 const RUNTIME_GATE_STORAGE_KEY = 'runtime:gate';
 const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
+const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
+const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
 const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
+
+/**
+ * How often a running container re-exports its transcript.
+ *
+ * This is the crash window: a container that dies without quiescing loses
+ * whatever it produced since the last refresh. The activity probe drives the
+ * beat, so a busy session (10s probes) refreshes on this interval while an idle
+ * one (60s probes) refreshes at most once and then stops, because nothing has
+ * changed to export.
+ */
+const TRANSCRIPT_MIRROR_REFRESH_MS = 60 * 1000;
 
 const OPENCODE_ENV = {
   // Keep OpenCode sessions and caches inside the snapshotted directory.
@@ -110,6 +131,18 @@ interface InstanceIdentity {
   repoKey: string;
   state: 'active' | 'deleting';
   initializedAt: string;
+}
+
+/**
+ * The OpenCode conversation this container mirrors.
+ *
+ * The Sandbox learns it by creating the session itself, so nothing has to plumb
+ * the Hub's session record down here: one container is one session, and the
+ * instance id is the session id.
+ */
+interface TranscriptTarget {
+  opencodeSessionId: string;
+  directory: string;
 }
 
 type RuntimeGatePhase =
@@ -193,6 +226,15 @@ export class Sandbox extends BaseSandbox<Env> {
       { directory: WORKSPACE_DIRECTORY }
     ]
   ]);
+  private transcriptTarget: TranscriptTarget | undefined;
+  private transcriptMirror: TranscriptMirrorSummary | undefined;
+  private mirrorInProgress: Promise<TranscriptMirrorSummary | undefined> | undefined;
+  /**
+   * Whether anything may have happened since the last export. It starts true so
+   * a Durable Object that was just restarted re-exports once instead of trusting
+   * a watermark it did not write.
+   */
+  private transcriptDirty = true;
   private instanceActive = false;
   private activeOperations = 0;
   private operationDrainWaiters = new Set<() => void>();
@@ -205,15 +247,26 @@ export class Sandbox extends BaseSandbox<Env> {
     this.persistenceState = ctx;
     this.persistenceEnv = env;
     this.lifecycleReady = ctx.blockConcurrencyWhile(async () => {
-      const [purgeRequested, identity, runtimeGate, knownLocations] = await Promise.all([
+      const [
+        purgeRequested,
+        identity,
+        runtimeGate,
+        knownLocations,
+        transcriptTarget,
+        transcriptMirror
+      ] = await Promise.all([
         ctx.storage.get<boolean>(PURGE_STORAGE_KEY),
         ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY),
         ctx.storage.get<RuntimeGate>(RUNTIME_GATE_STORAGE_KEY),
-        ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY)
+        ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY),
+        ctx.storage.get<TranscriptTarget>(TRANSCRIPT_TARGET_STORAGE_KEY),
+        ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY)
       ]);
       this.purgeRequested = Boolean(purgeRequested);
       this.instanceIdentity = identity;
       this.runtimeGate = runtimeGate;
+      this.transcriptTarget = transcriptTarget;
+      this.transcriptMirror = transcriptMirror;
       this.locationsNeedDiscovery =
         identity?.state === 'active' && knownLocations === undefined;
       for (const location of knownLocations ?? []) {
@@ -396,7 +449,15 @@ export class Sandbox extends BaseSandbox<Env> {
       ) {
         return notRunningExecutionSnapshot();
       }
-      return this.inspectExecutionIfRunning();
+      const snapshot = await this.inspectExecutionIfRunning();
+      if (snapshot.active) {
+        this.transcriptDirty = true;
+      }
+      // The probe is the beat the mirror rides on, but it must not wait for it:
+      // the coordinator's idle accounting depends on this call staying quick,
+      // and an export that fails is not a probe failure.
+      this.scheduleTranscriptRefresh(runtimeEpoch);
+      return snapshot;
     });
   }
 
@@ -469,6 +530,10 @@ export class Sandbox extends BaseSandbox<Env> {
       }
 
       if (this.runtimeGate?.phase === 'checkpointing') {
+        // The OpenCode server is still up here, so the whole conversation can be
+        // read in one call. After the checkpoint it is unreachable until the
+        // next wake, which is exactly what the mirror exists to avoid.
+        await this.mirrorTranscript('idle-stop');
         await this.createCheckpoint('idle-stop');
         await this.setRuntimeGate({
           phase: 'stopping',
@@ -561,6 +626,7 @@ export class Sandbox extends BaseSandbox<Env> {
         });
       }
       if (this.runtimeGate?.phase === 'checkpointing') {
+        await this.mirrorTranscript('force-stop');
         await this.createCheckpoint('idle-stop');
         await this.setRuntimeGate({
           phase: 'stopping',
@@ -664,7 +730,8 @@ export class Sandbox extends BaseSandbox<Env> {
             this.runtimeGate,
             this.persistenceState.container?.running === true
           ),
-      persistence
+      persistence,
+      ...(this.transcriptMirror ? { transcript: this.transcriptMirror } : {})
     };
   }
 
@@ -742,6 +809,12 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to create OpenCode session: ${describeSdkFailure(session)}`
         );
       }
+      // Creating the session is also how this object learns what to mirror.
+      // Nothing else has to tell it: one container is one session.
+      await this.setTranscriptTarget({
+        opencodeSessionId: id,
+        directory: input.directory
+      });
       return id;
     } finally {
       this.finishActiveOperation();
@@ -780,6 +853,9 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to dispatch OpenCode prompt: ${describeSdkFailure(result)}`
         );
       }
+      // An accepted prompt is the one moment this object knows for certain that
+      // the transcript is about to move, even before the probe observes it.
+      this.transcriptDirty = true;
     } finally {
       this.finishActiveOperation();
     }
@@ -853,6 +929,176 @@ export class Sandbox extends BaseSandbox<Env> {
     } finally {
       this.finishActiveOperation();
     }
+  }
+
+  private async setTranscriptTarget(target: TranscriptTarget): Promise<void> {
+    if (
+      this.transcriptTarget?.opencodeSessionId === target.opencodeSessionId &&
+      this.transcriptTarget.directory === target.directory
+    ) {
+      return;
+    }
+    await this.persistenceState.storage.put(
+      TRANSCRIPT_TARGET_STORAGE_KEY,
+      target
+    );
+    this.transcriptTarget = target;
+    this.transcriptDirty = true;
+  }
+
+  /**
+   * Export the session transcript to R2 if enough has changed since the last one.
+   *
+   * This runs detached from the probe that triggers it. It is the only mirror
+   * path that may be skipped: the export during quiesce is the one that has to
+   * be complete, and this one exists purely to bound what a crashed container
+   * loses.
+   */
+  private scheduleTranscriptRefresh(runtimeEpoch: string): void {
+    if (!this.transcriptTarget || !this.transcriptDirty || this.mirrorInProgress) {
+      return;
+    }
+    const mirroredAt = this.transcriptMirror?.mirroredAt;
+    if (
+      mirroredAt &&
+      Date.now() - Date.parse(mirroredAt) < TRANSCRIPT_MIRROR_REFRESH_MS
+    ) {
+      return;
+    }
+    this.persistenceState.waitUntil(
+      this.mirrorTranscript('refresh', runtimeEpoch).catch(() => undefined)
+    );
+  }
+
+  /**
+   * Copy the whole conversation to R2 and record the watermark.
+   *
+   * The read deliberately bypasses the runtime gate: the gate exists to keep
+   * *outside* requests away from a container that is shutting down, whereas this
+   * call is the shutdown, running between the last idle confirmation and the
+   * checkpoint. It stays honest by reading `this.persistenceState.container`
+   * directly, which is by construction this object's current container.
+   *
+   * A failure is reported and swallowed. Losing an export means a sleeping
+   * session shows an older history; failing the stop around it would mean a
+   * container that never sleeps.
+   */
+  private async mirrorTranscript(
+    reason: TranscriptMirrorReason,
+    runtimeEpoch?: string
+  ): Promise<TranscriptMirrorSummary | undefined> {
+    const pending = this.mirrorInProgress;
+    if (pending && reason === 'refresh') {
+      // A refresh only has to be recent, so it rides along with the export that
+      // is already running instead of reading the whole history twice.
+      return pending;
+    }
+    // A shutdown export has to be complete, so it waits out an in-flight
+    // refresh rather than adopting its slightly older result. `pending` never
+    // rejects, so this cannot fail the stop it belongs to.
+    const run = pending
+      ? pending.then(() => this.captureTranscript(reason, runtimeEpoch))
+      : this.captureTranscript(reason, runtimeEpoch);
+    this.mirrorInProgress = run;
+    void run.finally(() => {
+      if (this.mirrorInProgress === run) {
+        this.mirrorInProgress = undefined;
+      }
+    });
+    return run;
+  }
+
+  /** One export attempt, reporting its own failure rather than raising it. */
+  private async captureTranscript(
+    reason: TranscriptMirrorReason,
+    runtimeEpoch?: string
+  ): Promise<TranscriptMirrorSummary | undefined> {
+    try {
+      return await this.doMirrorTranscript(reason, runtimeEpoch);
+    } catch (error) {
+      console.warn('Failed to mirror session transcript', {
+        instanceId: this.instanceIdentity?.id,
+        reason,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
+    }
+  }
+
+  private async doMirrorTranscript(
+    reason: TranscriptMirrorReason,
+    runtimeEpoch?: string
+  ): Promise<TranscriptMirrorSummary | undefined> {
+    const target = this.transcriptTarget;
+    const sessionId = this.instanceIdentity?.id;
+    if (
+      !target ||
+      !sessionId ||
+      this.purgeRequested ||
+      this.persistenceState.container?.running !== true
+    ) {
+      return undefined;
+    }
+    if (runtimeEpoch && this.runtimeGate?.runtimeEpoch !== runtimeEpoch) {
+      // A refresh scheduled by a probe of a runtime that has since been replaced
+      // has nothing useful to say about the current one.
+      return undefined;
+    }
+
+    // Clear the flag before reading, not after: anything that happens during the
+    // read must leave the transcript marked dirty for the next beat.
+    this.transcriptDirty = false;
+    const mirroredAt = new Date().toISOString();
+    try {
+      const result = await this.createTranscriptClient().session.messages({
+        sessionID: target.opencodeSessionId,
+        directory: target.directory
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to read OpenCode session messages: ${describeSdkFailure(result)}`
+        );
+      }
+      const mirror = buildTranscriptMirror({
+        sessionId,
+        opencodeSessionId: target.opencodeSessionId,
+        reason,
+        mirroredAt,
+        messages: result.data ?? []
+      });
+      await putTranscriptMirror(this.persistenceEnv.BACKUP_BUCKET, mirror);
+
+      const summary = transcriptMirrorSummary(mirror);
+      await this.persistenceState.storage.put(
+        TRANSCRIPT_MIRROR_STORAGE_KEY,
+        summary
+      );
+      this.transcriptMirror = summary;
+      return summary;
+    } catch (error) {
+      this.transcriptDirty = true;
+      throw error;
+    }
+  }
+
+  /**
+   * An OpenCode client for the mirror, valid for as long as this object's own
+   * container is running — including the quiescing and checkpointing phases the
+   * epoch-gated client refuses.
+   */
+  private createTranscriptClient(): OpencodeClient {
+    return createOpencodeClient({
+      baseUrl: `http://localhost:${OPENCODE_PORT}`,
+      fetch: (input, init) => {
+        const container = this.persistenceState.container;
+        if (container?.running !== true) {
+          throw new Error('Mirroring requires a running container');
+        }
+        return container
+          .getTcpPort(OPENCODE_PORT)
+          .fetch(new Request(input, init));
+      }
+    });
   }
 
   /**
@@ -1035,6 +1281,14 @@ export class Sandbox extends BaseSandbox<Env> {
     }
     await this.waitForContainerMonitorToSettle();
     await this.deleteBackupObjects(backups);
+    if (this.instanceIdentity?.id) {
+      // The transcript mirror is R2 state this instance owns, so it goes with
+      // the backups rather than outliving the session as an orphan.
+      await deleteTranscriptMirror(
+        this.persistenceEnv.BACKUP_BUCKET,
+        this.instanceIdentity.id
+      );
+    }
     await this.persistenceState.storage.deleteAll();
     return { outcome: 'purged' };
   }

@@ -27,7 +27,9 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
   with one status badge and its last activity.
 - `/sessions/:id` is the conversation view: the transcript is read once and then
   kept current by that session's event stream, and the composer continues the
-  thread (optionally on a different model) or interrupts a running agent. The
+  thread (optionally on a different model) or interrupts a running agent. A
+  sleeping session still shows its full history, read from the R2 transcript
+  mirror rather than from a container. The
   stock OpenCode IDE remains one click away for terminals, file browsing and
   diffs until the self-built UI covers them.
 - The `Hub` Durable Object is the strongly consistent session and instance
@@ -168,6 +170,19 @@ Open <http://localhost:8787>. Building the container image for the first time
 can take several minutes. Local development uses Wrangler's local R2 store via
 `PERSISTENCE_LOCAL_BUCKET=true`.
 
+If `HTTP_PROXY`/`HTTPS_PROXY` are set in the shell, Wrangler hangs after
+"Preparing container image(s)": the image builds, but the server never listens
+and every request times out with nothing in the log. `NO_PROXY` does not help.
+Start it with those variables unset:
+
+```bash
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy pnpm dev
+```
+
+A second `wrangler dev` already holding the port fails the same silent way, so
+check for a stale process before blaming the proxy. `.wrangler/state` holds only
+local Durable Object and R2 data; deleting it recovers a wedged local run.
+
 `pnpm dev` builds the Hub SPA before starting Wrangler, because the Worker
 serves it from `web/dist` and that directory is not checked in. When working on
 the front end, run the Vite dev server alongside it for hot reload:
@@ -210,8 +225,11 @@ curl -X POST http://localhost:8787/api/sessions \
 # Inspect one session.
 curl http://localhost:8787/api/sessions/<session-id>
 
-# Read the transcript. Never wakes a container: a stopped one reports
-# `{"state":"sleeping","messages":[]}` instead of being started.
+# Read the transcript. Never wakes a container: a running one is read live
+# (`"source":"container"`), a stopped one is served from its R2 mirror
+# (`"source":"mirror"` plus the `mirroredAt` the export was taken at).
+# `X-OpenCode-Hub-Transcript-{State,Source,At,Mirrored-At}` carry the same
+# facts in headers.
 curl http://localhost:8787/api/sessions/<session-id>/messages
 
 # Follow the session live. Also never wakes anything, and the stream is
@@ -285,6 +303,15 @@ runtime.
   handshakes to drain, confirms OpenCode is still idle, checkpoints, and stops.
 - Open browser tabs, SSE streams, WebSockets, and status polling do not count as
   execution and therefore do not keep the runtime alive.
+- Just before that checkpoint, while the OpenCode server is still up, the whole
+  session transcript is exported to `transcripts/<session-id>/latest.json`, so a
+  sleeping session's history stays readable without waking anything. A running
+  container re-exports at most once a minute, driven by the activity probe and
+  only when something has actually changed, which bounds what an unexpectedly
+  killed container loses to roughly one refresh interval. The Durable Object
+  keeps only the summary — conversation id, export time, message count — which
+  is what the session list renders. Export failures are logged and never block a
+  stop.
 - Only the latest successful snapshot is retained during normal operation.
 - A backup ledger retains every handle whose R2 deletion has not yet been
   confirmed, so failed stale-backup cleanup remains retryable.
@@ -292,9 +319,9 @@ runtime.
   new UI/API traffic, and returns `202` immediately. A Hub Durable Object alarm
   waits for in-flight startup/checkpoint/stop operations, destroys the container
   without making another snapshot, deletes every object below each tracked
-  `backups/<backup-id>/` prefix, clears the instance Durable Object storage, then
-  removes the Hub record. This keeps slow container teardown out of the client
-  request lifetime.
+  `backups/<backup-id>/` prefix and below `transcripts/<session-id>/`, clears the
+  instance Durable Object storage, then removes the Hub record. This keeps slow
+  container teardown out of the client request lifetime.
 - If any deletion step fails, the record becomes `delete_failed`; the dashboard
   can retry while the backup ledger is still available.
 
@@ -302,7 +329,8 @@ No distributed transaction can cover both R2 and Durable Object storage. The
 ordering above prevents losing backup handles before R2 confirms deletion. An
 R2 lifecycle rule for `backups/` is still recommended for uploads interrupted
 before a handle can be recorded, and for orphaned snapshots created by older
-versions of this project.
+versions of this project. Transcript mirrors are a single overwritten object per
+session, so they need no such rule.
 
 Before the first production deployment, create the bucket from
 `wrangler.jsonc`:

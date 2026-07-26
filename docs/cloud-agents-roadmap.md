@@ -446,9 +446,53 @@ part 渲染器覆盖 text（markdown）/ reasoning（默认折叠）/ tool（单
 - 全程在会话页完成多轮对话（含中途 abort），不打开 stock UI。
 - 两个会话在两个 tab 同时打开互不串扰（沿用 epoch/gateway 隔离）。
 
-### M4 · 休眠可读历史（transcript 镜像） — 约 3–5 天
+### M4 · 休眠可读历史（transcript 镜像） — ✅ 完成（2026-07-26）
 
-范围：
+实际交付：新增 `src/transcript-mirror.ts`（R2 键位、`StoredTranscriptMirror` 与摘要派生、
+读写与按前缀删除，纯函数部分 8 个单测）。**写在 Sandbox DO**：`createOpencodeSession`
+成功时顺手把 `{opencodeSessionId, directory}` 落进 DO storage——容器自己建的会话，
+不必再从 Hub 把 session record 传下来；`mirrorTranscript()` 读全量消息写
+`transcripts/<sessionId>/latest.json`，DO 里只留摘要（会话 id / 导出时间 / 条数 /
+最后一条消息时间），正文一律进 R2。触发点两类：quiesce 与 force-stop 在
+`createCheckpoint` 之前各导一次（此时 server 还活着），以及活动探测节拍上的周期刷新
+（60s，且**只在脏时导**——`promptAsync` 成功或探测到 active 才置脏，所以空闲会话导一次
+就停）。**读在 Worker**：`readSessionTranscript` 的两条 sleeping 分支改读镜像，
+`source` 增加 `mirror`，响应体加 `mirroredAt`、响应头加
+`X-OpenCode-Hub-Transcript-Mirrored-At`。删除走 `doPurgeInstance`，与 backups 同批清理。
+SPA 侧休眠横幅从「历史读不到」改成「以下是 <时间> 的历史镜像」，列表卡片在休眠时多一行
+「历史镜像 N 条 · 相对时间」（数据搭 `getInstanceRuntimeStatus` 的顺风车，不额外往返）。
+
+本地实测（wrangler dev + 真实容器，全新 `.wrangler/state`）：
+
+- 醒着读 `source: container`；60 秒节拍的 `reason: refresh` 镜像按时出现。
+- `POST /api/instances/:id/stop` 后连读 3 次，全是 `state: sleeping` + `source: mirror` +
+  完整 2 条历史，且每次都确认 `container: stopped` / `platformRunning: false`——**读镜像
+  没有唤醒任何东西**（M4 验收项一）。停机那次导出的 `reason` 确实是 `force-stop`，
+  时间戳晚于此前的 refresh。
+- 唤醒后续聊到 5 条消息，等到 refresh 镜像追平，然后 `docker kill` 容器模拟 crash：历史
+  仍是 5 条，丢的正好是最后一条 assistant 消息在镜像之后新增的 part（验收项二）。
+- 删除会话后 `wrangler r2 object get --local` 报 does not exist，transcripts 前缀清干净。
+
+**三个实现上的判断**：
+
+1. **镜像读绕开 runtime gate**。gate 的意义是挡住*外部*请求进入正在关机的容器，而这次导出
+   本身就是关机流程的一部分（跑在最后一次 idle 确认与 checkpoint 之间，gate 已是
+   `checkpointing`），用 epoch client 会被自己拦住。改为直接读
+   `this.persistenceState.container`——那按定义就是本 DO 当前的容器。
+2. **周期刷新是 fire-and-forget**。它挂在 `getExecutionSnapshotIfRunning` 上，但用
+   `waitUntil` 脱开：coordinator 的空闲判定依赖这个调用够快，而导出失败不该算探测失败。
+   停机那次则必须等——所以 `mirrorTranscript` 对 refresh 是"搭车已在跑的那次"，对
+   idle-stop/force-stop 是"等前一次跑完再重新导一遍"，避免关机时采用一个稍旧的结果。
+3. **脏标记默认为 true**。DO 重启后不信任自己没写过的水位，先补导一次。
+
+**一个顺手的加固**：容器醒着但读消息失败时（S1 原本返回 `state: error` + 空历史），现在也
+回落到镜像——crash 实测里第一次读正好命中这条路径，页面显示的是"报错横幅 + 旧历史"而不是
+一片空白。
+
+**范围外**：SSE 在休眠时的行为不变（仍是一帧 `sleeping` 就关流）。前端改成只在状态发生
+变化时才重新拉取，否则休眠会话每 15 秒重连都会把镜像重下一遍。
+
+原范围：
 
 - quiesce 流水线中（`performQuiesceAndStopIfIdle` 确认空闲之后、checkpoint 之前）导出
   会话消息全量 JSON 到 R2 `transcripts/<sessionId>/`；DO 存摘要与导出水位。

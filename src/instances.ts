@@ -1,3 +1,5 @@
+import type { TranscriptMirrorSummary } from './transcript-mirror';
+
 export const HUB_DURABLE_OBJECT_ID = 'opencode-hub';
 
 export type InstanceLifecycle = 'ready' | 'deleting' | 'delete_failed';
@@ -52,6 +54,11 @@ export interface InstanceRuntimeStatus {
       message: string;
     };
   };
+  /**
+   * The last transcript export, present once this instance has run a session.
+   * It is what makes a sleeping session readable without waking anything.
+   */
+  transcript?: TranscriptMirrorSummary;
 }
 
 export interface InstanceView extends InstanceRecord {

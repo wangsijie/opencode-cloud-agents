@@ -11,6 +11,7 @@
  */
 import type { Message, Part } from '@opencode-ai/sdk/v2';
 import type { InstanceRuntimeStatus, InstanceView } from './instances';
+import type { TranscriptMirrorSummary } from './transcript-mirror';
 
 export type SessionPhase =
   /** Accepted, waiting for the agent alarm to start dispatch. */
@@ -80,6 +81,11 @@ export interface SessionView extends SessionRecord {
   status: SessionStatus;
   /** Latest moment this session is known to have moved, for list sorting. */
   lastActivityAt: string;
+  /**
+   * Summary of the R2 transcript mirror, when one has been exported. The list
+   * renders it instead of asking a container how much history a session has.
+   */
+  transcript?: TranscriptMirrorSummary;
 }
 
 /**
@@ -142,7 +148,7 @@ export interface SessionMessage {
 export type SessionTranscriptState =
   /** Read live from the running container. */
   | 'live'
-  /** The container is stopped; reading it would be a wake, which is forbidden. */
+  /** The container is stopped, so the history comes from the R2 mirror. */
   | 'sleeping'
   /** The OpenCode session does not exist yet (dispatch has not created it). */
   | 'pending'
@@ -154,11 +160,14 @@ export interface SessionTranscript {
   opencodeSessionId?: string;
   state: SessionTranscriptState;
   /**
-   * Where the messages came from. M4 adds an R2 `mirror` source so a sleeping
-   * session still returns history; until then `none` means "no history here".
+   * Where the messages came from. `mirror` is the R2 copy exported before the
+   * container went to sleep, so it may be missing anything that happened after
+   * `mirroredAt`; `none` means there is no history to show at all.
    */
-  source: 'container' | 'none';
+  source: 'container' | 'mirror' | 'none';
   observedAt: string;
+  /** When the mirror was exported. Only set when `source` is `mirror`. */
+  mirroredAt?: string;
   messages: SessionMessage[];
   error?: string;
 }

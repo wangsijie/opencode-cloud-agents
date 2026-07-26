@@ -2,8 +2,8 @@
  * The Hub API, as seen from the browser.
  *
  * Per decision D6 the UI only ever talks to its own origin. Whether a session is
- * awake (proxied live) or asleep (served from a mirror, once M4 lands) is the
- * Worker's problem, not this layer's.
+ * awake (proxied live) or asleep (served from the R2 mirror) is the Worker's
+ * problem, not this layer's — the shape of a transcript is the same either way.
  */
 
 /** Mirrors `SessionStatus` in the Worker's `src/sessions.ts`. */
@@ -39,6 +39,7 @@ export interface SessionView {
   lastActivityAt: string;
   lastError?: string;
   instance: InstanceView;
+  transcript?: TranscriptSummary;
 }
 
 export interface RepoOption {
@@ -107,8 +108,18 @@ export type TranscriptState = 'live' | 'sleeping' | 'pending' | 'error';
 
 export interface Transcript {
   state: TranscriptState;
+  source: 'container' | 'mirror' | 'none';
+  /** Set when `source` is `mirror`: nothing after this moment is included. */
+  mirroredAt?: string;
   messages: SessionMessage[];
   error?: string;
+}
+
+/** Summary of a session's mirrored history, as shown in the list. */
+export interface TranscriptSummary {
+  mirroredAt: string;
+  messageCount: number;
+  lastMessageAt?: string;
 }
 
 export const listSessions = () => call<SessionView[]>('/api/sessions');

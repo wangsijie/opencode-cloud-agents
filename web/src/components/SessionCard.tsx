@@ -96,6 +96,21 @@ export function SessionCard({
           <dt>自动休眠</dt>
           <dd>{formatIdleShutdown(session)}</dd>
         </div>
+        {/*
+          A sleeping session is the case where the mirror is the whole story, so
+          that is where its summary is worth the row: it says the history is
+          there to read without waking anything. While the container runs the
+          same number would just be a stale copy of what the page already shows.
+        */}
+        {session.status === 'sleeping' && session.transcript ? (
+          <div>
+            <dt>历史镜像</dt>
+            <dd>
+              {session.transcript.messageCount} 条 ·{' '}
+              {formatRelative(session.transcript.mirroredAt)}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       {session.lastError ? <p className="session-error">{session.lastError}</p> : null}

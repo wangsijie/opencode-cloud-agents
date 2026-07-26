@@ -7,6 +7,7 @@ import {
   type Catalog,
   type SessionView
 } from '../api';
+import { formatTime } from '../format';
 import { navigate } from '../router';
 import { useTranscript } from '../useTranscript';
 import { MessageList } from './MessageList';
@@ -35,7 +36,12 @@ export function SessionPage({
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const { messages, state, error: transcriptError } = useTranscript(sessionId);
+  const {
+    messages,
+    state,
+    mirroredAt,
+    error: transcriptError
+  } = useTranscript(sessionId);
 
   const refreshSession = useCallback(async () => {
     try {
@@ -135,7 +141,9 @@ export function SessionPage({
 
       {state === 'sleeping' ? (
         <p className="banner">
-          {'这个会话已休眠，历史暂时读不到。休眠后仍可读历史要等 M4；现在可以先唤醒它。'}
+          {mirroredAt
+            ? `这个会话已休眠，以下是 ${formatTime(mirroredAt)} 的历史镜像。继续对话需要先唤醒它。`
+            : '这个会话已休眠，且还没有留下历史镜像。唤醒后即可看到完整对话。'}
         </p>
       ) : null}
       {state === 'pending' ? <p className="banner">正在开工，还没有消息。</p> : null}

@@ -51,8 +51,11 @@ interface OpencodeEvent {
 export function useTranscript(sessionId: string) {
   const [messages, setMessages] = useState<SessionMessage[]>();
   const [state, setState] = useState<TranscriptState>();
+  const [mirroredAt, setMirroredAt] = useState<string>();
   const [error, setError] = useState<string>();
   const building = useRef(new Map<string, Building>());
+  /** The last state the event stream reported, to spot transitions. */
+  const reportedState = useRef<TranscriptState | 'ended' | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
@@ -60,6 +63,10 @@ export function useTranscript(sessionId: string) {
       building.current = toMap(transcript.messages);
       setMessages(toList(building.current));
       setState(transcript.state);
+      reportedState.current = transcript.state;
+      // Only a mirrored read is stale, so this clears itself the moment the
+      // history comes from a live container again.
+      setMirroredAt(transcript.mirroredAt);
       setError(transcript.error);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -129,8 +136,15 @@ export function useTranscript(sessionId: string) {
         void load();
         return;
       }
+      const previous = reportedState.current;
+      reportedState.current = payload.state;
       setState(payload.state);
-      if (payload.state === 'live') {
+      // A live stream is always re-read, because a reconnect means there was a
+      // gap the stream did not cover. Anything else is only re-read when the
+      // state actually changed, and with it the source of the transcript: a
+      // sleeping session reconnects every 15 seconds and must not re-download
+      // its mirror each time.
+      if (payload.state === 'live' || payload.state !== previous) {
         void load();
       }
     });
@@ -142,5 +156,5 @@ export function useTranscript(sessionId: string) {
     return () => source.close();
   }, [sessionId, load]);
 
-  return { messages, state, error, reload: load };
+  return { messages, state, mirroredAt, error, reload: load };
 }
