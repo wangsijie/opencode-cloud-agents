@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
-  fetchChanges,
-  publishChanges,
-  type PublishResult,
-  type SessionChanges
-} from '../api';
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import { DiffFile, DiffModeEnum, DiffView } from '@git-diff-view/react';
+import '@git-diff-view/react/styles/diff-view.css';
+import { fetchChanges, type ChangedFile, type SessionChanges } from '../api';
+import { usePrefersDark } from '../usePrefersDark';
 
 const STATUS_LABELS: Record<string, string> = {
   added: 'added',
@@ -15,34 +20,275 @@ const STATUS_LABELS: Record<string, string> = {
   conflicted: 'conflicted'
 };
 
+// One letter in the tree, the full word in the section header: the tree is a
+// map, and a map has no room for the word "modified" on every row.
+const STATUS_CODES: Record<string, string> = {
+  added: 'A',
+  modified: 'M',
+  deleted: 'D',
+  renamed: 'R',
+  untracked: 'U',
+  conflicted: 'C'
+};
+
+type DiffMode = 'unified' | 'split';
+
+const MODE_KEY = 'hub.diffViewMode';
+
+// Unified is the default because the sidebar starts at 380px, and two columns
+// in that width is two unreadable columns.
+function readMode(): DiffMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'split' ? 'split' : 'unified';
+  } catch {
+    return 'unified';
+  }
+}
+
 /**
- * What the agent changed, and the way out of the container.
+ * The server hands over `git diff HEAD` verbatim: every file in one string.
+ * The viewer parses one file at a time, so the string is cut at each
+ * `diff --git` header and keyed by the new-side path — the same path the
+ * status list uses, which is what lets the two agree on renames.
  *
- * This is the panel that makes a session's output reviewable without leaving
- * the conversation: the file list and diff come from git in the checkout, and
- * publishing commits, pushes and (optionally) opens a pull request in one step.
+ * Git quotes paths with special characters, which these regexes do not chase;
+ * such a file simply keeps its place in the tree with no diff attached.
+ */
+function splitRawDiff(diff: string): Map<string, string> {
+  const byPath = new Map<string, string>();
+  for (const block of diff.split(/^(?=diff --git )/m)) {
+    if (!block.startsWith('diff --git ')) {
+      continue;
+    }
+    const path =
+      /^\+\+\+ b\/(.+)$/m.exec(block)?.[1] ??
+      /^rename to (.+)$/m.exec(block)?.[1] ??
+      // Deleted files have `+++ /dev/null`; their name is on the old side.
+      /^--- a\/(.+)$/m.exec(block)?.[1];
+    if (path) {
+      byPath.set(path, block);
+    }
+  }
+  return byPath;
+}
+
+interface FileSection {
+  file: ChangedFile;
+  block?: string;
+  binary: boolean;
+  hasHunks: boolean;
+  // The 200k truncation can cut a hunk header in half, and the parser throws
+  // on that inside the viewer's own effect — too late to catch. Each block is
+  // parsed once up front so a broken tail degrades to plain text instead of
+  // taking the panel down.
+  parses: boolean;
+}
+
+function buildSections(changes: SessionChanges): FileSection[] {
+  const byPath = splitRawDiff(changes.diff);
+  return changes.files.map((file) => {
+    const block = byPath.get(file.path);
+    if (!block) {
+      return { file, binary: false, hasHunks: false, parses: false };
+    }
+    const binary = /^(Binary files |GIT binary patch)/m.test(block);
+    const hasHunks = /^@@ /m.test(block);
+    let parses = false;
+    if (!binary && hasHunks) {
+      try {
+        const probe = DiffFile.createInstance({
+          oldFile: { fileName: file.renamedFrom ?? file.path },
+          newFile: { fileName: file.path },
+          hunks: [block]
+        });
+        probe.initRaw();
+        probe.clear();
+        parses = true;
+      } catch {
+        // Leave `parses` false; the raw block still gets shown.
+      }
+    }
+    return { file, block, binary, hasHunks, parses };
+  });
+}
+
+interface TreeDir {
+  name: string;
+  dirs: TreeDir[];
+  files: ChangedFile[];
+}
+
+interface BuildNode {
+  dirs: Map<string, BuildNode>;
+  files: ChangedFile[];
+}
+
+function buildTree(files: ChangedFile[]): TreeDir {
+  const root: BuildNode = { dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split('/');
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      let next = node.dirs.get(part);
+      if (!next) {
+        next = { dirs: new Map(), files: [] };
+        node.dirs.set(part, next);
+      }
+      node = next;
+    }
+    node.files.push(file);
+  }
+  // Chains of lone directories collapse into one row (`web/src/components`):
+  // a tree of changes is almost always deep and narrow, and a rail of
+  // single-child folders is depth with no information in it.
+  const convert = (name: string, node: BuildNode): TreeDir => {
+    let label = name;
+    let current = node;
+    while (current.files.length === 0 && current.dirs.size === 1) {
+      const [childName, child] = [...current.dirs][0];
+      label = `${label}/${childName}`;
+      current = child;
+    }
+    return {
+      name: label,
+      dirs: [...current.dirs]
+        .map(([childName, child]) => convert(childName, child))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      files: [...current.files].sort((a, b) => a.path.localeCompare(b.path))
+    };
+  };
+  const converted = [...root.dirs]
+    .map(([name, node]) => convert(name, node))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    name: '',
+    dirs: converted,
+    files: [...root.files].sort((a, b) => a.path.localeCompare(b.path))
+  };
+}
+
+const basename = (path: string) => path.split('/').pop() ?? path;
+
+function TreeLevel({
+  node,
+  onSelect
+}: {
+  node: TreeDir;
+  onSelect: (path: string) => void;
+}) {
+  return (
+    <ul className="file-tree" role="group">
+      {node.dirs.map((dir) => (
+        <li key={dir.name}>
+          <details open>
+            <summary className="file-tree-dir mono">{dir.name}/</summary>
+            <TreeLevel node={dir} onSelect={onSelect} />
+          </details>
+        </li>
+      ))}
+      {node.files.map((file) => (
+        <li key={file.path}>
+          <button
+            type="button"
+            className="file-tree-file"
+            title={
+              file.renamedFrom
+                ? `${file.renamedFrom} → ${file.path}`
+                : file.path
+            }
+            onClick={() => onSelect(file.path)}
+          >
+            <span className={`tree-status status-${file.status}`}>
+              {STATUS_CODES[file.status] ?? '?'}
+            </span>
+            <span className="mono file-tree-name">{basename(file.path)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// The viewer parses and highlights on mount, which is work worth keeping: memo
+// stops a refresh of unrelated state from re-rendering every file's diff.
+const FileDiffBody = memo(function FileDiffBody({
+  section,
+  mode,
+  dark
+}: {
+  section: FileSection;
+  mode: DiffMode;
+  dark: boolean;
+}) {
+  const { file, block, binary, hasHunks, parses } = section;
+  const data = useMemo(
+    () =>
+      block && parses
+        ? {
+            oldFile: { fileName: file.renamedFrom ?? file.path },
+            newFile: { fileName: file.path },
+            hunks: [block]
+          }
+        : undefined,
+    [file, block, parses]
+  );
+
+  if (file.status === 'untracked') {
+    return (
+      <p className="muted diff-file-note">
+        New file — not yet tracked, so there is no diff against HEAD.
+      </p>
+    );
+  }
+  if (!block) {
+    return <p className="muted diff-file-note">No diff for this file.</p>;
+  }
+  if (binary) {
+    return <p className="muted diff-file-note">Binary file — no text diff.</p>;
+  }
+  if (!hasHunks) {
+    return <p className="muted diff-file-note">No content changes.</p>;
+  }
+  if (!data) {
+    // A block the parser refuses (usually the truncated tail) is still a diff
+    // someone can read.
+    return <pre className="diff-raw mono">{block}</pre>;
+  }
+  return (
+    <DiffView
+      data={data}
+      diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
+      diffViewTheme={dark ? 'dark' : 'light'}
+      diffViewHighlight
+      diffViewWrap
+      diffViewFontSize={12}
+    />
+  );
+});
+
+/**
+ * What the agent changed, read-only.
  *
- * It is a tab in the details sidebar, and it reads the workspace when it is
- * mounted rather than with the session page. Reading a diff runs commands in
- * the container, so paying for it on every session view — and on every poll —
- * would make looking at a conversation more expensive than having one.
+ * The file list and diff come from git in the checkout; committing and pushing
+ * belong to the agent, so this panel only shows. It is a tab in the details
+ * sidebar, and it reads the workspace when it is mounted rather than with the
+ * session page. Reading a diff runs commands in the container, so paying for
+ * it on every session view — and on every poll — would make looking at a
+ * conversation more expensive than having one.
  */
 export function ChangesPanel({
   sessionId,
-  attached,
-  sessionTitle
+  attached
 }: {
   sessionId: string;
   attached: boolean;
-  sessionTitle: string;
 }) {
   const [changes, setChanges] = useState<SessionChanges>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [withPullRequest, setWithPullRequest] = useState(true);
-  const [published, setPublished] = useState<PublishResult>();
+  const [mode, setMode] = useState<DiffMode>(readMode);
+  const dark = usePrefersDark();
+  const sectionRefs = useRef(new Map<string, HTMLElement>());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,47 +311,60 @@ export function ChangesPanel({
     }
   }, [attached, changes, loading, load]);
 
-  async function publish(event: FormEvent) {
-    event.preventDefault();
-    const commitMessage = message.trim() || sessionTitle;
-    if (!commitMessage || busy) {
-      return;
-    }
-    setBusy(true);
-    setError(undefined);
+  const setDiffMode = useCallback((next: DiffMode) => {
+    setMode(next);
     try {
-      const result = await publishChanges(sessionId, {
-        message: commitMessage,
-        ...(withPullRequest
-          ? {
-              pullRequest: {
-                title: commitMessage.split('\n')[0],
-                body: `Generated by OpenCode Cloud session ${sessionId}.`
-              }
-            }
-          : {})
-      });
-      setPublished(result);
-      setMessage('');
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
+      localStorage.setItem(MODE_KEY, next);
+    } catch {
+      // Storage can be unavailable; the choice just resets next visit.
     }
-  }
+  }, []);
 
-  const dirty = (changes?.files.length ?? 0) > 0;
-  const canPublish = dirty || (changes?.unpushedCommits ?? 0) > 0;
+  const sections = useMemo(
+    () => (changes ? buildSections(changes) : []),
+    [changes]
+  );
+  const tree = useMemo(
+    () => (changes ? buildTree(changes.files) : undefined),
+    [changes]
+  );
+
+  const scrollToFile = useCallback((path: string) => {
+    sectionRefs.current
+      .get(path)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
 
   return (
     <section className="changes-panel">
       {attached ? (
         <header className="changes-header">
+          {changes && changes.files.length > 0 ? (
+            <div className="diff-mode-toggle" role="group" aria-label="Diff layout">
+              <button
+                className={`link-button${mode === 'unified' ? ' active' : ''}`}
+                type="button"
+                aria-pressed={mode === 'unified'}
+                onClick={() => setDiffMode('unified')}
+              >
+                Unified
+              </button>
+              <button
+                className={`link-button${mode === 'split' ? ' active' : ''}`}
+                type="button"
+                aria-pressed={mode === 'split'}
+                onClick={() => setDiffMode('split')}
+              >
+                Split
+              </button>
+            </div>
+          ) : (
+            <span />
+          )}
           <button
             className="link-button"
             type="button"
-            disabled={loading || busy}
+            disabled={loading}
             onClick={() => void load()}
           >
             Refresh
@@ -132,44 +391,46 @@ export function ChangesPanel({
                   ? ` · ${changes.unpushedCommits} unpushed commits`
                   : ''}
               </p>
-              {changes.files.length > 0 ? (
-                <ul className="changed-files">
-                  {changes.files.map((file) => (
-                    <li key={file.path}>
-                      <span className={`file-status status-${file.status}`}>
-                        {STATUS_LABELS[file.status] ?? file.status}
-                      </span>
-                      <span className="mono">
-                        {file.renamedFrom ? `${file.renamedFrom} → ` : ''}
-                        {file.path}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              {changes.files.length > 0 && tree ? (
+                <nav className="file-tree-root" aria-label="Changed files">
+                  <TreeLevel node={tree} onSelect={scrollToFile} />
+                </nav>
               ) : (
                 <p className="muted">Working tree is clean — nothing uncommitted.</p>
               )}
-              {changes.diff ? (
-                <details className="diff-view">
-                  <summary>View diff</summary>
-                  <pre className="diff mono">{changes.diff}</pre>
-                  {changes.diffTruncated ? (
-                    <p className="muted">
-                      Diff was too long and got truncated; ask the agent to run
-                      git diff for the full text.
-                    </p>
-                  ) : null}
-                </details>
-              ) : null}
-              {/*
-                Untracked files have no diff against HEAD, and showing one would
-                mean staging them during a read. Saying so beats a file list the
-                diff silently disagrees with.
-              */}
-              {changes.files.some((file) => file.status === 'untracked') ? (
+              {sections.map((section) => (
+                <article
+                  key={section.file.path}
+                  className="diff-file"
+                  ref={(el) => {
+                    if (el) {
+                      sectionRefs.current.set(section.file.path, el);
+                    } else {
+                      sectionRefs.current.delete(section.file.path);
+                    }
+                  }}
+                >
+                  <header className="diff-file-header">
+                    <span
+                      className={`file-status status-${section.file.status}`}
+                    >
+                      {STATUS_LABELS[section.file.status] ??
+                        section.file.status}
+                    </span>
+                    <span className="mono diff-file-path">
+                      {section.file.renamedFrom
+                        ? `${section.file.renamedFrom} → `
+                        : ''}
+                      {section.file.path}
+                    </span>
+                  </header>
+                  <FileDiffBody section={section} mode={mode} dark={dark} />
+                </article>
+              ))}
+              {changes.diffTruncated ? (
                 <p className="muted">
-                  New (untracked) files are not in the diff, but they are
-                  committed along with everything else.
+                  Diff was too long and got truncated; ask the agent to run git
+                  diff for the full text.
                 </p>
               ) : null}
             </>
@@ -179,60 +440,6 @@ export function ChangesPanel({
             <p className="banner error" role="alert">
               {error}
             </p>
-          ) : null}
-
-          {published ? (
-            <p className="banner">
-              Pushed to <span className="mono">{published.branch}</span>
-              {published.nothingToCommit
-                ? ' (working tree was already clean; pushed earlier commits)'
-                : ''}
-              {published.pullRequestUrl ? (
-                <>
-                  {' · '}
-                  <a href={published.pullRequestUrl} target="_blank" rel="noreferrer">
-                    View PR ↗
-                  </a>
-                </>
-              ) : null}
-            </p>
-          ) : null}
-
-          {changes ? (
-            <form className="publish-form" onSubmit={publish} aria-busy={busy}>
-              <textarea
-                className="prompt"
-                rows={2}
-                placeholder="Commit message (defaults to the session title)"
-                value={message}
-                disabled={busy || !canPublish}
-                onChange={(event) => setMessage(event.target.value)}
-              />
-              <div className="composer-controls">
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={withPullRequest}
-                    disabled={busy || !canPublish}
-                    onChange={(event) => setWithPullRequest(event.target.checked)}
-                  />
-                  Open a PR too
-                </label>
-                <button
-                  className="button primary"
-                  type="submit"
-                  disabled={busy || !canPublish}
-                >
-                  Commit and push to {changes.publishBranch}
-                </button>
-              </div>
-              {changes.onDefaultBranch ? (
-                <p className="muted">
-                  Changes move to <span className="mono">{changes.publishBranch}</span>{' '}
-                  first — nothing is committed straight to {changes.defaultBranch}.
-                </p>
-              ) : null}
-            </form>
           ) : null}
         </>
       )}

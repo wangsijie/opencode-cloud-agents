@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@cloudflare/sandbox": "0.12.3",
+    "@git-diff-view/react": "^0.1.7",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

@@ -258,14 +258,6 @@ export interface WorkspaceFile {
   truncated: boolean;
 }
 
-export interface PublishResult {
-  branch: string;
-  commit?: { sha: string; subject: string };
-  pushed: boolean;
-  nothingToCommit: boolean;
-  pullRequestUrl?: string;
-}
-
 /** `archived`: the default list hides archived sessions. */
 export const listSessions = (archived?: '1' | 'all') =>
   call<SessionView[]>(
@@ -309,19 +301,6 @@ export const abortSession = (id: string) =>
  */
 export const fetchChanges = (id: string) =>
   call<SessionChanges>(`/api/sessions/${encodeURIComponent(id)}/changes`);
-
-export const publishChanges = (
-  id: string,
-  input: {
-    message: string;
-    branch?: string;
-    pullRequest?: { title: string; body?: string };
-  }
-) =>
-  call<PublishResult>(`/api/sessions/${encodeURIComponent(id)}/publish`, {
-    method: 'POST',
-    body: JSON.stringify(input)
-  });
 
 /**
  * Browse the checkout inside a running container.

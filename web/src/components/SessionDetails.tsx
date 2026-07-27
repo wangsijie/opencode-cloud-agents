@@ -1,10 +1,16 @@
-import { useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useState, type CSSProperties } from 'react';
 import type { SessionView } from '../api';
 import { describeWakeStages, formatDuration, formatUsage } from '../format';
 import { useResizable } from '../useResizable';
-import { ChangesPanel } from './ChangesPanel';
 import { CloseIcon } from './icons';
 import { WorkspacePanel } from './WorkspacePanel';
+
+// The diff viewer carries a syntax highlighter for every language, which is
+// most of a session page's weight for a tab most visits never open. Splitting
+// it out means the conversation loads without it.
+const ChangesPanel = lazy(() =>
+  import('./ChangesPanel').then((m) => ({ default: m.ChangesPanel }))
+);
 
 type Tab = 'changes' | 'workspace';
 
@@ -109,11 +115,9 @@ export function SessionDetails({
 
       <div className="aside-body">
         {tab === 'changes' ? (
-          <ChangesPanel
-            sessionId={session.id}
-            attached={attached}
-            sessionTitle={session.title}
-          />
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <ChangesPanel sessionId={session.id} attached={attached} />
+          </Suspense>
         ) : (
           <WorkspacePanel sessionId={session.id} attached={attached} />
         )}
