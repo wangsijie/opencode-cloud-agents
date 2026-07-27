@@ -12,8 +12,8 @@ import {
   json,
   methodNotAllowed
 } from './http';
+import * as hubStore from './hub-store';
 import {
-  getHub,
   getInstanceView,
   resolveSandbox,
   unknownRuntimeStatus
@@ -67,22 +67,25 @@ import { getTranscriptMirror } from './transcript-mirror';
  */
 export async function handleSessionApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const hub = getHub(env);
 
   if (url.pathname === '/api/sessions') {
     if (request.method === 'GET') {
       // Archived sessions are excluded by default rather than deleted: the list
       // is a working set, and everything stays reachable behind `?archived=`.
       const archived = url.searchParams.get('archived');
-      const records = (await hub.listSessions()).filter((record) =>
+      const entries = (await hubStore.listRegistry(env)).filter(({ session }) =>
         archived === 'all'
           ? true
           : archived === '1'
-            ? Boolean(record.archivedAt)
-            : !record.archivedAt
+            ? Boolean(session.archivedAt)
+            : !session.archivedAt
       );
       return json(
-        await Promise.all(records.map((record) => getSessionView(env, record)))
+        await Promise.all(
+          entries.map(({ session, instance }) =>
+            getSessionView(env, session, instance)
+          )
+        )
       );
     }
     if (request.method === 'POST') {
@@ -110,7 +113,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       // Clearing the agent first stops a queued dispatch from waking a
       // container the Hub is about to destroy.
       await resolveSessionAgent(env, record.id).markDeleted();
-      const deleting = await hub.beginDelete(record.instanceId);
+      const deleting = await hubStore.beginDelete(env, record.instanceId);
       if (!deleting) {
         throw new HttpError(404, 'Session instance not found');
       }
@@ -194,12 +197,12 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   const input = await readCreateSessionInput(request);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
   // records — so nothing this session does later needs the catalog again.
-  const repo = await getHub(env).findCatalogRepo(input.repoKey);
+  const repo = await hubStore.findCatalogRepo(env, input.repoKey);
   if (!repo) {
     throw new HttpError(400, 'Unknown repository');
   }
 
-  const record = await getHub(env).createSession({
+  const record = await hubStore.createSession(env, {
     repo,
     model: input.model,
     ...(input.variant ? { variant: input.variant } : {}),
@@ -220,16 +223,22 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     // The session exists, so surface the failure on the record instead of
     // leaving an orphaned instance behind an error response.
     const message = error instanceof Error ? error.message : String(error);
-    await getHub(env)
-      .updateSession(record.id, { phase: 'failed', lastError: message })
+    await hubStore
+      .updateSession(env, record.id, { phase: 'failed', lastError: message })
       .catch(() => undefined);
     return json(
-      await getSessionView(env, (await getHub(env).getSession(record.id)) ?? record),
+      await getSessionView(
+        env,
+        (await hubStore.getSession(env, record.id)) ?? record
+      ),
       202
     );
   }
   return json(
-    await getSessionView(env, (await getHub(env).getSession(record.id)) ?? record),
+    await getSessionView(
+      env,
+      (await hubStore.getSession(env, record.id)) ?? record
+    ),
     202
   );
 }
@@ -297,7 +306,7 @@ async function requireSession(env: Env, id: string): Promise<SessionRecord> {
   if (!isSafeInstanceId(id)) {
     throw new HttpError(400, 'Invalid session id');
   }
-  const record = await getHub(env).getSession(id);
+  const record = await hubStore.getSession(env, id);
   if (!record) {
     throw new HttpError(404, 'Session not found');
   }
@@ -306,9 +315,12 @@ async function requireSession(env: Env, id: string): Promise<SessionRecord> {
 
 async function getSessionView(
   env: Env,
-  record: SessionRecord
+  record: SessionRecord,
+  // The list route reads sessions and instances as pairs from one query; every
+  // other caller lets the instance be looked up here.
+  instance?: InstanceRecord
 ): Promise<SessionView> {
-  const instance = await getHub(env).getInstance(record.instanceId);
+  instance ??= await hubStore.getInstance(env, record.instanceId);
   const view: InstanceView = instance
     ? await getInstanceView(env, instance)
     : {
@@ -370,8 +382,8 @@ async function markSessionLost(
         error: error instanceof Error ? error.message : String(error)
       });
     });
-  const updated = await getHub(env)
-    .updateSession(record.id, { phase: 'lost', lastError })
+  const updated = await hubStore
+    .updateSession(env, record.id, { phase: 'lost', lastError })
     .catch(() => undefined);
   return updated ?? { ...record, phase: 'lost', lastError };
 }
@@ -411,7 +423,7 @@ async function sendSessionPrompt(
       'This session was lost when its container restarted without a checkpoint. Start a new session to continue.'
     );
   }
-  const instance = await getHub(env).getInstance(record.instanceId);
+  const instance = await hubStore.getInstance(env, record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     // A container being deleted is the one state no amount of waking fixes.
     throw new HttpError(409, 'This session is not ready to receive messages');
@@ -420,7 +432,7 @@ async function sendSessionPrompt(
   if (record.archivedAt) {
     // Archiving says "I am done with this"; sending a message says otherwise.
     // Making the user un-archive first would only be a step to click through.
-    await getHub(env).setSessionArchived(record.id, false);
+    await hubStore.setSessionArchived(env, record.id, false);
   }
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
@@ -477,7 +489,6 @@ async function patchSession(
     throw new HttpError(400, 'Nothing to change');
   }
 
-  const hub = getHub(env);
   if (title !== undefined) {
     const trimmed = typeof title === 'string' ? title.trim() : '';
     if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
@@ -486,13 +497,13 @@ async function patchSession(
         `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
       );
     }
-    await hub.renameSession(record.id, trimmed);
+    await hubStore.renameSession(env, record.id, trimmed);
   }
   if (archived !== undefined) {
     if (typeof archived !== 'boolean') {
       throw new HttpError(400, 'archived must be a boolean');
     }
-    await hub.setSessionArchived(record.id, archived);
+    await hubStore.setSessionArchived(env, record.id, archived);
   }
   return json(await getSessionView(env, await requireSession(env, record.id)));
 }
@@ -634,7 +645,7 @@ async function requireAwakeRuntime(
   record: SessionRecord,
   intent: string
 ): Promise<{ instance: InstanceRecord; runtimeEpoch: string }> {
-  const instance = await getHub(env).getInstance(record.instanceId);
+  const instance = await hubStore.getInstance(env, record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     throw new HttpError(409, `This session is not ready to ${intent}`);
   }
@@ -750,7 +761,7 @@ async function streamSessionEvents(
     return closedSessionEventStream({ ...state, state: 'pending' });
   }
   const directory = sessionDirectory(record);
-  const instance = await getHub(env).getInstance(record.instanceId);
+  const instance = await hubStore.getInstance(env, record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     return closedSessionEventStream({ ...state, state: 'sleeping' });
   }
@@ -817,7 +828,7 @@ async function readSessionTranscript(
   }
 
   const directory = sessionDirectory(record);
-  const instance = await getHub(env).getInstance(record.instanceId);
+  const instance = await hubStore.getInstance(env, record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
     return sleepingTranscript(env, record, base);
   }

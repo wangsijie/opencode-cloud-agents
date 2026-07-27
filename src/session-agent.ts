@@ -19,7 +19,7 @@
  * task that starts between two activity probes still resets the idle window.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { HUB_DURABLE_OBJECT_ID } from './instances';
+import { updateSession } from './hub-store';
 import {
   resolveInstanceLifecycle,
   resolveInstanceSandbox,
@@ -656,10 +656,7 @@ export class SessionAgent extends DurableObject<Env> {
       ...(state.lastPromptAt ? { lastPromptAt: state.lastPromptAt } : {})
     };
     try {
-      await this.env.Hub.getByName(HUB_DURABLE_OBJECT_ID).updateSession(
-        state.sessionId,
-        update
-      );
+      await updateSession(this.env, state.sessionId, update);
     } catch (error) {
       // The agent remains the source of truth; a stale list entry is repaired
       // by the next successful report.

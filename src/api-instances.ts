@@ -5,8 +5,8 @@
  * stop, delete). Product-level work goes through the session API instead.
  */
 import { HttpError, decodeRouteSegment, json, methodNotAllowed } from './http';
+import * as hubStore from './hub-store';
 import {
-  getHub,
   getInstanceView,
   getMergedRuntimeStatus,
   lifecycleUnavailableResponse,
@@ -20,7 +20,6 @@ import { ensureLifecycleInitialized } from './instance-runtime';
 
 export async function handleHubApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const hub = getHub(env);
 
   // Instances are only created as part of a session. What remains here is the
   // operational surface: reading container state and driving one runtime.
@@ -28,7 +27,7 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
     if (request.method !== 'GET') {
       return methodNotAllowed('GET');
     }
-    const records = await hub.listInstances();
+    const records = await hubStore.listInstances(env);
     return json(
       await Promise.all(records.map((record) => getInstanceView(env, record)))
     );
@@ -49,7 +48,7 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
       return json(await getInstanceView(env, record));
     }
     if (request.method === 'DELETE') {
-      const deleting = await hub.beginDelete(id);
+      const deleting = await hubStore.beginDelete(env, id);
       if (!deleting) {
         throw new HttpError(404, 'Instance not found');
       }

@@ -23,7 +23,7 @@ import {
   isWebSocketUpgrade,
   truncateOutput
 } from './http';
-import { getHub } from './instance-access';
+import { updateSession } from './hub-store';
 import type {
   InstanceRuntimeStatus,
   WakeStageTimings,
@@ -1806,8 +1806,7 @@ export class Sandbox extends BaseSandbox<Env> {
       }
       const opencodeTitle = await this.readOpencodeTitle(target);
       if (opencodeTitle && opencodeTitle !== this.transcriptMirror?.opencodeTitle) {
-        void getHub(this.persistenceEnv)
-          .updateSession(sessionId, { title: opencodeTitle })
+        void updateSession(this.persistenceEnv, sessionId, { title: opencodeTitle })
           .catch((error: unknown) => {
             console.warn('Failed to sync auto-generated title to Hub session', {
               sessionId,

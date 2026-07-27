@@ -1,7 +1,7 @@
 /**
  * Worker-side access to one instance's Durable Objects.
  *
- * These helpers resolve the Hub, Sandbox and LifecycleCoordinator stubs behind
+ * These helpers resolve the Sandbox and LifecycleCoordinator stubs behind
  * an instance id and turn them into the `InstanceView` the API returns. They
  * are the only place the Worker decides what "this instance is unreachable"
  * looks like, so the instance API, the session API and the stock-UI proxy all
@@ -13,16 +13,16 @@
  */
 import { getSandbox } from '@cloudflare/sandbox';
 import { HttpError, isSafeInstanceId, json } from './http';
+import { getInstance } from './hub-store';
 import {
   ensureLifecycleInitialized,
   InstanceWakePendingError,
   wakeInstanceRuntime
 } from './instance-runtime';
-import {
-  HUB_DURABLE_OBJECT_ID,
-  type InstanceRecord,
-  type InstanceRuntimeStatus,
-  type InstanceView
+import type {
+  InstanceRecord,
+  InstanceRuntimeStatus,
+  InstanceView
 } from './instances';
 import type { LifecycleStatus } from './lifecycle';
 import type { Sandbox } from './sandbox';
@@ -118,15 +118,11 @@ export function lifecycleUnavailableResponse(reason: string, phase: string): Res
   );
 }
 
-export function getHub(env: Env) {
-  return env.Hub.getByName(HUB_DURABLE_OBJECT_ID);
-}
-
 export async function requireInstance(env: Env, id: string): Promise<InstanceRecord> {
   if (!isSafeInstanceId(id)) {
     throw new HttpError(400, 'Invalid instance id');
   }
-  const instance = await getHub(env).getInstance(id);
+  const instance = await getInstance(env, id);
   if (!instance) {
     throw new HttpError(404, 'Instance not found');
   }

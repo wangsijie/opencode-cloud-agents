@@ -27,6 +27,17 @@
       "bucket_name": "opencode-cloud-backups"
     }
   ],
+  // The session registry and settings. Always read through the primary — the
+  // D1 Sessions API (read replication) is deliberately unused, so every query
+  // is strongly consistent.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "opencode-cloud",
+      "database_id": "e2b7a5ee-3a63-4aec-a8c8-81393dcf2727",
+      "migrations_dir": "migrations"
+    }
+  ],
   "containers": [
     {
       "class_name": "Sandbox",

@@ -18,7 +18,7 @@ import { handleHubApi } from './api-instances';
 import { handleSessionApi } from './api-sessions';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
-import { getHub } from './instance-access';
+import { listRepoCatalog } from './hub-store';
 import { LifecycleCoordinator } from './lifecycle';
 import { MODEL_OPTIONS } from './opencode-config';
 import { Sandbox } from './sandbox';
@@ -94,7 +94,8 @@ export default {
         // `?refresh=1` after the page has rendered. A failure with nothing
         // stored raises, and the dashboard renders that rather than an empty
         // picker that would read as "you have no repositories".
-        const catalog = await getHub(env).listRepoCatalog(
+        const catalog = await listRepoCatalog(
+          env,
           url.searchParams.get('refresh') === '1'
         );
         return json({

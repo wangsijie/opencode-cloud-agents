@@ -6,10 +6,10 @@
   "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
   "scripts": {
     "build:web": "vite build",
-    "deploy": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler deploy",
-    "dev": "pnpm run build:web && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "deploy": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply opencode-cloud --remote && WRANGLER_WRITE_LOGS=false wrangler deploy",
+    "dev": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "dev:web": "vite",
-    "start": "pnpm run build:web && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "start": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "test": "node --test test/*.test.mjs",
     "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false",
     "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit && tsc --noEmit -p web"
