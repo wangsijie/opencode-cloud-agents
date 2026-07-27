@@ -15,9 +15,13 @@ import { useEffect, useState } from 'react';
  */
 export type Route =
   | { name: 'list' }
+  | { name: 'settings' }
   | { name: 'session'; id: string; agent?: string };
 
 export function parseRoute(pathname: string): Route {
+  if (/^\/settings\/?$/.test(pathname)) {
+    return { name: 'settings' };
+  }
   const match = /^\/sessions\/([^/]+)(?:\/agent\/([^/]+))?\/?$/.exec(pathname);
   if (!match) {
     return { name: 'list' };

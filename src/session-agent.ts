@@ -27,12 +27,7 @@ import {
   type InstanceSandboxRpc,
   type OpencodeSessionActivityInput
 } from './instance-runtime';
-import {
-  defaultVariantForModel,
-  isModelRef,
-  isValidVariant,
-  parseModelRef
-} from './opencode-config';
+import { loadModelCatalog } from './model-catalog';
 import { WORKSPACE_ROOT } from './repos';
 import type { SessionPhase, SessionStatePatch } from './sessions';
 
@@ -218,10 +213,11 @@ export class SessionAgent extends DurableObject<Env> {
     if (!input.directory.startsWith(`${WORKSPACE_ROOT}/`)) {
       throw new Error(`Invalid session directory: ${input.directory}`);
     }
-    if (!isModelRef(input.model)) {
+    const catalog = await loadModelCatalog(this.env);
+    if (!catalog.isModelRef(input.model)) {
       throw new Error(`Unknown model: ${input.model}`);
     }
-    const variant = resolvePromptVariant(input.model, input.variant);
+    const variant = catalog.resolveVariant(input.model, input.variant);
 
     const now = new Date().toISOString();
     this.state = {
@@ -272,10 +268,11 @@ export class SessionAgent extends DurableObject<Env> {
       );
     }
     const model = input.model ?? state.model;
-    if (!isModelRef(model)) {
+    const catalog = await loadModelCatalog(this.env);
+    if (!catalog.isModelRef(model)) {
       throw new Error(`Unknown model: ${model}`);
     }
-    const variant = resolvePromptVariant(
+    const variant = catalog.resolveVariant(
       model,
       input.variant !== undefined ? input.variant : state.variant
     );
@@ -479,10 +476,11 @@ export class SessionAgent extends DurableObject<Env> {
 
     // Prompts leave the queue one at a time so a failure halfway through a
     // batch cannot replay an already-accepted prompt on the next attempt.
+    const catalog = await loadModelCatalog(this.env);
     let delivered = false;
     while (this.state && this.state.pending.length > 0) {
       const prompt = this.state.pending[0];
-      const model = parseModelRef(prompt.model);
+      const model = catalog.parseModelRef(prompt.model);
       if (!model) {
         throw new Error(`Unknown model: ${prompt.model}`);
       }
@@ -702,21 +700,6 @@ function needsDispatch(state: StoredSessionAgentState): boolean {
     state.phase !== 'failed' &&
     state.phase !== 'lost'
   );
-}
-
-/**
- * Pick a variant the model actually has. An explicit client choice wins when
- * valid; otherwise keep a previous session variant if still listed; otherwise
- * the model default. Models without variants always return undefined.
- */
-function resolvePromptVariant(
-  model: string,
-  preferred: string | undefined
-): string | undefined {
-  if (preferred !== undefined && isValidVariant(model, preferred)) {
-    return preferred;
-  }
-  return defaultVariantForModel(model);
 }
 
 /**

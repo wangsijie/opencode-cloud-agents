@@ -144,9 +144,13 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-/** Whether this browser already holds a session. Answers 200 either way. */
+/**
+ * Whether this browser already holds a session, and whether an admin password
+ * exists at all — `false` means the deployment is on its first run and wants
+ * the setup page. Answers 200 either way.
+ */
 export const fetchAuthState = () =>
-  call<{ authenticated: boolean }>('/api/auth');
+  call<{ authenticated: boolean; passwordConfigured: boolean }>('/api/auth');
 
 export const signIn = (password: string) =>
   call<{ authenticated: boolean }>('/api/auth', {
@@ -156,6 +160,55 @@ export const signIn = (password: string) =>
 
 export const signOut = () =>
   call<{ authenticated: boolean }>('/api/auth', { method: 'DELETE' });
+
+/** First-run only: sets the admin password and signs this browser in. */
+export const setupPassword = (password: string) =>
+  call<{ authenticated: boolean }>('/api/setup', {
+    method: 'POST',
+    body: JSON.stringify({ password })
+  });
+
+/** Mirrors `SettingView` in the Worker's `src/api-settings.ts`. */
+export interface SettingView {
+  key: string;
+  group: string;
+  label: string;
+  required: boolean;
+  configured: boolean;
+  updatedAt?: string;
+  /** Absent on secrets; partial on the SSH key (public half) and env vars (names). */
+  value?: unknown;
+}
+
+export const fetchSettings = () =>
+  call<{ settings: SettingView[] }>('/api/settings');
+
+/** Required settings with no stored value; non-empty forces the settings page. */
+export const fetchSettingsStatus = () =>
+  call<{ missing: string[] }>('/api/settings/status');
+
+/**
+ * Store one setting. `null` clears an optional one. `force` acknowledges an
+ * `opencode.config` save that orphans models existing sessions are pinned to.
+ */
+export const saveSetting = (key: string, value: unknown, force = false) =>
+  call<{ ok: boolean; warnings?: string[]; pinnedModels?: string[] }>(
+    `/api/settings/${encodeURIComponent(key)}`,
+    { method: 'PUT', body: JSON.stringify({ value, ...(force ? { force } : {}) }) }
+  );
+
+/** Generate and store an Ed25519 key; the public key is for GitHub's deploy-key page. */
+export const generateSshKey = () =>
+  call<{ publicKey: string }>('/api/settings/ssh-key/generate', {
+    method: 'POST'
+  });
+
+/** Changing the password signs every other browser out; this one gets a fresh cookie. */
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  call<{ ok: boolean }>('/api/settings/password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
 
 /**
  * One message and its parts, forwarded from OpenCode unchanged.

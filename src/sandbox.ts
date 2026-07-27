@@ -41,10 +41,13 @@ import {
   type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
-  DEFAULT_MODEL_ID,
-  DEFAULT_PROVIDER_ID,
-  OPENCODE_CONFIG
-} from './opencode-config';
+  CONTAINER_SKILLS_ROOT,
+  containerEnv,
+  credentialFiles,
+  gitConfigCommands,
+  loadContainerCredentials
+} from './container-credentials';
+import { loadOpencodeConfig } from './model-catalog';
 import {
   classifyLegacySessionStatuses,
   extractOpenCodeLocation,
@@ -176,7 +179,8 @@ const TRANSCRIPT_MIRROR_LIVE_MS = 3 * 1000;
 
 const OPENCODE_ENV = {
   // Keep OpenCode sessions and caches inside the snapshotted directory.
-  // XDG_CONFIG_HOME remains unchanged so gh uses its bundled authentication.
+  // XDG_CONFIG_HOME remains unchanged so gh reads the injected
+  // /root/.config/gh/hosts.yml login.
   XDG_DATA_HOME: `${WORKSPACE_ROOT}/.opencode-state/data`,
   XDG_STATE_HOME: `${WORKSPACE_ROOT}/.opencode-state/state`,
   XDG_CACHE_HOME: `${WORKSPACE_ROOT}/.opencode-state/cache`
@@ -496,11 +500,22 @@ export class Sandbox extends BaseSandbox<Env> {
     const cold = this.persistenceState.container?.running !== true;
 
     try {
+      // The config lives in D1 now, so read it before touching the container:
+      // an unconfigured deployment must fail the wake here, not after a boot.
+      const opencodeConfig = await loadOpencodeConfig(this.persistenceEnv);
+
       const restoreStartedAt = Date.now();
       await this.ensureWorkspaceRestored();
       // Container boot is inside this number: the first call into a stopped
       // container is what starts it, and that call is the restore.
       timings.restoreMs = since(restoreStartedAt);
+
+      // Credentials live outside /workspace, so a restored snapshot never
+      // carries them; every boot injects them fresh before anything reaches
+      // the repository over SSH.
+      const credentialsStartedAt = Date.now();
+      const containerEnv = await this.injectContainerCredentials();
+      timings.credentialsMs = since(credentialsStartedAt);
 
       // Provisioning and the server start share one control-plane scope. The
       // resumed-checkout fetch outlives the call that started it, and the scope
@@ -519,8 +534,8 @@ export class Sandbox extends BaseSandbox<Env> {
           createOpencodeServer(this, {
             port: OPENCODE_PORT,
             directory: WORKSPACE_DIRECTORY,
-            config: OPENCODE_CONFIG,
-            env: OPENCODE_ENV
+            config: opencodeConfig,
+            env: { ...containerEnv, ...OPENCODE_ENV }
           }),
           deferredFetch ?? Promise.resolve()
         ]);
@@ -617,6 +632,52 @@ export class Sandbox extends BaseSandbox<Env> {
       );
     }
     return undefined;
+  }
+
+  /**
+   * Write the operator's credentials and skills into the container.
+   *
+   * Runs on every wake, after the workspace restore and before anything
+   * touches the repository over SSH. Everything written here lives under
+   * `/root`, which no snapshot covers, so the container always reflects the
+   * settings table as of this wake — including deletions: the skills tree is
+   * rewritten wholesale.
+   *
+   * Returns the operator's extra environment variables for the server start.
+   */
+  private async injectContainerCredentials(): Promise<Record<string, string>> {
+    const settings = await loadContainerCredentials(this.persistenceEnv);
+
+    // A skill removed from settings must disappear from the container too.
+    await this.mustExec(`rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)}`);
+
+    const files = credentialFiles(settings);
+    const directories = [
+      ...new Set(files.map((file) => file.path.slice(0, file.path.lastIndexOf('/'))))
+    ];
+    for (const directory of directories) {
+      await this.mustExec(`mkdir -p ${shellQuote(directory)}`);
+    }
+    for (const file of files) {
+      await this.writeFile(file.path, file.content);
+      // `writeFile` guarantees nothing about permissions, and OpenSSH refuses
+      // a private key other users could read.
+      await this.mustExec(`chmod ${file.mode} ${shellQuote(file.path)}`);
+    }
+    for (const command of gitConfigCommands(settings)) {
+      await this.mustExec(command);
+    }
+    return containerEnv(settings);
+  }
+
+  /** `exec` that treats a non-zero exit as the failure it is. */
+  private async mustExec(command: string): Promise<void> {
+    const result = await this.exec(command, { timeout: GIT_COMMAND_TIMEOUT_MS });
+    if (!result.success) {
+      throw new Error(
+        `Container command failed (${command}): ${truncateOutput(result.stderr)}`
+      );
+    }
   }
 
   async getExecutionSnapshotIfRunning(
@@ -1976,6 +2037,14 @@ export class Sandbox extends BaseSandbox<Env> {
     try {
       const client = this.createRuntimeClient(runtimeEpoch, 'The SDK test');
 
+      // The default model is whatever the stored config says it is.
+      const config = await loadOpencodeConfig(this.persistenceEnv);
+      const defaultRef = config.model ?? '';
+      const separator = defaultRef.indexOf('/');
+      if (separator <= 0) {
+        throw new Error(`The configured default model is invalid: ${defaultRef}`);
+      }
+
       const session = await client.session.create({
         title: 'Test Session',
         directory: WORKSPACE_DIRECTORY
@@ -1988,8 +2057,8 @@ export class Sandbox extends BaseSandbox<Env> {
         sessionID: session.data.id,
         directory: WORKSPACE_DIRECTORY,
         model: {
-          providerID: DEFAULT_PROVIDER_ID,
-          modelID: DEFAULT_MODEL_ID
+          providerID: defaultRef.slice(0, separator),
+          modelID: defaultRef.slice(separator + 1)
         },
         parts: [
           {

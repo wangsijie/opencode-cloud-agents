@@ -13,14 +13,20 @@
  * Durable Object RPC from inside this Worker.
  */
 import { ContainerProxy } from '@cloudflare/sandbox';
-import { enforceSameOrigin, handleAuthApi, requireAdmin } from './access';
+import {
+  enforceSameOrigin,
+  handleAuthApi,
+  handleSetupApi,
+  requireAdmin
+} from './access';
 import { handleHubApi } from './api-instances';
 import { handleSessionApi } from './api-sessions';
+import { handleSettingsApi } from './api-settings';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
 import { listRepoCatalog } from './hub-store';
 import { LifecycleCoordinator } from './lifecycle';
-import { MODEL_OPTIONS } from './opencode-config';
+import { loadModelCatalog } from './model-catalog';
 import { Sandbox } from './sandbox';
 import { SessionAgent } from './session-agent';
 
@@ -66,17 +72,28 @@ export default {
         return originFailure;
       }
 
-      // Sign-in is the one route that answers without a session, and the SPA
-      // shell below is the one page: it carries the form. Everything else under
-      // `/api/` reaches a container or its records, so it needs the password.
+      // Sign-in and first-run setup are the routes that answer without a
+      // session, and the SPA shell below is the one page: it carries both
+      // forms. Everything else under `/api/` reaches a container or its
+      // records, so it needs the password.
       if (url.pathname === '/api/auth') {
-        return await handleAuthApi(request, url);
+        return await handleAuthApi(request, url, env);
+      }
+      if (url.pathname === '/api/setup') {
+        return await handleSetupApi(request, url, env);
       }
       if (url.pathname.startsWith('/api/')) {
-        const authFailure = await requireAdmin(request);
+        const authFailure = await requireAdmin(request, env);
         if (authFailure) {
           return authFailure;
         }
+      }
+
+      if (
+        url.pathname === '/api/settings' ||
+        url.pathname.startsWith('/api/settings/')
+      ) {
+        return await handleSettingsApi(request, env, url);
       }
 
       if (url.pathname === '/api/instances' || url.pathname.startsWith('/api/instances/')) {
@@ -94,13 +111,13 @@ export default {
         // `?refresh=1` after the page has rendered. A failure with nothing
         // stored raises, and the dashboard renders that rather than an empty
         // picker that would read as "you have no repositories".
-        const catalog = await listRepoCatalog(
-          env,
-          url.searchParams.get('refresh') === '1'
-        );
+        const [catalog, models] = await Promise.all([
+          listRepoCatalog(env, url.searchParams.get('refresh') === '1'),
+          loadModelCatalog(env)
+        ]);
         return json({
           repos: catalog.repos,
-          models: MODEL_OPTIONS,
+          models: models.options,
           reposFetchedAt: catalog.fetchedAt,
           reposStale: catalog.stale
         });

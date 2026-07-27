@@ -17,21 +17,6 @@
 import { isSafeRepoDefinition, type RepoDefinition } from './repos.ts';
 
 /**
- * The token the Hub lists repositories with.
- *
- * Committed like the rest of this private image's credentials (`docker/auth`,
- * `docker/ssh`) — the same trade, and the same warning: anyone who can read the
- * repository can use it. A `GITHUB_TOKEN` secret overrides it when one is set,
- * which is the path this should move to.
- *
- * It is only ever used for `GET /user/repos`. Nothing here writes to GitHub;
- * pushing and opening pull requests happen inside a container with the image's
- * own `gh` login.
- */
-export const BUNDLED_GITHUB_TOKEN =
-  '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';
-
-/**
  * How old a stored catalog may be before it is worth re-reading GitHub.
  *
  * Not a lifetime: the stored answer is kept for good and always served without

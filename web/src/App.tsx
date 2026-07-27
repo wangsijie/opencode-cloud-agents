@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchAuthState,
   fetchCatalog,
+  fetchSettingsStatus,
   signOut,
   UNAUTHORIZED_EVENT,
   type Catalog
@@ -9,6 +10,8 @@ import {
 import { AgentSessionPage } from './components/AgentSessionPage';
 import { NewSessionPage } from './components/NewSessionPage';
 import { SessionPage } from './components/SessionPage';
+import { SettingsPage } from './components/SettingsPage';
+import { SetupPasswordPage } from './components/SetupPasswordPage';
 import { Sidebar } from './components/Sidebar';
 import { SignInPage } from './components/SignInPage';
 import { useRoute } from './router';
@@ -22,29 +25,88 @@ import { useSessions } from './useSessions';
  * that would answer 401 in a loop. The first render asks the Hub which state
  * this browser is in and shows neither until it knows: flashing the sign-in
  * form at somebody who is already signed in reads as being logged out.
+ *
+ * First run comes before either: a deployment with no admin password shows
+ * the setup page and nothing else, whatever the URL says — the gates are
+ * ordered by render, not by route, so none of them can be navigated around.
  */
 export function App() {
-  const [authenticated, setAuthenticated] = useState<boolean>();
+  const [auth, setAuth] = useState<{
+    authenticated: boolean;
+    passwordConfigured: boolean;
+  }>();
 
   useEffect(() => {
     void fetchAuthState()
-      .then((state) => setAuthenticated(state.authenticated))
-      .catch(() => setAuthenticated(false));
+      .then(setAuth)
+      .catch(() =>
+        setAuth({ authenticated: false, passwordConfigured: true })
+      );
   }, []);
 
   useEffect(() => {
-    const signedOut = () => setAuthenticated(false);
+    const signedOut = () =>
+      setAuth((state) =>
+        state ? { ...state, authenticated: false } : state
+      );
     window.addEventListener(UNAUTHORIZED_EVENT, signedOut);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, signedOut);
   }, []);
 
-  if (authenticated === undefined) {
+  const signedIn = () =>
+    setAuth({ authenticated: true, passwordConfigured: true });
+
+  if (auth === undefined) {
     return null;
   }
-  if (!authenticated) {
-    return <SignInPage onSignedIn={() => setAuthenticated(true)} />;
+  if (!auth.passwordConfigured) {
+    return <SetupPasswordPage onComplete={signedIn} />;
   }
-  return <Hub onSignedOut={() => setAuthenticated(false)} />;
+  if (!auth.authenticated) {
+    return <SignInPage onSignedIn={signedIn} />;
+  }
+  return (
+    <SettingsGate
+      onSignedOut={() =>
+        setAuth({ authenticated: false, passwordConfigured: true })
+      }
+    />
+  );
+}
+
+/**
+ * The second gate: required settings.
+ *
+ * A signed-in Hub whose GitHub token, OpenCode config or SSH key is missing
+ * cannot start or run sessions, so the settings page is forced — alone, with
+ * no sidebar and no polling underneath — until the required list is empty.
+ */
+function SettingsGate({ onSignedOut }: { onSignedOut: () => void }) {
+  const [missing, setMissing] = useState<string[]>();
+
+  const check = useCallback(async () => {
+    try {
+      setMissing((await fetchSettingsStatus()).missing);
+    } catch {
+      // Reachability problems surface on the pages themselves; the gate only
+      // acts on a positive "something is missing".
+      setMissing([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  if (missing === undefined) {
+    return null;
+  }
+  if (missing.length > 0) {
+    return (
+      <SettingsPage forced onSettingsChanged={() => void check()} />
+    );
+  }
+  return <Hub onSignedOut={onSignedOut} />;
 }
 
 /**
@@ -133,7 +195,13 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
       ) : null}
 
       <div className="content">
-        {route.name === 'session' && route.agent ? (
+        {route.name === 'settings' ? (
+          <SettingsPage
+            forced={false}
+            onMenu={() => setSidebarOpen(true)}
+            onSettingsChanged={() => undefined}
+          />
+        ) : route.name === 'session' && route.agent ? (
           // Keyed to the subagent as well as the session, so stepping between
           // levels of a nest never shows one conversation under another's name.
           <AgentSessionPage

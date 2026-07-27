@@ -73,9 +73,12 @@ a bundle patch, and `/gateway/` no longer exists as a public route.
 
 ## Workspaces and repository provisioning
 
-There is one container image. It installs OpenCode, `gh`, Wrangler, and the
-bundled credentials, and leaves `/workspace` empty; repositories are never baked
-into the image.
+There is one container image. It installs OpenCode, `gh` and Wrangler, and
+leaves `/workspace` empty; repositories are never baked into the image, and
+neither are credentials — the SSH key, the `gh` login, git identity and
+signing, extra environment variables and OpenCode skills are read from the
+settings table and injected by the Worker on every wake
+(`src/container-credentials.ts`).
 
 GitHub is the only source for the catalog a session can be started from: the Hub
 lists every repository the token can push to, sorted by recent activity, and
@@ -86,13 +89,9 @@ than an empty picker, and no session can be started until it is fixed. The
 composer's *Refresh repos* button skips the cache (`GET /api/catalog?refresh=1`) for a
 repository created a minute ago.
 
-The token is committed in `src/github-catalog.ts` alongside this image's other
-bundled credentials, and is only ever used for `GET /user/repos`. Setting a
-`GITHUB_TOKEN` secret overrides it, which is where this should end up:
-
-```bash
-pnpm wrangler secret put GITHUB_TOKEN
-```
+The token is entered on the settings page (`github.token`) and doubles as the
+container's `gh` CLI login for opening pull requests. A `GITHUB_TOKEN` wrangler
+secret overrides the stored one when set.
 
 The repository chosen for a session is copied onto the session, the instance and
 the Sandbox at creation, and everything afterwards asks the checkout rather than
@@ -106,9 +105,9 @@ server starts; later wakes restore the workspace snapshot and run a best-effort
 wake; a fetch failure only logs a warning.
 
 Every entry clones over SSH regardless of where the catalog came from, so the
-bundled image key must be authorized for it on GitHub — public repositories
-included. The token decides what is *offered*; the key decides what can be
-*cloned*.
+SSH key configured on the settings page must be authorized for it on GitHub —
+public repositories included. The token decides what is *offered*; the key
+decides what can be *cloned*.
 
 All instances use `/workspace` as the OpenCode working directory and persist
 that complete directory in instance snapshots.
@@ -151,8 +150,8 @@ Dispatch failures (a repository that cannot be cloned, a runtime that will not
 wake) are retried three times with backoff, then the session stays `failed` with
 the underlying error on the record and a retry button in the dashboard.
 
-Model choices come from the provider catalog in `src/opencode-config.ts`; a
-session stores the `providerID/modelID` reference and unknown references are
+Model choices derive from the stored OpenCode config (`src/model-catalog.ts`);
+a session stores the `providerID/modelID` reference and unknown references are
 rejected at the API boundary.
 
 Session state (`queued` / `starting` / `working` / `failed`) describes dispatch
@@ -173,23 +172,28 @@ follows.
 
 ## Production access control
 
-One admin password, hardcoded in [src/access.ts](src/access.ts) next to the
-comment that explains why — the same reasoning that keeps provider credentials
-in `src/opencode-config.ts`. Change `ADMIN_PASSWORD` there and redeploy; every
-signed-in browser is signed out, because the cookie carries a hash of that
-string rather than a random session id the Worker would have to remember.
+One admin password, set on first run. A fresh deployment shows a setup page —
+type a password or have one generated and shown once — and stores a salted
+PBKDF2 hash of it in the `settings` table ([src/access.ts](src/access.ts),
+[src/password.ts](src/password.ts)). Signing in issues a random token whose
+SHA-256 is a row in `admin_sessions`; the cookie carries the raw token, so the
+database alone grants nothing. Changing the password (on the settings page,
+current password required) clears that table, signing every browser out except
+the one that made the change.
 
-Everything under `/api/` requires it. The SPA
-shell and its assets do not: they carry the sign-in form and nothing else worth
-reading. A rejected request answers 401, which drops the open tab back to the
-form. `wrangler dev` asks for the password too — there is no local bypass.
+Everything under `/api/` requires it; `/api/auth` and `/api/setup` are the two
+routes that answer without a session. The SPA shell and its assets do not:
+they carry the sign-in and setup forms and nothing else worth reading. A
+rejected request answers 401, which drops the open tab back to the form.
+`wrangler dev` asks for the password too — there is no local bypass.
 
-This is a single fixed secret with no rate limiting, which is enough for one
-operator on an unlisted hostname and not much more. The Hub drives an agent
-inside an image carrying deployment credentials, so if this deployment ever
-grows a second user or a guessable address, put it behind real identity —
-Cloudflare Access in front of every route including the default `workers.dev`
-one, or a Zero Trust tunnel.
+There is deliberately no rate limiting, which is enough for one operator on an
+unlisted hostname and not much more. Between deploying and completing setup
+the password is unset and anyone who finds the URL can claim it — finish setup
+immediately after the first deploy. If this deployment ever grows a second
+user or a guessable address, put it behind real identity — Cloudflare Access
+in front of every route including the default `workers.dev` one, or a Zero
+Trust tunnel.
 
 ## Run locally
 
@@ -466,33 +470,34 @@ pnpm wrangler secret put R2_ACCESS_KEY_ID
 pnpm wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
-## GitHub SSH and bundled CLI access
+## GitHub SSH and CLI access
 
-The image includes a dedicated Ed25519 key at `/root/.ssh/id_ed25519`. Add
-`docker/ssh/id_ed25519.pub` to GitHub as a deploy key and enable write access if
-the sandbox should push. Alternatively, add it as an account SSH key when it
-needs access to multiple repositories.
+Containers reach GitHub with the SSH key configured on the settings page —
+generate an Ed25519 pair there, or paste an existing one. Add the public key
+to GitHub as a deploy key (with write access if the sandbox should push), or
+as an account SSH key when it needs multiple repositories. The Worker writes
+the key to `/root/.ssh/id_ed25519` on every wake.
 
-Git is configured as `wangsijie <sijiewg@gmail.com>` with SSH commit signing.
-Add the same public key as a GitHub signing key if sandbox commits should appear
-as Verified.
+With a git identity configured, commits are made under it and signed with the
+same SSH key. Add the public key as a GitHub signing key if sandbox commits
+should appear as Verified.
 
-The private key and the `gh`/Wrangler credentials below `docker/auth` are
-intentionally bundled for this private image. Anyone who can read the repository
-or pull the image can use them. Keep their permissions narrow, rotate them if
-the artifacts are exposed, and rebuild the image after a credential rotation.
+The `gh` CLI inside the container is signed in with the shared GitHub token;
+extra credentials for other services (`CLOUDFLARE_API_TOKEN` for Wrangler, and
+so on) go into the environment-variable list, also on the settings page.
+Nothing of this is baked into the image or the repository; rotating a
+credential is an edit on the settings page plus the next container wake.
 
 ## OpenCode configuration
 
-The complete configuration is in `src/opencode-config.ts`. The default and
-small model are both `vwnpc/ag/gemini-3.6-flash-high`. Provider endpoints, credentials, models,
-limits, costs, variants and input modalities are managed in that file. The Hub
-also derives its session model picker from it: a model removed here disappears
-from the composer, and any existing session pinned to it fails on its next
-dispatch, so retire a model only after its sessions are finished or repointed.
-
-This private repository intentionally commits provider credentials. Rotate them
-before changing repository visibility or access.
+The complete configuration — providers, credentials, models, limits, costs,
+variants, input modalities, permissions — is the `opencode.config` document,
+edited as JSON on the settings page. Saves are validated
+(`src/settings-schema.ts`): a config that omits a permission key or whose
+default model does not resolve is refused, and removing a model that existing
+sessions are pinned to demands an explicit force, since those sessions fail on
+their next dispatch. The Hub derives its session model picker from the same
+stored document at request time.
 
 ## Verify and deploy
 

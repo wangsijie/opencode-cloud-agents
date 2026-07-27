@@ -181,6 +181,15 @@ export function Sidebar({
         </button>
         <button
           className="link-button"
+          onClick={() => {
+            navigate('/settings');
+            onClose();
+          }}
+        >
+          Settings
+        </button>
+        <button
+          className="link-button"
           onClick={() => void onSignOut().catch(() => undefined)}
         >
           Sign out

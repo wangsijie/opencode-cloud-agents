@@ -1,65 +1,31 @@
 /**
  * The front door: one admin password, plus same-origin enforcement.
  *
- * The Hub used to sit behind a Cloudflare Access application and trust its JWT.
- * That application is gone, so the Worker asks for the password itself. This is
- * deliberately the smallest thing that closes the door: one operator, one
- * secret, a cookie that says the secret was presented.
+ * The password lives in the `settings` table as a salted PBKDF2 record — set
+ * on first run through `/api/setup`, changed from the settings page. A
+ * successful sign-in issues a random token whose hash is a row in
+ * `admin_sessions`; the cookie carries the raw token, so the database alone
+ * grants nothing, and revoking a browser is deleting its row.
  *
  * The SPA shell and its assets stay public — the sign-in form is part of them,
  * and they carry nothing worth reading. Everything under `/api/` is closed.
  */
 import { isWebSocketUpgrade, json, methodNotAllowed } from './http';
-
-/**
- * The Hub's one password.
- *
- * Hardcoded on purpose, the same way [opencode-config.ts](opencode-config.ts)
- * carries provider credentials: this is a private repository with a single
- * operator, and a secret in the code is one fewer thing to configure at deploy
- * time. Change it here and redeploy — every signed-in browser is signed out,
- * because the cookie is derived from this string.
- */
-const ADMIN_PASSWORD = '9n2r2-5zme8-ozijg-6dxal';
+import {
+  generateSessionToken,
+  hashPassword,
+  hashToken,
+  verifyPassword
+} from './password';
+import { SETTING_KEYS, readSetting, writeSetting } from './settings';
+import type { PasswordRecord } from './settings';
 
 const SESSION_COOKIE = 'hub_admin';
 
 /** A year. One operator signing in weekly would be friction with no payoff. */
 const SESSION_MAX_AGE = 60 * 60 * 24 * 365;
 
-/**
- * What the cookie carries: a hash of the password, never the password.
- *
- * Hashing is also how the password itself is checked, so both comparisons run
- * over fixed-length strings and neither can be probed for length.
- */
-async function tokenFor(password: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`opencode-hub/v1:${password}`)
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/** Derived once per isolate: every request compares against it. */
-let expectedToken: Promise<string> | undefined;
-function adminToken(): Promise<string> {
-  expectedToken ??= tokenFor(ADMIN_PASSWORD);
-  return expectedToken;
-}
-
-function equals(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let difference = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-  return difference === 0;
-}
+export const MIN_PASSWORD_LENGTH = 8;
 
 function readCookie(request: Request, name: string): string | undefined {
   const header = request.headers.get('cookie');
@@ -94,24 +60,69 @@ function sessionCookie(value: string, url: URL, maxAge: number): string {
   return attributes.join('; ');
 }
 
-async function isSignedIn(request: Request): Promise<boolean> {
-  const presented = readCookie(request, SESSION_COOKIE);
-  return presented !== undefined && equals(presented, await adminToken());
+async function readPasswordRecord(env: Env): Promise<PasswordRecord | undefined> {
+  return readSetting<PasswordRecord>(env, SETTING_KEYS.adminPassword);
 }
 
 /**
- * `/api/auth`: the only route that answers without a session.
+ * Issue a browser session: one row in `admin_sessions`, the raw token in the
+ * cookie. Expired rows are swept here rather than on a schedule — sign-in is
+ * rare enough that the sweep is free, and the expiry check on every read means
+ * a stale row was never a live session anyway.
+ */
+export async function createAdminSession(
+  env: Env,
+  url: URL
+): Promise<{ cookie: string }> {
+  const token = generateSessionToken();
+  const now = new Date();
+  const expires = new Date(now.getTime() + SESSION_MAX_AGE * 1000);
+  await env.DB.prepare(
+    'DELETE FROM admin_sessions WHERE expires_at < ?1'
+  )
+    .bind(now.toISOString())
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO admin_sessions (token_hash, created_at, expires_at)
+     VALUES (?1, ?2, ?3)`
+  )
+    .bind(await hashToken(token), now.toISOString(), expires.toISOString())
+    .run();
+  return { cookie: sessionCookie(token, url, SESSION_MAX_AGE) };
+}
+
+async function isSignedIn(request: Request, env: Env): Promise<boolean> {
+  const presented = readCookie(request, SESSION_COOKIE);
+  if (!presented) {
+    return false;
+  }
+  const row = await env.DB.prepare(
+    'SELECT 1 AS live FROM admin_sessions WHERE token_hash = ?1 AND expires_at > ?2'
+  )
+    .bind(await hashToken(presented), new Date().toISOString())
+    .first<{ live: number }>();
+  return row !== null;
+}
+
+/**
+ * `/api/auth`: answers without a session.
  *
- * GET reports whether this browser is signed in, so the app can render the form
+ * GET reports whether this browser is signed in and whether a password exists
+ * at all, so the app can render the sign-in form — or the first-run setup —
  * instead of a page full of failed requests. POST takes the password. DELETE
- * signs out.
+ * signs out this browser.
  */
 export async function handleAuthApi(
   request: Request,
-  url: URL
+  url: URL,
+  env: Env
 ): Promise<Response> {
   if (request.method === 'GET') {
-    return json({ authenticated: await isSignedIn(request) });
+    const [authenticated, record] = await Promise.all([
+      isSignedIn(request, env),
+      readPasswordRecord(env)
+    ]);
+    return json({ authenticated, passwordConfigured: record !== undefined });
   }
 
   if (request.method === 'POST') {
@@ -119,17 +130,24 @@ export async function handleAuthApi(
       password?: unknown;
     } | null;
     const password = typeof body?.password === 'string' ? body.password : '';
-    if (!equals(await tokenFor(password), await adminToken())) {
+    const record = await readPasswordRecord(env);
+    if (!record) {
+      return json({ error: 'No password is set yet — complete setup first' }, 409);
+    }
+    if (!(await verifyPassword(record, password))) {
       return json({ error: 'That is not the password' }, 401);
     }
-    return json(
-      { authenticated: true },
-      200,
-      { 'Set-Cookie': sessionCookie(await adminToken(), url, SESSION_MAX_AGE) }
-    );
+    const session = await createAdminSession(env, url);
+    return json({ authenticated: true }, 200, { 'Set-Cookie': session.cookie });
   }
 
   if (request.method === 'DELETE') {
+    const presented = readCookie(request, SESSION_COOKIE);
+    if (presented) {
+      await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash = ?1')
+        .bind(await hashToken(presented))
+        .run();
+    }
     return json({ authenticated: false }, 200, {
       'Set-Cookie': sessionCookie('', url, 0)
     });
@@ -138,11 +156,46 @@ export async function handleAuthApi(
   return methodNotAllowed('GET, POST, DELETE');
 }
 
+/**
+ * `/api/setup`: sets the very first password, and only the first.
+ *
+ * Once a record exists the route answers 409 forever — changing the password
+ * is `/api/settings/password`, which demands the current one. Setting the
+ * password signs the browser in: making somebody type the password they chose
+ * two seconds ago proves nothing.
+ */
+export async function handleSetupApi(
+  request: Request,
+  url: URL,
+  env: Env
+): Promise<Response> {
+  if (request.method !== 'POST') {
+    return methodNotAllowed('POST');
+  }
+  const body = (await request.json().catch(() => null)) as {
+    password?: unknown;
+  } | null;
+  const password = typeof body?.password === 'string' ? body.password : '';
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return json(
+      { error: `The password must be at least ${MIN_PASSWORD_LENGTH} characters` },
+      400
+    );
+  }
+  if (await readPasswordRecord(env)) {
+    return json({ error: 'A password is already set' }, 409);
+  }
+  await writeSetting(env, SETTING_KEYS.adminPassword, await hashPassword(password));
+  const session = await createAdminSession(env, url);
+  return json({ authenticated: true }, 200, { 'Set-Cookie': session.cookie });
+}
+
 /** Close everything else to anyone who has not presented the password. */
 export async function requireAdmin(
-  request: Request
+  request: Request,
+  env: Env
 ): Promise<Response | undefined> {
-  if (await isSignedIn(request)) {
+  if (await isSignedIn(request, env)) {
     return undefined;
   }
   return json({ error: 'Sign in to use the Hub' }, 401);

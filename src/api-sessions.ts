@@ -24,12 +24,7 @@ import {
   RUNTIME_EPOCH_HEADER
 } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
-import {
-  DEFAULT_MODEL_REF,
-  defaultVariantForModel,
-  isModelRef,
-  isValidVariant
-} from './opencode-config';
+import { loadModelCatalog, type ModelCatalog } from './model-catalog';
 import { isSafeRepoKey, repoWorkspaceDirectory } from './repos';
 import type { QueuePromptInput } from './session-agent';
 import {
@@ -210,7 +205,10 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 }
 
 async function createSession(request: Request, env: Env): Promise<Response> {
-  const input = await readCreateSessionInput(request);
+  // The model catalog is stored config now, so it is read once per request
+  // that validates against it, not on every poll.
+  const catalog = await loadModelCatalog(env);
+  const input = await readCreateSessionInput(request, catalog);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
   // records — so nothing this session does later needs the catalog again.
   const repo = await hubStore.findCatalogRepo(env, input.repoKey);
@@ -218,12 +216,16 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     throw new HttpError(400, 'Unknown repository');
   }
 
-  const record = await hubStore.createSession(env, {
-    repo,
-    model: input.model,
-    ...(input.variant ? { variant: input.variant } : {}),
-    title: deriveSessionTitle(input.prompt)
-  });
+  const record = await hubStore.createSession(
+    env,
+    {
+      repo,
+      model: input.model,
+      ...(input.variant ? { variant: input.variant } : {}),
+      title: deriveSessionTitle(input.prompt)
+    },
+    catalog
+  );
   try {
     await resolveSessionAgent(env, record.id).startSession({
       sessionId: record.id,
@@ -267,7 +269,8 @@ interface CreateSessionInput {
 }
 
 async function readCreateSessionInput(
-  request: Request
+  request: Request,
+  catalog: ModelCatalog
 ): Promise<CreateSessionInput> {
   let value: unknown;
   try {
@@ -290,11 +293,11 @@ async function readCreateSessionInput(
   if (!isSafeRepoKey(repoKey)) {
     throw new HttpError(400, 'Unknown repository');
   }
-  const modelRef = model === undefined ? DEFAULT_MODEL_REF : model;
-  if (!isModelRef(modelRef)) {
+  const modelRef = model === undefined ? catalog.defaultModelRef : model;
+  if (!catalog.isModelRef(modelRef)) {
     throw new HttpError(400, 'Unknown model');
   }
-  const resolvedVariant = resolveRequestVariant(modelRef, variant);
+  const resolvedVariant = resolveRequestVariant(catalog, modelRef, variant);
   const text = normalizeSessionPrompt(prompt);
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
@@ -487,7 +490,7 @@ async function sendSessionPrompt(
   env: Env,
   record: SessionRecord
 ): Promise<Response> {
-  const input = await readSendPromptInput(request);
+  const input = await readSendPromptInput(request, await loadModelCatalog(env));
   if (record.phase === 'lost') {
     // The conversation this session names is gone from the container. A message
     // sent here would either 404 or open a different conversation under this
@@ -733,7 +736,10 @@ async function requireAwakeRuntime(
   return { instance, runtimeEpoch };
 }
 
-async function readSendPromptInput(request: Request): Promise<QueuePromptInput> {
+async function readSendPromptInput(
+  request: Request,
+  catalog: ModelCatalog
+): Promise<QueuePromptInput> {
   let value: unknown;
   try {
     value = await request.json();
@@ -754,7 +760,7 @@ async function readSendPromptInput(request: Request): Promise<QueuePromptInput> 
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
-  if (model !== undefined && !isModelRef(model)) {
+  if (model !== undefined && !catalog.isModelRef(model)) {
     throw new HttpError(400, 'Unknown model');
   }
   // Variant is validated against the model that will actually run this prompt.
@@ -762,7 +768,7 @@ async function readSendPromptInput(request: Request): Promise<QueuePromptInput> 
   // bare variant cannot be checked here without reading the record — the agent
   // re-resolves it. An explicit pair is checked now so a bad UI choice 400s.
   if (model !== undefined && variant !== undefined && variant !== null && variant !== '') {
-    if (!isValidVariant(model, variant)) {
+    if (!catalog.isValidVariant(model, variant)) {
       throw new HttpError(400, 'Unknown model variant');
     }
   } else if (
@@ -790,13 +796,14 @@ async function readSendPromptInput(request: Request): Promise<QueuePromptInput> 
  * has variants. Rejects a key the model does not list.
  */
 function resolveRequestVariant(
+  catalog: ModelCatalog,
   modelRef: string,
   variant: unknown
 ): string | undefined {
   if (variant === undefined || variant === null || variant === '') {
-    return defaultVariantForModel(modelRef);
+    return catalog.defaultVariantForModel(modelRef);
   }
-  if (!isValidVariant(modelRef, variant)) {
+  if (!catalog.isValidVariant(modelRef, variant)) {
     throw new HttpError(400, 'Unknown model variant');
   }
   return variant;

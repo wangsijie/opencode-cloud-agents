@@ -2,17 +2,23 @@
 
 ## Repository role
 
-This repository builds and deploys OpenCode Cloud, and owns the OpenCode configuration its Sandbox runtime uses.
+This repository builds and deploys OpenCode Cloud. The OpenCode configuration
+its Sandbox runtime uses is **not in the code**: it lives in the D1 `settings`
+table and is edited on the Hub's `/settings` page.
 
-- `src/opencode-config.ts` is the provider/model configuration, including capabilities, limits, costs and variants.
-- `Dockerfile` is the OpenCode version for Sandbox images.
+- `src/settings.ts` / `src/settings-schema.ts` are the setting keys and the
+  validation gate in front of them; `src/api-settings.ts` is the API.
+- `src/model-catalog.ts` derives the model picker from the stored config at
+  request time.
+- `Dockerfile` is the OpenCode version for Sandbox images. It carries no
+  credentials; `src/container-credentials.ts` injects them at wake.
 
 ## Configuration changes
 
-When changing an OpenCode provider, model, capability or version:
+When changing the OpenCode config (on the settings page) or its validation:
 
-1. Keep all image-capable models explicitly configured with `modalities.input` containing both `text` and `image`; `attachment: true` alone is insufficient.
-2. Remember the Hub's session model picker derives from the same file: removing a model drops it from the composer and breaks any session still pinned to it.
+1. Keep all image-capable models explicitly configured with `modalities.input` containing both `text` and `image`; `attachment: true` alone is insufficient (the validator warns).
+2. Remember the Hub's session model picker derives from the same stored config: removing a model drops it from the composer and breaks any session still pinned to it (the API refuses unless forced).
 3. Keep OpenCode and SDK versions aligned unless a documented platform constraint requires otherwise.
 
 ## An unanswered permission is a hung session
@@ -21,18 +27,21 @@ OpenCode falls through to `ask` for any permission no rule matches, and an ask
 blocks the tool call on a promise only a reply settles. Nothing in the Hub
 answers one — there is no permission UI and no operator — so a single ask leaves
 the tool part `running`, the container busy and the session `working` until
-somebody aborts it. `permission` in `src/opencode-config.ts` therefore decides
-every key OpenCode accepts, and a new key added by an OpenCode upgrade has to be
-added there too. `external_directory` is the one that fires in practice: a model
+somebody aborts it. `permission` in the stored OpenCode config therefore decides
+every key OpenCode accepts — `validateOpencodeConfig` in
+`src/settings-schema.ts` refuses to store a config that omits one, and a new
+key added by an OpenCode upgrade has to be added to
+`REQUIRED_PERMISSION_KEYS` there too. `external_directory` is the one that
+fires in practice: a model
 reading a file outside the checkout, and Grok does it often enough that it
 looked like a Grok bug.
 
 ## Repository catalog
 
 GitHub is the only catalog. The Hub lists the account's pushable repositories
-(`src/github-catalog.ts`) using the token committed in that file — a
-`GITHUB_TOKEN` secret overrides it. That token only ever lists repositories;
-pushes and pull requests use the image's own `gh` login. `src/repos.ts` is no
+(`src/github-catalog.ts`) using the token stored under `github.token` in
+settings — a `GITHUB_TOKEN` wrangler secret overrides it. The same token signs
+the container's `gh` CLI in for pull requests. `src/repos.ts` is no
 longer a catalog: it is the entry shape, the safety rules, and the
 `/workspace/<repoKey>` path convention.
 
@@ -202,4 +211,10 @@ pnpm run typecheck
 
 ## Secrets
 
-This is a private repository and intentionally contains narrowly scoped provider and deployment credentials. Do not print credentials in command output or send them to external tools. Preserve unrelated working-tree changes.
+Credentials live in the D1 `settings` table, entered on the `/settings` page —
+the repository itself carries none. The admin password is stored as a salted
+PBKDF2 hash and browser sessions as token hashes in `admin_sessions`; secret
+settings never read back through the API. Do not print credentials in command
+output or send them to external tools; do not reintroduce hardcoded
+credentials into the code or the image. Preserve unrelated working-tree
+changes.

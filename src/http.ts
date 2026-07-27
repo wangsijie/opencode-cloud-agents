@@ -6,14 +6,20 @@
  * any of that logic runs.
  */
 
-/** An error carrying the status the router should answer with. */
+/**
+ * An error carrying the status the router should answer with.
+ *
+ * `status` is declared as a plain field rather than a constructor parameter
+ * property because the tests run this file through Node's type stripping,
+ * which refuses parameter properties.
+ */
 export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string
-  ) {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'HttpError';
+    this.status = status;
   }
 }
 

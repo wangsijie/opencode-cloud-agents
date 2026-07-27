@@ -2,13 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  DEFAULT_MODEL_REF,
-  MODEL_OPTIONS,
-  findModel,
-  isModelRef,
-  parseModelRef
-} from '../src/opencode-config.ts'
-import {
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
   deriveDisplayTitle,
@@ -19,33 +12,8 @@ import {
   normalizeSessionPrompt
 } from '../src/sessions.ts'
 
-test('model catalog exposes every configured provider model', () => {
-  assert.ok(MODEL_OPTIONS.length > 0)
-  for (const option of MODEL_OPTIONS) {
-    assert.equal(option.id, option.providerID + '/' + option.modelID)
-    assert.equal(findModel(option.id), option)
-    assert.ok(isModelRef(option.id))
-  }
-  assert.ok(isModelRef(DEFAULT_MODEL_REF))
-})
-
-test('model references keep slashes inside the model id', () => {
-  // Model ids such as `ag/gemini-3.6-flash-high` contain slashes, so only the
-  // first segment may be treated as the provider.
-  const nested = MODEL_OPTIONS.find((option) => option.modelID.includes('/'))
-  assert.ok(nested, 'expected at least one model id containing a slash')
-  assert.deepEqual(parseModelRef(nested.id), {
-    providerID: nested.providerID,
-    modelID: nested.modelID
-  })
-})
-
-test('unknown model references are rejected rather than forwarded', () => {
-  assert.equal(isModelRef('nope/nope'), false)
-  assert.equal(isModelRef(''), false)
-  assert.equal(isModelRef(undefined), false)
-  assert.equal(parseModelRef('nope/nope'), undefined)
-})
+// The model catalog's own behaviour is covered in model-catalog.test.mjs,
+// against a fixture config the way the runtime now derives it from settings.
 
 test('session titles come from the first non-empty prompt line', () => {
   assert.equal(deriveSessionTitle('\n\n  Fix lint  \nmore notes'), 'Fix lint')

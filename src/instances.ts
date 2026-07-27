@@ -46,6 +46,8 @@ export interface InstanceRecord {
 export interface WakeStageTimings {
   /** Container start plus R2 workspace restore; the two cannot be separated. */
   restoreMs?: number;
+  /** Credential and skill injection from the settings table. */
+  credentialsMs?: number;
   /** Repository provisioning: a clone on the first wake, nothing later. */
   repoMs?: number;
   /** OpenCode server start, overlapped with the resumed checkout's fetch. */

@@ -16,7 +16,6 @@
  */
 import { getSandbox } from '@cloudflare/sandbox';
 import {
-  BUNDLED_GITHUB_TOKEN,
   REPO_CATALOG_TTL_MS,
   fetchGithubRepoCatalog,
   orderReposByLastUse,
@@ -31,12 +30,13 @@ import {
 } from './hub-rows';
 import { HUB_DURABLE_OBJECT_ID, type InstanceRecord } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
-import { isModelRef } from './opencode-config';
+import type { ModelCatalog } from './model-catalog';
 import {
   isSafeRepoDefinition,
   repoWorkspaceDirectory,
   type RepoDefinition
 } from './repos';
+import { SETTING_KEYS, readSetting, writeSetting } from './settings';
 import type { SessionRecord, SessionStatePatch } from './sessions';
 
 const REPO_CATALOG_SETTING_KEY = 'repo-catalog';
@@ -127,12 +127,15 @@ export async function createSession(
     model: string;
     variant?: string;
     title: string;
-  }
+  },
+  // Loaded by the route that already validated the request against it, so the
+  // same catalog answers both checks.
+  catalog: ModelCatalog
 ): Promise<SessionRecord> {
   if (!isSafeRepoDefinition(input.repo)) {
     throw new Error('Unknown repository');
   }
-  if (!isModelRef(input.model)) {
+  if (!catalog.isModelRef(input.model)) {
     throw new Error(`Unknown model: ${String(input.model)}`);
   }
 
@@ -433,15 +436,17 @@ async function readRepoCatalog(
   if (stored && !force) {
     return stored;
   }
-  // The secret is not declared in wrangler.jsonc, because it exists only
-  // where somebody has set one; the bundled token is what this deployment
-  // runs on until that happens.
+  // A `GITHUB_TOKEN` wrangler secret still wins as an escape hatch (it is not
+  // declared in wrangler.jsonc, because it exists only where somebody has set
+  // one); the normal home for the token is the settings table.
   const token =
     (env as Env & { GITHUB_TOKEN?: string }).GITHUB_TOKEN ||
-    BUNDLED_GITHUB_TOKEN;
+    (await readSetting<string>(env, SETTING_KEYS.githubToken));
   try {
     if (!token) {
-      throw new Error('No GitHub token is configured');
+      throw new Error(
+        'No GitHub token is configured; set one on the settings page'
+      );
     }
     const repos = await fetchGithubRepoCatalog(token);
     if (repos.length === 0) {
@@ -497,34 +502,6 @@ async function repoLastUse(env: Env): Promise<Map<string, string>> {
      GROUP BY repo_key`
   ).all<{ repo_key: string; last_used: string }>();
   return new Map(result.results.map((row) => [row.repo_key, row.last_used]));
-}
-
-/**
- * The `settings` table: one JSON value per key. The repo catalog lives here
- * now; configuration that becomes editable later (opencode config, tokens)
- * gets its own keys without a schema change.
- */
-async function readSetting<T>(env: Env, key: string): Promise<T | undefined> {
-  const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?1')
-    .bind(key)
-    .first<{ value: string }>();
-  if (!row) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(row.value) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-async function writeSetting(env: Env, key: string, value: unknown): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-  )
-    .bind(key, JSON.stringify(value), new Date().toISOString())
-    .run();
 }
 
 function resolveSandbox(env: Env, id: string) {
