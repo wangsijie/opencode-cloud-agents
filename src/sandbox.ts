@@ -23,6 +23,7 @@ import {
   isWebSocketUpgrade,
   truncateOutput
 } from './http';
+import { getHub } from './instance-access';
 import type {
   InstanceRuntimeStatus,
   WakeStageTimings,
@@ -1803,7 +1804,17 @@ export class Sandbox extends BaseSandbox<Env> {
           `Failed to read OpenCode session messages: ${describeSdkFailure(result)}`
         );
       }
-      const opencodeTitle = await this.readOpencodeTitle(target, reason);
+      const opencodeTitle = await this.readOpencodeTitle(target);
+      if (opencodeTitle && opencodeTitle !== this.transcriptMirror?.opencodeTitle) {
+        void getHub(this.persistenceEnv)
+          .updateSession(sessionId, { title: opencodeTitle })
+          .catch((error: unknown) => {
+            console.warn('Failed to sync auto-generated title to Hub session', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          });
+      }
       const mirror = buildTranscriptMirror({
         sessionId,
         opencodeSessionId: target.opencodeSessionId,
@@ -1830,20 +1841,13 @@ export class Sandbox extends BaseSandbox<Env> {
   /**
    * The title OpenCode gave this conversation, for the mirror to carry.
    *
-   * Not read on every live export: OpenCode names a session once, shortly after
-   * the first message, so a live export that already has a title skips the call
-   * and the slower exports pick up a later rename. A failure returns the title
-   * already known rather than dropping it, because losing a good title to a
-   * transient read would rename the session in the list.
+   * A failure returns the title already known rather than dropping it, because
+   * losing a good title to a transient read would rename the session in the list.
    */
   private async readOpencodeTitle(
-    target: TranscriptTarget,
-    reason: TranscriptMirrorReason
+    target: TranscriptTarget
   ): Promise<string | undefined> {
     const known = this.transcriptMirror?.opencodeTitle;
-    if (known && reason === 'live') {
-      return known;
-    }
     try {
       const result = await this.createTranscriptClient().session.get({
         sessionID: target.opencodeSessionId,

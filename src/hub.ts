@@ -357,6 +357,7 @@ export class Hub extends DurableObject<Env> {
         ...record,
         ...(patch.phase ? { phase: patch.phase } : {}),
         ...(patch.model ? { model: patch.model } : {}),
+        ...(!record.titleLocked && patch.title ? { title: patch.title } : {}),
         ...(patch.opencodeSessionId
           ? { opencodeSessionId: patch.opencodeSessionId }
           : {}),
