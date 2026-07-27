@@ -1749,11 +1749,17 @@ a.part-task:focus-visible {
    controls — and on touch, where nothing is ever hovered, it stays visible. */
 .message {
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .message-actions {
   display: flex;
   margin-top: 2px;
+}
+
+.message.user .message-actions {
+  align-self: flex-end;
 }
 
 .message-actions .copy-button {
