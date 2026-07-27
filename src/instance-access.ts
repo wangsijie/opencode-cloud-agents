@@ -28,23 +28,19 @@ import type { LifecycleStatus } from './lifecycle';
 import type { Sandbox } from './sandbox';
 
 /**
- * `terminal()` exists on the stub `getSandbox()` returns, not on the Durable
- * Object class: it is a client-side proxy that upgrades a WebSocket onto the
- * container's PTY endpoint. Declaring it here is what lets the session API call
- * it without casting at the call site.
+ * Every container-bound call is a Durable Object RPC method on `Sandbox`.
+ *
+ * The stub `getSandbox()` returns also carries client-side proxies the SDK
+ * defines — `terminal()` upgrading a WebSocket onto the container's PTY was the
+ * one this app used, and it is gone. Nothing here reaches for them: a proxy that
+ * bypasses the class bypasses the runtime gate and the control-plane admission
+ * with it, which is exactly how the terminal came to be dead on arrival.
  */
-type SandboxStub = Sandbox & {
-  terminal(
-    request: Request,
-    options?: { cols?: number; rows?: number; shell?: string }
-  ): Promise<Response>;
-};
-
-export function resolveSandbox(env: Env, instance: InstanceRecord): SandboxStub {
+export function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
   return getSandbox(env.Sandbox, instance.id, {
     normalizeId: true,
     keepAlive: true
-  }) as SandboxStub;
+  }) as unknown as Sandbox;
 }
 
 export function resolveLifecycle(env: Env, instanceId: string) {

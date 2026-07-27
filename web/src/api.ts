@@ -339,24 +339,6 @@ export const readWorkspaceFile = (id: string, path: string) =>
     `/api/sessions/${encodeURIComponent(id)}/files?read=1&path=${encodeURIComponent(path)}`
   );
 
-/** Where the browser attaches a shell to this session's container. */
-export const terminalSocketUrl = (id: string, origin: string) =>
-  `${origin}/api/sessions/${encodeURIComponent(id)}/terminal`;
-
-/**
- * Renew a work lease so an attached terminal is not stopped for being idle.
- *
- * The lifecycle only watches OpenCode's execution state, so a shell running a
- * build looks like an empty container to it. The lease is renewed on a timer
- * and never explicitly ended: a closed tab stops renewing, and the container
- * goes back to its ordinary idle window.
- */
-export const keepSessionAwake = (id: string) =>
-  call<{ heldUntil: string }>(
-    `/api/sessions/${encodeURIComponent(id)}/keepalive`,
-    { method: 'POST' }
-  );
-
 /**
  * Repository and model choices.
  *

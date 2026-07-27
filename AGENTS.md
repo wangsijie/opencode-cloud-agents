@@ -95,14 +95,28 @@ Since M6 the stock OpenCode UI and its proxies (`/ui/`, `/assets/`, `/gateway/`,
 `/hub/bootstrap.js`) are deleted. The browser talks only to `/api/*` and the SPA
 shell; containers are reached exclusively by Durable Object RPC from inside the
 Worker. Keep it that way — do not add a route that forwards browser traffic to a
-container port. Files and terminals are `/api/sessions/:id/files` and
-`/api/sessions/:id/terminal`, and both refuse a sleeping session rather than
-waking one.
+container port. Files are `/api/sessions/:id/files`, which refuses a sleeping
+session rather than waking one.
 
-The terminal is the exception to "passive traffic never keeps a container
-alive", and deliberately so: a shell is invisible to the OpenCode activity
-probe, so the panel renews a work lease through `POST /api/sessions/:id/keepalive`
-and lets it expire on its own when the tab closes.
+## The terminal was removed, and why that matters for the next one
+
+There was a shell: `GET /api/sessions/:id/terminal` upgraded a WebSocket and
+handed it to the Sandbox SDK's `stub.terminal()`, which proxies the PTY onto the
+container's control-plane port 3000. `containerFetch` admits port 3000 only
+while a `withControlPlaneAccess` operation is in flight, and a terminal is not
+one — so every attempt threw `Sandbox control plane is not admitted`. The panel
+sat behind a collapsed sidebar tab and was never opened, so it shipped dead and
+stayed dead. It is gone now: the route, the panel, xterm, the SDK stub cast, and
+the `keepalive` work-lease route that existed only to stop the idle probe from
+reaping an attached shell.
+
+Two things to keep when it is rebuilt. Go through the class, not the SDK's
+client-side stub proxies — a proxy that bypasses `Sandbox` bypasses the runtime
+gate and the control-plane admission with it, which is exactly how this one came
+to be dead on arrival. And a shell is invisible to the OpenCode activity probe,
+so it needs a work lease (`LifecycleCoordinator.beginWork`) renewed on a timer,
+left to expire on its own when the tab closes; that is the one deliberate
+exception to "passive traffic never keeps a container alive".
 
 ## Local development
 

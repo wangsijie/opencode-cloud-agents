@@ -25,8 +25,7 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
   that dies without quiescing loses seconds rather than a probe interval. The
   page also shows what the agent changed — branch, changed files, diff — and
   commits, pushes and opens a pull request from there. A workspace panel below
-  it browses the checkout and attaches a shell to the container, which is what
-  retired the stock OpenCode IDE.
+  it browses the checkout, which is what retired the stock OpenCode IDE.
 - The `Hub` Durable Object is the strongly consistent session and instance
   registry.
 - Every session has a `SessionAgent` Durable Object. Its alarm owns the
@@ -51,25 +50,23 @@ That was not always true. Until M6 the stock OpenCode SPA was served through
 this Worker as an escape hatch for terminals and file browsing, which needed a
 public container gateway (`/gateway/<id>/<epoch>/*`), a versioned asset proxy
 (`/ui/...`, `/assets/...`), a bootstrap script that virtualized `localStorage`,
-and a regex patch of OpenCode's entry bundle. All of it is deleted. The two
-capabilities it existed for are now first-party:
+and a regex patch of OpenCode's entry bundle. All of it is deleted. What it
+existed for is now first-party:
 
 - `GET /api/sessions/<id>/files?path=` lists a directory of the checkout, and
   `&read=1` returns one file's content (text capped at 256 KB, binaries
   described rather than rendered).
-- `GET /api/sessions/<id>/terminal` upgrades to a WebSocket and proxies the
-  Sandbox SDK's PTY. The browser half is that SDK's own `SandboxAddon` driving
-  xterm.js, so the wire protocol is not reimplemented here.
 
-Both refuse a sleeping session (HTTP 409) rather than waking one, and both
-validate the runtime epoch before any container call — a tab left open across a
-shutdown cannot restart the container.
+It refuses a sleeping session (HTTP 409) rather than waking one, and validates
+the runtime epoch before any container call — a tab left open across a shutdown
+cannot restart the container.
 
-An attached terminal renews a short work lease every 45 seconds
-(`POST /api/sessions/<id>/keepalive`). The idle probe only watches OpenCode's
-execution state, so without it a shell running a test suite would look exactly
-like an empty container. Nothing releases the lease explicitly: closing the tab
-stops the renewals and the ordinary ten-minute idle window resumes.
+The other half of that retirement, a terminal, has been removed. Its PTY was
+proxied through the Sandbox SDK's `stub.terminal()` onto container port 3000,
+which `containerFetch` admits only during a control-plane operation, so it threw
+on every attempt; behind a collapsed sidebar tab nobody ever found out. There is
+no WebSocket route into a container today, and the Sandbox Durable Object
+refuses an upgrade outright.
 
 The upside of the retirement is that OpenCode upgrades are no longer coupled to
 a bundle patch, and `/gateway/` no longer exists as a public route.
@@ -182,13 +179,13 @@ in `src/opencode-config.ts`. Change `ADMIN_PASSWORD` there and redeploy; every
 signed-in browser is signed out, because the cookie carries a hash of that
 string rather than a random session id the Worker would have to remember.
 
-Everything under `/api/` requires it, including the terminal WebSocket. The SPA
+Everything under `/api/` requires it. The SPA
 shell and its assets do not: they carry the sign-in form and nothing else worth
 reading. A rejected request answers 401, which drops the open tab back to the
 form. `wrangler dev` asks for the password too — there is no local bypass.
 
 This is a single fixed secret with no rate limiting, which is enough for one
-operator on an unlisted hostname and not much more. The Hub hands out a terminal
+operator on an unlisted hostname and not much more. The Hub drives an agent
 inside an image carrying deployment credentials, so if this deployment ever
 grows a second user or a guessable address, put it behind real identity —
 Cloudflare Access in front of every route including the default `workers.dev`
@@ -313,13 +310,6 @@ curl 'http://localhost:8787/api/sessions?archived=1'
 curl 'http://localhost:8787/api/sessions/<session-id>/files?path=src'
 curl 'http://localhost:8787/api/sessions/<session-id>/files?read=1&path=src/index.ts'
 
-# Attach a shell. A WebSocket upgrade; the browser side is the Sandbox SDK's
-# xterm addon, and `POST .../keepalive` is what stops the idle probe from
-# stopping a container that is only busy in the shell.
-curl -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  'http://localhost:8787/api/sessions/<session-id>/terminal?cols=100&rows=30'
-
 # Interrupt a running agent, leaving the conversation intact.
 curl -X POST http://localhost:8787/api/sessions/<session-id>/abort
 
@@ -339,7 +329,7 @@ session out of the default list while keeping its container, history and mirror
 — sending it a message brings it straight back.
 
 Reading a session — the list, the transcript, the event stream, the diff, the
-files, the terminal — never starts a container. Only creating a session and
+files — never starts a container. Only creating a session and
 sending it a message do, because those are the explicit requests for a running
 one; everything else refuses a sleeping session instead of waking it.
 
@@ -385,8 +375,7 @@ runtime.
   response agree that no session is executing. Probe failure is treated as
   unknown and fails safe by keeping the container running.
 - Work-starting calls carry a short durable lease so a fast task that starts
-  and finishes between probes still resets the idle window. An attached terminal
-  renews the same kind of lease, because a shell is invisible to the probe.
+  and finishes between probes still resets the idle window.
 - Dispatch releases its lease once it has confirmed the session is observably
   active, handing the session back to the probe instead of staying `working`
   until the lease expires. A handover it cannot confirm keeps the lease.

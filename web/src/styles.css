@@ -1439,16 +1439,6 @@ summary:focus-visible {
   gap: 10px;
 }
 
-.workspace-tabs {
-  display: flex;
-  gap: 12px;
-}
-
-.workspace-tabs .link-button.active {
-  color: var(--accent);
-  font-weight: 600;
-}
-
 .file-path {
   display: flex;
   align-items: baseline;
@@ -1519,28 +1509,6 @@ summary:focus-visible {
   font-size: 12px;
   line-height: 1.45;
   white-space: pre;
-}
-
-.terminal-view {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.terminal-status {
-  font-size: 12px;
-}
-
-/* A terminal is dark in both themes: the colours a shell prints are written for
-   a dark background, and xterm's palette is fixed when it is constructed. */
-.terminal-host {
-  height: 42vh;
-  min-height: 220px;
-  padding: 8px;
-  background: #1f1e1d;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
 }
 
 /* ---------- phone: the sidebar becomes a drawer ---------- */

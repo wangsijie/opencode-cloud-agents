@@ -155,8 +155,8 @@ export function ChangesPanel({
                   <pre className="diff mono">{changes.diff}</pre>
                   {changes.diffTruncated ? (
                     <p className="muted">
-                      Diff was too long and got truncated; run git diff in the
-                      workspace terminal for the full text.
+                      Diff was too long and got truncated; ask the agent to run
+                      git diff for the full text.
                     </p>
                   ) : null}
                 </details>

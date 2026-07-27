@@ -11,15 +11,14 @@ type Tab = 'changes' | 'workspace';
 /**
  * Everything about the session that is not the conversation.
  *
- * The changes, the container's files and shell, and the running cost all used
- * to sit above the transcript, where they pushed the first message down the
- * page and turned a read into a scroll. Here they are one panel the reader
- * opens when they want it, which leaves the main column as messages and nothing
- * else.
+ * The changes, the container's files, and the running cost all used to sit
+ * above the transcript, where they pushed the first message down the page and
+ * turned a read into a scroll. Here they are one panel the reader opens when
+ * they want it, which leaves the main column as messages and nothing else.
  *
  * Only the chosen tab is mounted: each one talks to the container, and a
- * background tab quietly holding a terminal open — or re-reading a diff on
- * every poll — is exactly the cost the collapse is there to avoid.
+ * background tab re-reading a diff on every poll is exactly the cost the
+ * collapse is there to avoid.
  */
 export function SessionDetails({
   session,
@@ -116,11 +115,7 @@ export function SessionDetails({
             sessionTitle={session.title}
           />
         ) : (
-          <WorkspacePanel
-            sessionId={session.id}
-            attached={attached}
-            directory={session.directory ?? `/workspace/${session.repoKey}`}
-          />
+          <WorkspacePanel sessionId={session.id} attached={attached} />
         )}
       </div>
     </aside>

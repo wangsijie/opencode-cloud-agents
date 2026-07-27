@@ -686,9 +686,9 @@ export class Sandbox extends BaseSandbox<Env> {
     let snapshot: ExecutionSnapshot | undefined;
     try {
       if (this.runtimeGate?.phase === 'quiescing') {
-        // Let already-admitted WebSocket handshakes finish before stopping.
-        // The parent proxy can start a runtime while opening a socket, so none
-        // may remain suspended across this boundary.
+        // Let already-admitted requests finish before stopping. The parent
+        // proxy can start a runtime while serving one, so none may remain
+        // suspended across this boundary.
         await this.waitForOperationDrain();
         await scheduler.wait(QUIESCE_SETTLE_MS);
 
@@ -1961,39 +1961,23 @@ export class Sandbox extends BaseSandbox<Env> {
     return this.purgeInProgress;
   }
 
+  /**
+   * Nothing crosses this boundary as a WebSocket any more.
+   *
+   * The terminal was the one thing that did — a PTY socket the SDK's stub
+   * proxied onto the container's control-plane port, which the admission check
+   * in `containerFetch` refused every single time, so the panel never opened.
+   * Refusing the upgrade here says that in one place instead of leaving a socket
+   * to fail three layers down. Everything else the Worker asks for is an RPC
+   * method on this class, and each one takes the runtime gate on the way in.
+   */
   override async fetch(request: Request): Promise<Response> {
-    if (!isWebSocketUpgrade(request)) {
-      return super.fetch(request);
+    if (isWebSocketUpgrade(request)) {
+      return new Response('This Sandbox does not serve WebSocket upgrades', {
+        status: 404
+      });
     }
-
-    await this.lifecycleReady;
-    const runtimeEpoch = request.headers.get(RUNTIME_EPOCH_HEADER);
-    if (
-      !runtimeEpoch ||
-      this.runtimeGate?.phase !== 'running' ||
-      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-      this.persistenceState.container?.running !== true
-    ) {
-      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
-    }
-    await this.rememberRequestLocation(request);
-    if (
-      this.runtimeGate?.phase !== 'running' ||
-      this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-      this.persistenceState.container?.running !== true
-    ) {
-      return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
-    }
-    this.beginActiveOperation();
-    try {
-      // WebSockets must cross the Durable Object fetch boundary rather than
-      // JSRPC. Since the stock UI's gateway was retired this path carries
-      // exactly one thing: the terminal's PTY socket, opened by the session
-      // API through getSandbox(...).terminal().
-      return await super.fetch(request);
-    } finally {
-      this.finishActiveOperation();
-    }
+    return super.fetch(request);
   }
 
   override async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {

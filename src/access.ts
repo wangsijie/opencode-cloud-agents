@@ -153,8 +153,9 @@ export async function requireAdmin(
  * sends an Origin header.
  *
  * The session cookie is `SameSite=Lax`, so a cross-site form post never carries
- * it in a current browser; this is the belt to that suspenders, and it is what
- * keeps another page from opening a terminal socket into a container.
+ * it in a current browser; this is the belt to that suspenders. No route
+ * upgrades a WebSocket today — the terminal that did is gone — but the check
+ * stays: it is the rule, not a fixture of whichever routes currently exist.
  */
 export function enforceSameOrigin(
   request: Request,

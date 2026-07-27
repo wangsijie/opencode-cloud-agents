@@ -8,7 +8,7 @@
  *
  * Since M6 there is no public route into a container. The stock OpenCode UI and
  * its proxies (`/ui/`, `/assets/`, `/gateway/`, `/hub/bootstrap.js`) are gone;
- * everything a session needs — conversation, diff, files, terminal — is an
+ * everything a session needs — conversation, diff, files — is an
  * `/api/sessions/*` route, and the only thing that reaches a container is a
  * Durable Object RPC from inside this Worker.
  */

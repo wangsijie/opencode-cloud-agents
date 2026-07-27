@@ -9,15 +9,12 @@ import {
   HttpError,
   decodeRouteSegment,
   isSafeInstanceId,
-  isWebSocketUpgrade,
   json,
-  methodNotAllowed,
-  stripAccessCredentials
+  methodNotAllowed
 } from './http';
 import {
   getHub,
   getInstanceView,
-  resolveLifecycle,
   resolveSandbox,
   unknownRuntimeStatus
 } from './instance-access';
@@ -171,18 +168,8 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     return await readSessionFiles(url, env, record);
   }
 
-  if (action === 'terminal') {
-    if (request.method !== 'GET') {
-      return methodNotAllowed('GET');
-    }
-    return await openSessionTerminal(request, url, env, record);
-  }
-
   if (request.method !== 'POST') {
     return methodNotAllowed('POST');
-  }
-  if (action === 'keepalive') {
-    return await keepSessionAwake(env, record);
   }
   if (action === 'abort') {
     return await abortSession(env, record);
@@ -633,72 +620,6 @@ async function readSessionFiles(
     }
     throw error;
   }
-}
-
-/**
- * Attach a shell to the session's container over a WebSocket.
- *
- * The stock IDE's terminal was the last thing only it could do. This is the
- * same PTY the Sandbox SDK exposes, reached through the Hub's own origin so the
- * container gateway does not have to be public for it.
- *
- * Like the other container-bound routes it refuses a sleeping session rather
- * than waking one: a terminal is only useful attached, and a cold start behind
- * a socket that is already open reads as a hang.
- */
-async function openSessionTerminal(
-  request: Request,
-  url: URL,
-  env: Env,
-  record: SessionRecord
-): Promise<Response> {
-  if (!isWebSocketUpgrade(request)) {
-    throw new HttpError(400, 'The terminal endpoint requires a WebSocket upgrade');
-  }
-  const { instance, runtimeEpoch } = await requireAwakeRuntime(
-    env,
-    record,
-    'open a terminal in'
-  );
-  const headers = stripAccessCredentials(new Headers(request.headers));
-  headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
-  return await resolveSandbox(env, instance).terminal(
-    new Request(request, { headers }),
-    {
-      cols: readTerminalDimension(url.searchParams.get('cols'), 80),
-      rows: readTerminalDimension(url.searchParams.get('rows'), 24)
-    }
-  );
-}
-
-function readTerminalDimension(value: string | null, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 10 && parsed <= 500
-    ? parsed
-    : fallback;
-}
-
-/**
- * Hold the container open while a terminal is attached.
- *
- * The idle probe only sees OpenCode's execution state, so a shell running a
- * test suite looks exactly like an empty container. A work lease is how the
- * lifecycle is told otherwise; the terminal panel renews one on a timer, and
- * the lease is deliberately left to expire rather than being ended, so a closed
- * laptop lid releases the container on its own.
- */
-async function keepSessionAwake(
-  env: Env,
-  record: SessionRecord
-): Promise<Response> {
-  const { runtimeEpoch } = await requireAwakeRuntime(env, record, 'keep awake');
-  const lease = await resolveLifecycle(env, record.instanceId).beginWork(
-    runtimeEpoch
-  );
-  if (!lease.admitted) {
-    throw new HttpError(409, 'This session is no longer running');
-  }
-  return json({ heldUntil: lease.expiresAt });
 }
 
 /**

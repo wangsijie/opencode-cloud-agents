@@ -667,6 +667,13 @@ M6 偏差与备注：
 - 终端与文件浏览的**服务端逻辑有单测（21 例路径/列表/截断），但整条链路尚未在真实容器上
   跑过**——本轮改动没有做本地 `wrangler dev` + 容器实测，PTY 的 `sessionId` 是否总能命中
   容器默认 session、`cd` 到 checkout 的首条命令表现如何，都要在首次实跑时确认。
+  > **后记（2026-07-27）**：这条风险兑现了，而且比预想更彻底。`stub.terminal()` 把 PTY 代
+  > 理到容器的 3000 控制面端口，而 `containerFetch` 只在 `withControlPlaneAccess` 操作在飞
+  > 时才放行该端口，终端不是这样的操作，于是每次都抛 `Sandbox control plane is not
+  > admitted`。面板藏在默认收起的侧栏页签里，从未被点开，所以这个功能上线即死、且死了很
+  > 久没人知道——直到一次排查需要进容器才撞上。终端连同 `/api/sessions/:id/terminal`、
+  > `keepalive` 路由、xterm 依赖一并删除，等重做时**走 DO 的类方法而不是 SDK 的 stub
+  > 代理**（细节见 AGENTS.md）。
 - 冷启动优化同理：埋点已经在，但**还没有生产数字**。"镜像瘦身"这条因此仍然悬着——在
   知道恢复/启动各占多少之前，砍镜像里的 `gh`/wrangler 是凭感觉动刀。等 `lastWake` 攒够
   样本再决定。
