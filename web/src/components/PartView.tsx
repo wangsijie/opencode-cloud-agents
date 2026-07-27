@@ -2,9 +2,10 @@ import { useState } from 'react';
 import remarkBreaks from 'remark-breaks';
 import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { code } from '@streamdown/code';
-import type { MessagePart } from '../api';
+import type { MessageDiff, MessagePart } from '../api';
 import { agentPath, isPlainClick, navigate } from '../router';
 import { ChevronRightIcon } from './icons';
+import { PatchView } from './PatchView';
 
 /*
  * Module-level so the references stay stable across renders — Streamdown
@@ -173,13 +174,18 @@ function Todo({ part }: { part: MessagePart }) {
  * `sessionId` is the Hub session this transcript belongs to. A subagent is
  * addressable only inside one, so without it a `task` call has nowhere to lead
  * and renders as the plain row it always did.
+ *
+ * `turnDiffs` is the file-by-file diff of the user turn this part sits in,
+ * which is where a `patch` part finds its content.
  */
 export function PartView({
   part,
-  sessionId
+  sessionId,
+  turnDiffs
 }: {
   part: MessagePart;
   sessionId?: string;
+  turnDiffs?: MessageDiff[];
 }) {
   switch (part.type) {
     case 'text':
@@ -204,6 +210,8 @@ export function PartView({
       return <Subtask part={part} />;
     case 'todo':
       return <Todo part={part} />;
+    case 'patch':
+      return <PatchView part={part} diffs={turnDiffs} />;
     default:
       // Named rather than hidden: an unrendered part is still evidence that
       // something happened, and the type is what tells us what to build next.

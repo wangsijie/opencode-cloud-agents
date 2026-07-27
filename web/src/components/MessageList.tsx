@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
 import type { SessionMessage } from '../api';
+import { turnDiffsByMessage } from '../patch-diffs';
 import { isRenderablePart, PartView } from './PartView';
 
 /**
@@ -26,6 +27,11 @@ export function MessageList({
   sessionId?: string;
 }) {
   const pinned = useRef(true);
+
+  // A turn's diff lives on the user message that opened it, and the `patch`
+  // parts that render it live on the assistant messages under it, so the join
+  // happens here — where both sides of the conversation are in hand.
+  const turnDiffs = useMemo(() => turnDiffsByMessage(messages), [messages]);
 
   // Follow the conversation while the reader is at the bottom, but never yank
   // the view away from someone who has scrolled up to read.
@@ -60,7 +66,16 @@ export function MessageList({
           <article key={message.info.id} className={`message ${message.info.role}`}>
             <div className="message-body">
               {parts.map((part) => (
-                <PartView key={part.id} part={part} sessionId={sessionId} />
+                <PartView
+                  key={part.id}
+                  part={part}
+                  sessionId={sessionId}
+                  turnDiffs={
+                    message.info.parentID
+                      ? turnDiffs.get(message.info.parentID)
+                      : undefined
+                  }
+                />
               ))}
               {failure ? (
                 <p className="message-failure">

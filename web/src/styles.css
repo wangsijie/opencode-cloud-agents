@@ -1316,6 +1316,82 @@ a.part-task:focus-visible {
   font-style: italic;
 }
 
+/* ---------- what a step changed ---------- */
+
+.part-patch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Keeps the tool row's shape: a step's file changes are one line of the
+   transcript until someone asks for the diff. */
+.part-tool.patch-summary {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.part-tool.patch-summary:hover,
+.part-tool.patch-summary:focus-visible {
+  border-color: var(--text-dim);
+  background: var(--surface-raised);
+}
+
+/* The chevron leads the row here rather than closing it: it is a disclosure,
+   not a link onwards, so it points down once the diff is open. */
+.part-tool.patch-summary .tool-open {
+  margin-left: 0;
+  transition: transform 0.12s ease;
+}
+
+.part-tool.patch-summary.open .tool-open {
+  transform: rotate(90deg);
+}
+
+.patch-counts {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.patch-add {
+  color: var(--ok);
+}
+
+.patch-del {
+  color: var(--danger);
+}
+
+.patch-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The header is sticky inside the changes panel, where the whole panel
+   scrolls; in the transcript the page scrolls, so a sticky header would ride
+   over the message above it. */
+.patch-files .diff-file-header {
+  position: static;
+}
+
+/*
+ * OpenCode writes these patches with the whole file as context, so one edit to
+ * a long file would otherwise push the rest of the conversation off the screen.
+ * The card scrolls inside itself instead, and the transcript keeps its shape.
+ */
+.patch-files .diff-file > :not(.diff-file-header) {
+  max-height: 60vh;
+  overflow: auto;
+}
+
 .message-failure {
   margin: 0;
   color: var(--danger);

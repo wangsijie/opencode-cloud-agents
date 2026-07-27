@@ -182,12 +182,35 @@ export interface MessagePart {
   [key: string]: unknown;
 }
 
+/**
+ * One file's change over a whole user turn, as OpenCode summarizes it.
+ *
+ * `patch` is a unified diff without git's `diff --git` header; `file` is
+ * relative to the checkout, while the `patch` part that announces the same
+ * change lists absolute container paths.
+ */
+export interface MessageDiff {
+  file: string;
+  patch: string;
+  additions: number;
+  deletions: number;
+  status?: string;
+}
+
 export interface MessageInfo {
   id: string;
   role: 'user' | 'assistant';
   modelID?: string;
   time?: { created?: number; completed?: number };
   error?: { name?: string; data?: { message?: string } };
+  /** The user message this assistant message answers. */
+  parentID?: string;
+  /**
+   * Set on a user message once its turn finishes: what the agent changed
+   * across every step of it. This is the only place a diff appears in the
+   * transcript, so the assistant's `patch` parts read their content from here.
+   */
+  summary?: { diffs?: MessageDiff[] };
 }
 
 export interface SessionMessage {
