@@ -83,6 +83,12 @@ export function App() {
  */
 function SettingsGate({ onSignedOut }: { onSignedOut: () => void }) {
   const [missing, setMissing] = useState<string[]>();
+  // Once the gate has shown the forced page it stays until the operator says
+  // to continue: filling the last required setting must not yank the page
+  // away mid-flow — generating the SSH key was ejecting people before they
+  // could copy the public key it had just shown.
+  const wasForced = useRef(false);
+  const [entered, setEntered] = useState(false);
 
   const check = useCallback(async () => {
     try {
@@ -102,8 +108,15 @@ function SettingsGate({ onSignedOut }: { onSignedOut: () => void }) {
     return null;
   }
   if (missing.length > 0) {
+    wasForced.current = true;
+  }
+  if (missing.length > 0 || (wasForced.current && !entered)) {
     return (
-      <SettingsPage forced onSettingsChanged={() => void check()} />
+      <SettingsPage
+        forced
+        onSettingsChanged={() => void check()}
+        onContinue={missing.length === 0 ? () => setEntered(true) : undefined}
+      />
     );
   }
   return <Hub onSignedOut={onSignedOut} />;

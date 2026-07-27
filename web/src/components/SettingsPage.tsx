@@ -25,11 +25,19 @@ import { MenuIcon } from './icons';
 export function SettingsPage({
   forced,
   onMenu,
-  onSettingsChanged
+  onSettingsChanged,
+  onContinue
 }: {
   forced: boolean;
   onMenu?: () => void;
   onSettingsChanged: () => void;
+  /**
+   * Set in forced mode once every required setting is stored. The gate never
+   * opens on its own — finishing the last field must not yank the page away
+   * (there may be a freshly generated public key on screen to copy) — so
+   * entering the app is this explicit click.
+   */
+  onContinue?: () => void;
 }) {
   const [settings, setSettings] = useState<SettingView[]>();
   const [loadError, setLoadError] = useState<string>();
@@ -81,13 +89,28 @@ export function SettingsPage({
           <h1>Settings</h1>
 
           {forced && settings ? (
-            <section className="card error">
-              <h2>Finish setting up</h2>
-              <p className="muted">
-                The Hub cannot run until these are configured:{' '}
-                {missing.map((setting) => setting.label).join(', ') || '…'}
-              </p>
-            </section>
+            onContinue ? (
+              <section className="card settings-section">
+                <h2>Everything required is configured</h2>
+                <p className="muted">
+                  Finish anything else you want to set up here — the public key
+                  above, optional credentials — then head in.
+                </p>
+                <div className="actions">
+                  <button className="button primary" onClick={onContinue}>
+                    Continue to the Hub
+                  </button>
+                </div>
+              </section>
+            ) : (
+              <section className="card error">
+                <h2>Finish setting up</h2>
+                <p className="muted">
+                  The Hub cannot run until these are configured:{' '}
+                  {missing.map((setting) => setting.label).join(', ') || '…'}
+                </p>
+              </section>
+            )
           ) : null}
 
           {loadError ? (
