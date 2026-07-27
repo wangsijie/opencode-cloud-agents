@@ -181,6 +181,17 @@ export function SessionPage({
     );
   }, [catalog?.models, session?.model]);
 
+  // Arriving straight from the new-session form there is nothing to read and
+  // nothing to send: the prompt is already queued and the sandbox is booting.
+  // A banner plus a composer above an empty page only invites the reader to
+  // type a second message, so the whole conversation is replaced by the boot
+  // state until there is a transcript to show.
+  const booting =
+    Boolean(dispatching) &&
+    !lost &&
+    (messages?.length ?? 0) === 0 &&
+    pending.length === 0;
+
   const optimistic = useMemo(
     () =>
       pending.map((entry) => (
@@ -316,202 +327,216 @@ export function SessionPage({
 
       <div className="session-split">
         <div className="session-main">
-          <div className="content-body" ref={scroller}>
-            <div className="session-column">
-              {loadError ? (
-                <section className="card error">
-                  <h2>Could not load this session</h2>
-                  <p className="muted">{loadError}</p>
-                </section>
-              ) : null}
+          {booting ? (
+            <div className="session-booting" role="status">
+              <i className="spinner big" aria-hidden="true" />
+              <p className="booting-title">Starting the runtime environment</p>
+              <p className="muted">
+                {waking
+                  ? 'A cold start usually takes tens of seconds.'
+                  : 'Handing your message to the agent…'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="content-body" ref={scroller}>
+                <div className="session-column">
+                  {loadError ? (
+                    <section className="card error">
+                      <h2>Could not load this session</h2>
+                      <p className="muted">{loadError}</p>
+                    </section>
+                  ) : null}
 
-              {state === 'pending' && !dispatching ? (
-                <p className="banner">Starting up — no messages yet.</p>
-              ) : null}
-              {transcriptError ? (
-                <p className="banner error">{transcriptError}</p>
-              ) : null}
+                  {state === 'pending' && !dispatching ? (
+                    <p className="banner">Starting up — no messages yet.</p>
+                  ) : null}
+                  {transcriptError ? (
+                    <p className="banner error">{transcriptError}</p>
+                  ) : null}
 
-              {(messages && messages.length > 0) || optimistic.length > 0 ? (
-                <MessageList
-                  messages={messages ?? []}
-                  trailing={optimistic}
-                  scrollerRef={scroller}
-                />
-              ) : state === 'live' ? (
-                <p className="muted">No messages yet.</p>
-              ) : null}
+                  {(messages && messages.length > 0) || optimistic.length > 0 ? (
+                    <MessageList
+                      messages={messages ?? []}
+                      trailing={optimistic}
+                      scrollerRef={scroller}
+                    />
+                  ) : state === 'live' ? (
+                    <p className="muted">No messages yet.</p>
+                  ) : null}
+
+                  {/*
+                    A lost session is not a failure to retry: the container came
+                    back without the conversation, so there is nothing left to send
+                    to. The history above is the mirror, and it stays readable.
+                  */}
+                  {lost ? (
+                    <section className="card">
+                      <h2>This session was lost</h2>
+                      <p className="muted">
+                        Its container restarted without a workspace checkpoint, so
+                        OpenCode no longer has this conversation. The history above
+                        is the last mirror the Hub exported; it cannot be continued.
+                      </p>
+                      {session?.lastError ? (
+                        <p className="muted mono">{session.lastError}</p>
+                      ) : null}
+                      <div className="actions">
+                        <a
+                          className="button"
+                          href="/"
+                          onClick={(event) => {
+                            if (!isPlainClick(event)) {
+                              return;
+                            }
+                            event.preventDefault();
+                            navigate('/');
+                          }}
+                        >
+                          Start a new session
+                        </a>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {session?.phase === 'failed' ? (
+                    <section className="card error">
+                      <h2>Failed to start</h2>
+                      {session.lastError ? (
+                        <p className="muted mono">{session.lastError}</p>
+                      ) : null}
+                      <div className="actions">
+                        <button
+                          className="button"
+                          disabled={busy}
+                          onClick={() => run(() => retrySession(sessionId))}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    </section>
+                  ) : null}
+                </div>
+              </div>
 
               {/*
-                A lost session is not a failure to retry: the container came
-                back without the conversation, so there is nothing left to send
-                to. The history above is the mirror, and it stays readable.
+                These three are all about sending, so they sit with the composer
+                rather than at the end of the conversation — where they would only
+                be visible if the reader happened to be scrolled to the bottom.
               */}
-              {lost ? (
-                <section className="card">
-                  <h2>This session was lost</h2>
-                  <p className="muted">
-                    Its container restarted without a workspace checkpoint, so
-                    OpenCode no longer has this conversation. The history above
-                    is the last mirror the Hub exported; it cannot be continued.
+              <div className="composer-area">
+                {/*
+                  A sleeping session is only worth calling out while it is still
+                  asleep. Once a message has queued a wake, the progress banner says
+                  everything this one would, and more usefully.
+                */}
+                {state === 'sleeping' && !dispatching && !lost ? (
+                  <p className="banner">
+                    {mirroredAt
+                      ? `This session is asleep. Above is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
+                      : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
                   </p>
-                  {session?.lastError ? (
-                    <p className="muted mono">{session.lastError}</p>
-                  ) : null}
-                  <div className="actions">
-                    <a
-                      className="button"
-                      href="/"
-                      onClick={(event) => {
-                        if (!isPlainClick(event)) {
-                          return;
-                        }
-                        event.preventDefault();
-                        navigate('/');
-                      }}
-                    >
-                      Start a new session
-                    </a>
-                  </div>
-                </section>
-              ) : null}
+                ) : null}
 
-              {session?.phase === 'failed' ? (
-                <section className="card error">
-                  <h2>Failed to start</h2>
-                  {session.lastError ? (
-                    <p className="muted mono">{session.lastError}</p>
-                  ) : null}
-                  <div className="actions">
-                    <button
-                      className="button"
-                      disabled={busy}
-                      onClick={() => run(() => retrySession(sessionId))}
-                    >
-                      Retry
-                    </button>
-                  </div>
-                </section>
-              ) : null}
-            </div>
-          </div>
+                {dispatching ? (
+                  <p className="banner progress" role="status">
+                    <i className="spinner" aria-hidden="true" />
+                    {waking
+                      ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
+                      : 'Sandbox is ready, handing the message to the agent…'}
+                  </p>
+                ) : null}
 
-          {/*
-            These three are all about sending, so they sit with the composer
-            rather than at the end of the conversation — where they would only
-            be visible if the reader happened to be scrolled to the bottom.
-          */}
-          <div className="composer-area">
-            {/*
-              A sleeping session is only worth calling out while it is still
-              asleep. Once a message has queued a wake, the progress banner says
-              everything this one would, and more usefully.
-            */}
-            {state === 'sleeping' && !dispatching && !lost ? (
-              <p className="banner">
-                {mirroredAt
-                  ? `This session is asleep. Above is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
-                  : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
-              </p>
-            ) : null}
+                {actionError ? (
+                  <p className="banner error" role="alert">
+                    {actionError}
+                  </p>
+                ) : null}
 
-            {dispatching ? (
-              <p className="banner progress" role="status">
-                <i className="spinner" aria-hidden="true" />
-                {waking
-                  ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
-                  : 'Sandbox is ready, handing the message to the agent…'}
-              </p>
-            ) : null}
-
-            {actionError ? (
-              <p className="banner error" role="alert">
-                {actionError}
-              </p>
-            ) : null}
-
-            <form className="composer-box" onSubmit={send} aria-busy={busy}>
-              <textarea
-                className="prompt"
-                rows={2}
-                placeholder={
-                  lost
-                    ? 'This session was lost and cannot be continued'
-                    : attached
-                      ? 'Say something…'
-                      : 'Session is asleep — sending wakes it and continues'
-                }
-                value={prompt}
-                disabled={busy || !canSend}
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={(event) => {
-                  // Enter sends, Shift+Enter breaks the line — but not while an
-                  // input method is mid-composition, where Enter is how you
-                  // accept the candidate you are typing.
-                  if (
-                    event.key === 'Enter' &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault();
-                    void send(event);
-                  }
-                }}
-              />
-              <div className="composer-row">
-                {catalog ? (
-                  <ModelSelect
-                    models={catalog.models}
-                    value={model ?? ''}
+                <form className="composer-box" onSubmit={send} aria-busy={busy}>
+                  <textarea
+                    className="prompt"
+                    rows={2}
+                    placeholder={
+                      lost
+                        ? 'This session was lost and cannot be continued'
+                        : attached
+                          ? 'Say something…'
+                          : 'Session is asleep — sending wakes it and continues'
+                    }
+                    value={prompt}
                     disabled={busy || !canSend}
-                    onChange={(next) => {
-                      setModel(next);
-                      const variants =
-                        catalog.models.find((option) => option.id === next)
-                          ?.variants ?? [];
-                      setVariant(defaultVariant(variants));
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      // Enter sends, Shift+Enter breaks the line — but not while an
+                      // input method is mid-composition, where Enter is how you
+                      // accept the candidate you are typing.
+                      if (
+                        event.key === 'Enter' &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        void send(event);
+                      }
                     }}
                   />
-                ) : null}
-                {catalog && modelVariants.length > 0 ? (
-                  <VariantSelect
-                    variants={modelVariants}
-                    value={variant ?? ''}
-                    disabled={busy || !canSend}
-                    onChange={setVariant}
-                  />
-                ) : null}
-                <span className="spacer" />
-                {/*
-                  One button, because at any moment there is only one thing to
-                  do with a running agent: stop it, or — when it is not running
-                  — send the next message.
-                */}
-                {working ? (
-                  <button
-                    className="send-button"
-                    type="button"
-                    disabled={busy}
-                    aria-label="Stop"
-                    title="Stop"
-                    onClick={() => run(() => abortSession(sessionId))}
-                  >
-                    <StopIcon />
-                  </button>
-                ) : (
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={busy || !canSend || !prompt.trim()}
-                    aria-label="Send"
-                    title="Send"
-                  >
-                    <ArrowUpIcon />
-                  </button>
-                )}
+                  <div className="composer-row">
+                    {catalog ? (
+                      <ModelSelect
+                        models={catalog.models}
+                        value={model ?? ''}
+                        disabled={busy || !canSend}
+                        onChange={(next) => {
+                          setModel(next);
+                          const variants =
+                            catalog.models.find((option) => option.id === next)
+                              ?.variants ?? [];
+                          setVariant(defaultVariant(variants));
+                        }}
+                      />
+                    ) : null}
+                    {catalog && modelVariants.length > 0 ? (
+                      <VariantSelect
+                        variants={modelVariants}
+                        value={variant ?? ''}
+                        disabled={busy || !canSend}
+                        onChange={setVariant}
+                      />
+                    ) : null}
+                    <span className="spacer" />
+                    {/*
+                      One button, because at any moment there is only one thing to
+                      do with a running agent: stop it, or — when it is not running
+                      — send the next message.
+                    */}
+                    {working ? (
+                      <button
+                        className="send-button"
+                        type="button"
+                        disabled={busy}
+                        aria-label="Stop"
+                        title="Stop"
+                        onClick={() => run(() => abortSession(sessionId))}
+                      >
+                        <StopIcon />
+                      </button>
+                    ) : (
+                      <button
+                        className="send-button"
+                        type="submit"
+                        disabled={busy || !canSend || !prompt.trim()}
+                        aria-label="Send"
+                        title="Send"
+                      >
+                        <ArrowUpIcon />
+                      </button>
+                    )}
+                  </div>
+                </form>
               </div>
-            </form>
-          </div>
+            </>
+          )}
         </div>
 
         {/*

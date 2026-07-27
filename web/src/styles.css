@@ -244,6 +244,28 @@ code {
   height: 100%;
 }
 
+/* A session that has nothing to read yet is only waiting, so the wait is all
+   the page shows: centred, one spinner, one line. */
+.session-booting {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.session-booting p {
+  margin: 0;
+}
+
+.booting-title {
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
 /* Below the header the page splits: the conversation, and the details panel
    when it is open. The header stays across both so the panel's toggle keeps its
    corner. */
@@ -1441,6 +1463,14 @@ summary:focus-visible {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
+}
+
+/* The boot state owns the whole column, so its spinner is the page's subject
+   rather than a mark beside a line of text. */
+.spinner.big {
+  width: 34px;
+  height: 34px;
+  border-width: 3px;
 }
 
 @keyframes spin {
