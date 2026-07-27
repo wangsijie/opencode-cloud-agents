@@ -12,6 +12,11 @@ import { MenuIcon } from './icons';
  * Every runtime setting in one place: the credentials and configuration that
  * used to be baked into the code and the container image.
  *
+ * The page is a master–detail split: section names down the left (a scrollable
+ * pill row on a phone), one section's form on the right. Each section carries
+ * a status mark — required-and-missing, or configured — so the whole state of
+ * the deployment is readable from the nav alone.
+ *
  * Secrets are write-only — the page shows whether one is stored and never what
  * it is; typing a new value replaces it, leaving the field empty keeps it. The
  * two readable exceptions are the OpenCode config (a JSON editor cannot edit
@@ -19,9 +24,30 @@ import { MenuIcon } from './icons';
  * GitHub).
  *
  * In `forced` mode the page is the whole app: required settings are missing,
- * so nothing else can run yet. Each save calls `onSettingsChanged`, and the
- * app re-checks whether the gate can open.
+ * so nothing else can run yet. Each save calls `onSettingsChanged` and then
+ * moves the selection to the next required section that is still missing, so
+ * onboarding walks itself; once nothing required is missing, the footer offers
+ * the one explicit way in — the gate never opens on its own, leaving room to
+ * finish the optional sections first.
  */
+
+interface Section {
+  id: string;
+  label: string;
+  /** The stored setting this section edits; absent for the password. */
+  key?: string;
+}
+
+const SECTIONS: Section[] = [
+  { id: 'github-token', label: 'GitHub token', key: 'github.token' },
+  { id: 'opencode-config', label: 'OpenCode config', key: 'opencode.config' },
+  { id: 'ssh-key', label: 'SSH key', key: 'container.ssh-key' },
+  { id: 'env', label: 'Environment variables', key: 'container.env' },
+  { id: 'skills', label: 'Skills', key: 'opencode.skills' },
+  { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
+  { id: 'password', label: 'Admin password' }
+];
+
 export function SettingsPage({
   forced,
   onMenu,
@@ -31,23 +57,22 @@ export function SettingsPage({
   forced: boolean;
   onMenu?: () => void;
   onSettingsChanged: () => void;
-  /**
-   * Set in forced mode once every required setting is stored. The gate never
-   * opens on its own — finishing the last field must not yank the page away
-   * (there may be a freshly generated public key on screen to copy) — so
-   * entering the app is this explicit click.
-   */
+  /** Set in forced mode once every required setting is stored. */
   onContinue?: () => void;
 }) {
   const [settings, setSettings] = useState<SettingView[]>();
   const [loadError, setLoadError] = useState<string>();
+  const [selected, setSelected] = useState<string>();
 
-  const load = async () => {
+  const load = async (): Promise<SettingView[] | undefined> => {
     try {
-      setSettings((await fetchSettings()).settings);
+      const fresh = (await fetchSettings()).settings;
+      setSettings(fresh);
       setLoadError(undefined);
+      return fresh;
     } catch (cause) {
       setLoadError(cause instanceof Error ? cause.message : String(cause));
+      return undefined;
     }
   };
 
@@ -60,13 +85,54 @@ export function SettingsPage({
     () => new Map((settings ?? []).map((setting) => [setting.key, setting])),
     [settings]
   );
+
+  const firstMissing = (list: SettingView[]) =>
+    SECTIONS.find((section) => {
+      const view = section.key
+        ? list.find((setting) => setting.key === section.key)
+        : undefined;
+      return view !== undefined && view.required && !view.configured;
+    });
+
   const missing = (settings ?? []).filter(
     (setting) => setting.required && !setting.configured
   );
 
+  // Until a section is clicked, onboarding opens on the first missing required
+  // setting and a normal visit opens on the first section.
+  const active =
+    selected ??
+    (settings
+      ? forced
+        ? (firstMissing(settings) ?? SECTIONS[0]).id
+        : SECTIONS[0].id
+      : undefined);
+
   const saved = () => {
-    void load();
-    onSettingsChanged();
+    void (async () => {
+      const fresh = await load();
+      onSettingsChanged();
+      // Onboarding walks itself: whatever was just saved, the selection moves
+      // to the first required section that is still unconfigured. Once there
+      // is none, it stays put — the footer takes over.
+      if (forced && fresh) {
+        const next = firstMissing(fresh);
+        if (next) {
+          setSelected(next.id);
+        }
+      }
+    })();
+  };
+
+  const statusOf = (section: Section): 'missing' | 'done' | undefined => {
+    const view = section.key ? byKey.get(section.key) : undefined;
+    if (!view) {
+      return undefined;
+    }
+    if (view.configured) {
+      return 'done';
+    }
+    return view.required ? 'missing' : undefined;
   };
 
   return (
@@ -88,31 +154,6 @@ export function SettingsPage({
         <div className="settings-page">
           <h1>Settings</h1>
 
-          {forced && settings ? (
-            onContinue ? (
-              <section className="card settings-section">
-                <h2>Everything required is configured</h2>
-                <p className="muted">
-                  Finish anything else you want to set up here — the public key
-                  above, optional credentials — then head in.
-                </p>
-                <div className="actions">
-                  <button className="button primary" onClick={onContinue}>
-                    Continue to the Hub
-                  </button>
-                </div>
-              </section>
-            ) : (
-              <section className="card error">
-                <h2>Finish setting up</h2>
-                <p className="muted">
-                  The Hub cannot run until these are configured:{' '}
-                  {missing.map((setting) => setting.label).join(', ') || '…'}
-                </p>
-              </section>
-            )
-          ) : null}
-
           {loadError ? (
             <section className="card error">
               <p className="muted">{loadError}</p>
@@ -125,18 +166,92 @@ export function SettingsPage({
           ) : !settings ? (
             <p className="muted">Loading…</p>
           ) : (
-            <>
-              <GithubTokenSection setting={byKey.get('github.token')} onSaved={saved} />
-              <OpencodeConfigSection
-                setting={byKey.get('opencode.config')}
-                onSaved={saved}
-              />
-              <SshKeySection setting={byKey.get('container.ssh-key')} onSaved={saved} />
-              <EnvVarsSection setting={byKey.get('container.env')} onSaved={saved} />
-              <SkillsSection setting={byKey.get('opencode.skills')} onSaved={saved} />
-              <GitIdentitySection setting={byKey.get('git.identity')} onSaved={saved} />
-              <PasswordSection />
-            </>
+            <div className="settings-layout">
+              <nav className="settings-nav" aria-label="Settings sections">
+                {SECTIONS.map((section) => {
+                  const status = statusOf(section);
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      className={
+                        section.id === active
+                          ? 'settings-nav-item active'
+                          : 'settings-nav-item'
+                      }
+                      onClick={() => setSelected(section.id)}
+                    >
+                      <span
+                        className={`nav-state${status ? ` ${status}` : ''}`}
+                        aria-hidden="true"
+                      />
+                      {section.label}
+                    </button>
+                  );
+                })}
+              </nav>
+
+              <div className="settings-detail">
+                {active === 'github-token' ? (
+                  <GithubTokenSection
+                    setting={byKey.get('github.token')}
+                    onSaved={saved}
+                  />
+                ) : active === 'opencode-config' ? (
+                  <OpencodeConfigSection
+                    setting={byKey.get('opencode.config')}
+                    onSaved={saved}
+                  />
+                ) : active === 'ssh-key' ? (
+                  <SshKeySection
+                    setting={byKey.get('container.ssh-key')}
+                    onSaved={saved}
+                  />
+                ) : active === 'env' ? (
+                  <EnvVarsSection
+                    setting={byKey.get('container.env')}
+                    onSaved={saved}
+                  />
+                ) : active === 'skills' ? (
+                  <SkillsSection
+                    setting={byKey.get('opencode.skills')}
+                    onSaved={saved}
+                  />
+                ) : active === 'git-identity' ? (
+                  <GitIdentitySection
+                    setting={byKey.get('git.identity')}
+                    onSaved={saved}
+                  />
+                ) : (
+                  <PasswordSection />
+                )}
+
+                {forced ? (
+                  <div className="settings-continue">
+                    {missing.length > 0 ? (
+                      <p className="muted">
+                        Required before the Hub can run:{' '}
+                        {missing.map((setting) => setting.label).join(', ')}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="muted">
+                          Everything required is configured — finish anything
+                          optional you want, then head in.
+                        </p>
+                        <button
+                          className="button primary"
+                          disabled={!onContinue}
+                          onClick={onContinue}
+                        >
+                          Continue to the Hub
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -199,7 +314,7 @@ function GithubTokenSection({
   const { busy, error, notice, run } = useSave();
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>GitHub token</h2>
       <p className="muted">
         Lists the repositories a session can start from, and signs the
@@ -276,7 +391,7 @@ function OpencodeConfigSection({
     JSON.stringify(setting?.configured ? setting.value : CONFIG_TEMPLATE, null, 2);
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>OpenCode config</h2>
       <p className="muted">
         The whole configuration OpenCode starts with inside every container:
@@ -363,7 +478,7 @@ function SshKeySection({
     (setting?.value as { publicKey?: string } | undefined)?.publicKey ?? '';
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>SSH key</h2>
       <p className="muted">
         Containers clone, fetch and push over SSH with this key, and sign their
@@ -498,7 +613,7 @@ function EnvVarsSection({
   };
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>Environment variables</h2>
       <p className="muted">
         Injected into every container — API tokens for whatever the agent works
@@ -605,7 +720,7 @@ function SkillsSection({
   };
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>Skills</h2>
       <p className="muted">
         Each skill is one <code>SKILL.md</code> the agent can invoke inside its
@@ -695,7 +810,7 @@ function GitIdentitySection({
   const currentEmail = email ?? storedIdentity?.email ?? '';
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>Git identity</h2>
       <p className="muted">
         The author on every commit the agent makes. Without one, containers
@@ -752,7 +867,7 @@ function PasswordSection() {
     current.length > 0 && next.length >= 8 && confirmation === next;
 
   return (
-    <section className="card settings-section">
+    <section className="settings-section">
       <h2>Admin password</h2>
       <p className="muted">
         Changing it signs out every browser, including the others you are

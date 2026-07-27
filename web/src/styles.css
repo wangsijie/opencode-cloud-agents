@@ -1104,7 +1104,7 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 44rem;
+  max-width: 56rem;
   margin-inline: auto;
   padding: 8px 16px calc(24px + env(safe-area-inset-bottom));
 }
@@ -1114,10 +1114,109 @@ summary:focus-visible {
   font: 400 clamp(22px, 3vw, 28px) / 1.3 var(--font-serif);
 }
 
+/*
+  Master–detail: section names on one side, the selected section's form on the
+  other. On a phone there is no side to spare, so the nav is a scrollable pill
+  row above the form instead.
+*/
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-nav {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  /* Bleeds to the page edge so the scrolling row does not clip mid-pill. */
+  margin-inline: -16px;
+  padding-inline: 16px;
+}
+
+.settings-nav-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: var(--surface-raised);
+}
+
+.settings-nav-item.active {
+  background: var(--surface-raised);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* One mark per section: what still blocks the Hub, and what is already done.
+   The blank state keeps its box so the labels align down the column. */
+.nav-state {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.nav-state.missing {
+  background: var(--accent);
+}
+
+.nav-state.done {
+  background: var(--ok);
+}
+
+.settings-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .settings-layout {
+    flex-direction: row;
+    gap: 32px;
+  }
+
+  .settings-nav {
+    flex-direction: column;
+    flex: none;
+    width: 180px;
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+    position: sticky;
+    top: 8px;
+    align-self: flex-start;
+  }
+}
+
 .settings-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.settings-section h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .settings-section p {
@@ -1147,6 +1246,65 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/*
+  The forms here are operator chores, not the app's subject, so everything is
+  one size down from the global controls: the page should read as a settings
+  sheet, not a sign-up flow. The 16px input font survives on narrow screens
+  only because iOS zooms into anything smaller.
+*/
+.settings-page input[type='text'],
+.settings-page input[type='password'],
+.settings-page textarea {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-page .button {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.settings-page .actions .button {
+  flex: none;
+}
+
+.settings-page .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+@media (min-width: 768px) {
+  .settings-page input[type='text'],
+  .settings-page input[type='password'],
+  .settings-page textarea {
+    font-size: 13.5px;
+  }
+
+  .settings-page .code-editor {
+    font-size: 12.5px;
+  }
+}
+
+/* Onboarding's exit: the gate never opens on its own, so once nothing required
+   is missing this is the one way in. */
+.settings-continue {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.settings-continue p {
+  flex: 1 1 12rem;
+  margin: 0;
 }
 
 .code-editor {
