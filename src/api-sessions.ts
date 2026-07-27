@@ -27,7 +27,12 @@ import {
   RUNTIME_EPOCH_HEADER
 } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
-import { DEFAULT_MODEL_REF, isModelRef } from './opencode-config';
+import {
+  DEFAULT_MODEL_REF,
+  defaultVariantForModel,
+  isModelRef,
+  isValidVariant
+} from './opencode-config';
 import { isSafeRepoKey, repoWorkspaceDirectory } from './repos';
 import type { QueuePromptInput } from './session-agent';
 import {
@@ -210,6 +215,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   const record = await getHub(env).createSession({
     repo,
     model: input.model,
+    ...(input.variant ? { variant: input.variant } : {}),
     title: deriveSessionTitle(input.prompt)
   });
   try {
@@ -219,6 +225,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
       repoKey: record.repoKey,
       directory: repoWorkspaceDirectory(repo.repoKey),
       model: record.model,
+      ...(record.variant ? { variant: record.variant } : {}),
       title: record.title,
       prompt: input.prompt
     });
@@ -243,6 +250,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
 interface CreateSessionInput {
   repoKey: string;
   model: string;
+  variant?: string;
   prompt: string;
 }
 
@@ -259,9 +267,10 @@ async function readCreateSessionInput(
     throw new HttpError(400, 'Request body must be a JSON object');
   }
 
-  const { repoKey, model, prompt } = value as {
+  const { repoKey, model, variant, prompt } = value as {
     repoKey?: unknown;
     model?: unknown;
+    variant?: unknown;
     prompt?: unknown;
   };
   // Only the shape is checked here; whether the key names a real repository is
@@ -273,11 +282,17 @@ async function readCreateSessionInput(
   if (!isModelRef(modelRef)) {
     throw new HttpError(400, 'Unknown model');
   }
+  const resolvedVariant = resolveRequestVariant(modelRef, variant);
   const text = normalizeSessionPrompt(prompt);
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
-  return { repoKey, model: modelRef, prompt: text };
+  return {
+    repoKey,
+    model: modelRef,
+    ...(resolvedVariant ? { variant: resolvedVariant } : {}),
+    prompt: text
+  };
 }
 
 /**
@@ -723,9 +738,10 @@ async function readSendPromptInput(request: Request): Promise<QueuePromptInput> 
     throw new HttpError(400, 'Request body must be a JSON object');
   }
 
-  const { prompt, model, promptId } = value as {
+  const { prompt, model, variant, promptId } = value as {
     prompt?: unknown;
     model?: unknown;
+    variant?: unknown;
     promptId?: unknown;
   };
   const text = normalizeSessionPrompt(prompt);
@@ -735,14 +751,49 @@ async function readSendPromptInput(request: Request): Promise<QueuePromptInput> 
   if (model !== undefined && !isModelRef(model)) {
     throw new HttpError(400, 'Unknown model');
   }
+  // Variant is validated against the model that will actually run this prompt.
+  // When the client omits model, the agent keeps the session's model, so a
+  // bare variant cannot be checked here without reading the record — the agent
+  // re-resolves it. An explicit pair is checked now so a bad UI choice 400s.
+  if (model !== undefined && variant !== undefined && variant !== null && variant !== '') {
+    if (!isValidVariant(model, variant)) {
+      throw new HttpError(400, 'Unknown model variant');
+    }
+  } else if (
+    model === undefined &&
+    variant !== undefined &&
+    variant !== null &&
+    variant !== '' &&
+    typeof variant !== 'string'
+  ) {
+    throw new HttpError(400, 'Unknown model variant');
+  }
   if (promptId !== undefined && !isSafePromptId(promptId)) {
     throw new HttpError(400, 'Invalid prompt id');
   }
   return {
     prompt: text,
     ...(model === undefined ? {} : { model }),
+    ...(typeof variant === 'string' && variant ? { variant } : {}),
     ...(promptId === undefined ? {} : { promptId })
   };
+}
+
+/**
+ * Accept an explicit variant, or fall back to the model default when the model
+ * has variants. Rejects a key the model does not list.
+ */
+function resolveRequestVariant(
+  modelRef: string,
+  variant: unknown
+): string | undefined {
+  if (variant === undefined || variant === null || variant === '') {
+    return defaultVariantForModel(modelRef);
+  }
+  if (!isValidVariant(modelRef, variant)) {
+    throw new HttpError(400, 'Unknown model variant');
+  }
+  return variant;
 }
 
 /**

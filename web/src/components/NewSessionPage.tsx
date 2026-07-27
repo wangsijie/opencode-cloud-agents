@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { createSession, type Catalog } from '../api';
 import { navigate, sessionPath } from '../router';
 import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
 import { ModelSelect } from './ModelSelect';
 import { RepoSelect } from './RepoSelect';
+import { defaultVariant, VariantSelect } from './VariantSelect';
 
 /**
  * Where a session starts: a repository, a model and a prompt.
@@ -32,11 +33,17 @@ export function NewSessionPage({
 }) {
   const [repoKey, setRepoKey] = useState('');
   const [model, setModel] = useState('');
+  const [variant, setVariant] = useState('');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   const repos = catalog?.repos;
+  const selectedModel = useMemo(
+    () => catalog?.models.find((option) => option.id === model),
+    [catalog?.models, model]
+  );
+  const modelVariants = selectedModel?.variants ?? [];
 
   // The catalog lands after the first paint, and a refresh can drop the
   // selected repository, so the defaults are applied here rather than in
@@ -61,6 +68,17 @@ export function NewSessionPage({
     );
   }, [catalog?.models]);
 
+  // Reset effort when the model changes, or when the current choice is no
+  // longer listed for that model.
+  useEffect(() => {
+    const variants =
+      catalog?.models.find((option) => option.id === model)?.variants ?? [];
+    const next = defaultVariant(variants);
+    setVariant((current) =>
+      next && variants.some((entry) => entry.id === current) ? current : (next ?? '')
+    );
+  }, [catalog?.models, model]);
+
   const loading = !catalog;
 
   async function submit(event: FormEvent) {
@@ -73,7 +91,12 @@ export function NewSessionPage({
     setBusy(true);
     setError(undefined);
     try {
-      const created = await createSession({ repoKey, model, prompt: text });
+      const created = await createSession({
+        repoKey,
+        model,
+        ...(variant ? { variant } : {}),
+        prompt: text
+      });
       setPrompt('');
       onCreated();
       navigate(sessionPath(created.id));
@@ -164,6 +187,14 @@ export function NewSessionPage({
                   disabled={busy}
                   onChange={setModel}
                 />
+                {modelVariants.length > 0 ? (
+                  <VariantSelect
+                    variants={modelVariants}
+                    value={variant}
+                    disabled={busy}
+                    onChange={setVariant}
+                  />
+                ) : null}
                 <span className="spacer" />
                 <button
                   className="send-button"

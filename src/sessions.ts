@@ -50,6 +50,12 @@ export interface SessionRecord {
   directory?: string;
   /** `providerID/modelID` reference from the OpenCode model catalog. */
   model: string;
+  /**
+   * OpenCode variant (reasoning effort) for `model`, when the model has any.
+   * Absent on sessions created before variants were selectable, and on models
+   * that have no variants.
+   */
+  variant?: string;
   title: string;
   /** Assigned once the container has created the OpenCode session. */
   opencodeSessionId?: string;
@@ -78,6 +84,11 @@ export interface SessionStatePatch {
   phase?: SessionPhase;
   /** Follows the model of the most recent prompt, which the UI may switch. */
   model?: string;
+  /**
+   * Follows the variant of the most recent prompt. `null` clears it when the
+   * user switches to a model with no variants.
+   */
+  variant?: string | null;
   title?: string;
   opencodeSessionId?: string;
   pendingPromptCount?: number;

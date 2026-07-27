@@ -68,6 +68,8 @@ export interface SessionView {
   /** The checkout inside the container; pinned on the record since M6. */
   directory?: string;
   model: string;
+  /** OpenCode variant (reasoning effort) for `model`, when it has any. */
+  variant?: string;
   /** The record's own title: the first line of the opening prompt. */
   title: string;
   /** What to show — OpenCode's own title once it has one. */
@@ -86,11 +88,18 @@ export interface RepoOption {
   displayName: string;
 }
 
+export interface ModelVariantOption {
+  id: string;
+  label: string;
+}
+
 export interface ModelOption {
   id: string;
   /** `provider · model`. The picker shows `modelName` alone. */
   displayName: string;
   modelName: string;
+  /** Reasoning-effort knobs; empty means the effort picker is hidden. */
+  variants?: readonly ModelVariantOption[];
 }
 
 export interface Catalog {
@@ -281,7 +290,7 @@ export const fetchTranscript = (id: string) =>
 
 export const sendMessage = (
   id: string,
-  input: { prompt: string; model?: string; promptId?: string }
+  input: { prompt: string; model?: string; variant?: string; promptId?: string }
 ) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
@@ -362,6 +371,7 @@ export const fetchCatalog = (refresh = false) =>
 export const createSession = (input: {
   repoKey: string;
   model: string;
+  variant?: string;
   prompt: string;
 }) => call<SessionView>('/api/sessions', { method: 'POST', body: JSON.stringify(input) });
 

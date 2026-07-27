@@ -27,7 +27,12 @@ import {
   type InstanceSandboxRpc,
   type OpencodeSessionActivityInput
 } from './instance-runtime';
-import { isModelRef, parseModelRef } from './opencode-config';
+import {
+  defaultVariantForModel,
+  isModelRef,
+  isValidVariant,
+  parseModelRef
+} from './opencode-config';
 import { WORKSPACE_ROOT } from './repos';
 import type { SessionPhase, SessionStatePatch } from './sessions';
 
@@ -90,6 +95,8 @@ interface PendingPrompt {
   id: string;
   text: string;
   model: string;
+  /** OpenCode variant for this prompt; absent when the model has none. */
+  variant?: string;
   queuedAt: string;
 }
 
@@ -101,6 +108,8 @@ interface StoredSessionAgentState {
   /** Absolute container path the OpenCode session is bound to. */
   directory: string;
   model: string;
+  /** Last selected OpenCode variant; absent when the model has none. */
+  variant?: string;
   title: string;
   opencodeSessionId?: string;
   phase: SessionPhase;
@@ -123,6 +132,7 @@ export interface StartSessionInput {
   repoKey: string;
   directory: string;
   model: string;
+  variant?: string;
   title: string;
   prompt: string;
   promptId?: string;
@@ -132,6 +142,11 @@ export interface QueuePromptInput {
   prompt: string;
   /** Switches the session's model when present; otherwise the current one. */
   model?: string;
+  /**
+   * OpenCode variant (reasoning effort). When omitted, the session's last
+   * variant is kept if the model still supports it; otherwise the model default.
+   */
+  variant?: string;
   /** Supplied by a client that may retry, so a resend is not a second prompt. */
   promptId?: string;
 }
@@ -206,6 +221,7 @@ export class SessionAgent extends DurableObject<Env> {
     if (!isModelRef(input.model)) {
       throw new Error(`Unknown model: ${input.model}`);
     }
+    const variant = resolvePromptVariant(input.model, input.variant);
 
     const now = new Date().toISOString();
     this.state = {
@@ -215,6 +231,7 @@ export class SessionAgent extends DurableObject<Env> {
       repoKey: input.repoKey,
       directory: input.directory,
       model: input.model,
+      ...(variant ? { variant } : {}),
       title: input.title,
       phase: 'queued',
       pending: [
@@ -222,6 +239,7 @@ export class SessionAgent extends DurableObject<Env> {
           id: input.promptId ?? crypto.randomUUID(),
           text: input.prompt,
           model: input.model,
+          ...(variant ? { variant } : {}),
           queuedAt: now
         }
       ],
@@ -257,6 +275,10 @@ export class SessionAgent extends DurableObject<Env> {
     if (!isModelRef(model)) {
       throw new Error(`Unknown model: ${model}`);
     }
+    const variant = resolvePromptVariant(
+      model,
+      input.variant !== undefined ? input.variant : state.variant
+    );
 
     const id = input.promptId ?? crypto.randomUUID();
     if (
@@ -272,11 +294,24 @@ export class SessionAgent extends DurableObject<Env> {
     this.state = {
       ...state,
       model,
-      pending: [...state.pending, { id, text: input.prompt, model, queuedAt: now }],
+      ...(variant ? { variant } : {}),
+      pending: [
+        ...state.pending,
+        {
+          id,
+          text: input.prompt,
+          model,
+          ...(variant ? { variant } : {}),
+          queuedAt: now
+        }
+      ],
       phase: 'queued',
       attempt: 0,
       updatedAt: now
     };
+    if (!variant) {
+      delete this.state.variant;
+    }
     delete this.state.lastError;
     await this.persist();
     await this.reportToHub();
@@ -457,9 +492,12 @@ export class SessionAgent extends DurableObject<Env> {
         directory,
         providerID: model.providerID,
         modelID: model.modelID,
+        ...(prompt.variant ? { variant: prompt.variant } : {}),
         text: prompt.text
       });
       await this.update({
+        model: prompt.model,
+        variant: prompt.variant ?? null,
         pending: this.state.pending.filter((queued) => queued.id !== prompt.id),
         deliveredPromptIds: [
           ...(this.state.deliveredPromptIds ?? []),
@@ -563,6 +601,7 @@ export class SessionAgent extends DurableObject<Env> {
       Pick<
         StoredSessionAgentState,
         | 'phase'
+        | 'model'
         | 'pending'
         | 'deliveredPromptIds'
         | 'attempt'
@@ -570,7 +609,7 @@ export class SessionAgent extends DurableObject<Env> {
         | 'lastPromptAt'
         | 'lastError'
       >
-    >
+    > & { variant?: string | null }
   ): Promise<void> {
     const state = this.state;
     if (!state) {
@@ -578,11 +617,17 @@ export class SessionAgent extends DurableObject<Env> {
       // resurrect its storage.
       return;
     }
+    const { variant, ...rest } = patch;
     this.state = {
       ...state,
-      ...patch,
+      ...rest,
       updatedAt: new Date().toISOString()
     };
+    if (variant === null) {
+      delete this.state.variant;
+    } else if (variant !== undefined) {
+      this.state.variant = variant;
+    }
     if (patch.lastError === undefined && 'lastError' in patch) {
       delete this.state.lastError;
     }
@@ -602,6 +647,7 @@ export class SessionAgent extends DurableObject<Env> {
     const update: SessionStatePatch = {
       phase: state.phase,
       model: state.model,
+      variant: state.variant ?? null,
       pendingPromptCount: state.pending.length,
       lastError: state.lastError ?? null,
       ...(state.opencodeSessionId
@@ -659,6 +705,21 @@ function needsDispatch(state: StoredSessionAgentState): boolean {
     state.phase !== 'failed' &&
     state.phase !== 'lost'
   );
+}
+
+/**
+ * Pick a variant the model actually has. An explicit client choice wins when
+ * valid; otherwise keep a previous session variant if still listed; otherwise
+ * the model default. Models without variants always return undefined.
+ */
+function resolvePromptVariant(
+  model: string,
+  preferred: string | undefined
+): string | undefined {
+  if (preferred !== undefined && isValidVariant(model, preferred)) {
+    return preferred;
+  }
+  return defaultVariantForModel(model);
 }
 
 /**

@@ -28,6 +28,7 @@ import { ArrowUpIcon, MenuIcon, PanelIcon, StopIcon } from './icons';
 import { MessageList } from './MessageList';
 import { ModelSelect } from './ModelSelect';
 import { SessionDetails } from './SessionDetails';
+import { defaultVariant, VariantSelect } from './VariantSelect';
 import { StatusBadge } from './StatusBadge';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -67,12 +68,34 @@ export function SessionPage({
   const [actionError, setActionError] = useState<string>();
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<string>();
+  const [variant, setVariant] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<OptimisticPrompt[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   // The conversation scrolls inside the page rather than the page scrolling, so
   // the header and the composer stay where the reader left them.
   const scroller = useRef<HTMLDivElement>(null);
+
+  const modelVariants = useMemo(() => {
+    if (!catalog || !model) {
+      return [];
+    }
+    return catalog.models.find((option) => option.id === model)?.variants ?? [];
+  }, [catalog, model]);
+
+  // Sessions started before variants were selectable, or after a model switch
+  // in the catalog, may have no effort stored — fill the default so the pill
+  // is never blank when the control is shown.
+  useEffect(() => {
+    if (modelVariants.length === 0) {
+      return;
+    }
+    setVariant((current) =>
+      current && modelVariants.some((entry) => entry.id === current)
+        ? current
+        : (defaultVariant(modelVariants) ?? current)
+    );
+  }, [model, modelVariants]);
 
   const runtime = session?.instance.runtime.lifecycle;
   const attached = runtime !== undefined && ATTACHED.includes(runtime);
@@ -90,6 +113,7 @@ export function SessionPage({
       const next = await getSession(sessionId);
       setSession(next);
       setModel((current) => current ?? next.model);
+      setVariant((current) => current ?? next.variant);
       setLoadError(undefined);
     } catch (cause) {
       setLoadError(cause instanceof Error ? cause.message : String(cause));
@@ -189,6 +213,7 @@ export function SessionPage({
       await sendMessage(sessionId, {
         prompt: text,
         ...(model ? { model } : {}),
+        ...(variant ? { variant } : {}),
         promptId: entry.id
       });
       await refreshSession();
@@ -426,7 +451,21 @@ export function SessionPage({
                     models={catalog.models}
                     value={model ?? ''}
                     disabled={busy || !canSend}
-                    onChange={setModel}
+                    onChange={(next) => {
+                      setModel(next);
+                      const variants =
+                        catalog.models.find((option) => option.id === next)
+                          ?.variants ?? [];
+                      setVariant(defaultVariant(variants));
+                    }}
+                  />
+                ) : null}
+                {catalog && modelVariants.length > 0 ? (
+                  <VariantSelect
+                    variants={modelVariants}
+                    value={variant ?? ''}
+                    disabled={busy || !canSend}
+                    onChange={setVariant}
                   />
                 ) : null}
                 <span className="spacer" />

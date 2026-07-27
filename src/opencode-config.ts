@@ -316,7 +316,15 @@ export const OPENCODE_CONFIG: Config = {
  * `id` is the `providerID/modelID` reference persisted on a session record.
  * Model ids themselves may contain slashes (`ag/gemini-3.6-flash-high`), so the
  * provider is always the first segment and the model is everything after it.
+ *
+ * `variants` are the OpenCode reasoning-effort knobs for that model. Empty means
+ * the model has no selectable effort; the composer hides the control then.
  */
+export interface ModelVariantOption {
+  id: string;
+  label: string;
+}
+
 export interface ModelOption {
   id: string;
   providerID: string;
@@ -324,6 +332,40 @@ export interface ModelOption {
   providerName: string;
   modelName: string;
   displayName: string;
+  variants: readonly ModelVariantOption[];
+}
+
+function labelForVariant(id: string): string {
+  if (id === 'xhigh') {
+    return 'XHigh';
+  }
+  return id.length === 0 ? id : id[0].toUpperCase() + id.slice(1);
+}
+
+function variantsForModel(
+  model: { variants?: Record<string, unknown> } | undefined
+): readonly ModelVariantOption[] {
+  return Object.keys(model?.variants ?? {}).map((id) => ({
+    id,
+    label: labelForVariant(id)
+  }));
+}
+
+/**
+ * Default effort when the model has variants and the client did not pick one.
+ * Prefer medium, then high, then the first listed key — matching how the models
+ * are configured (GPT family has medium; Kimi/Sakana start at high).
+ */
+export function defaultVariantForModel(modelRef: string): string | undefined {
+  const variants = findModel(modelRef)?.variants ?? [];
+  if (variants.length === 0) {
+    return undefined;
+  }
+  return (
+    variants.find((variant) => variant.id === 'medium')?.id ??
+    variants.find((variant) => variant.id === 'high')?.id ??
+    variants[0]?.id
+  );
 }
 
 export const MODEL_OPTIONS: readonly ModelOption[] = Object.entries(
@@ -339,7 +381,8 @@ export const MODEL_OPTIONS: readonly ModelOption[] = Object.entries(
         modelID,
         providerName,
         modelName,
-        displayName: `${providerName} · ${modelName}`
+        displayName: `${providerName} · ${modelName}`,
+        variants: variantsForModel(model)
       };
     }
   );
@@ -351,6 +394,27 @@ export function findModel(modelRef: string): ModelOption | undefined {
 
 export function isModelRef(value: unknown): value is string {
   return typeof value === 'string' && findModel(value) !== undefined;
+}
+
+/**
+ * True when `variant` is a configured key for `modelRef`, or when both are
+ * empty because the model has no variants.
+ */
+export function isValidVariant(
+  modelRef: string,
+  variant: unknown
+): variant is string | undefined {
+  const option = findModel(modelRef);
+  if (!option) {
+    return false;
+  }
+  if (variant === undefined || variant === null || variant === '') {
+    return option.variants.length === 0;
+  }
+  return (
+    typeof variant === 'string' &&
+    option.variants.some((entry) => entry.id === variant)
+  );
 }
 
 /**

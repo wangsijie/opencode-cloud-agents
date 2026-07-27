@@ -35,6 +35,8 @@ export interface PromptOpencodeSessionInput {
   directory: string;
   providerID: string;
   modelID: string;
+  /** OpenCode model variant (reasoning effort), when the model defines any. */
+  variant?: string;
   text: string;
 }
 

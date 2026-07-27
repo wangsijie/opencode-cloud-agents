@@ -1031,6 +1031,7 @@ export class Sandbox extends BaseSandbox<Env> {
           providerID: input.providerID,
           modelID: input.modelID
         },
+        ...(input.variant ? { variant: input.variant } : {}),
         parts: [{ type: 'text', text: input.text }]
       });
       if (result.error !== undefined || result.response.status >= 400) {

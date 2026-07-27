@@ -310,6 +310,7 @@ export class Hub extends DurableObject<Env> {
   async createSession(input: {
     repo: RepoDefinition;
     model: string;
+    variant?: string;
     title: string;
   }): Promise<SessionRecord> {
     await this.initialized;
@@ -330,6 +331,7 @@ export class Hub extends DurableObject<Env> {
       // the catalog still containing the repository it started from.
       directory: repoWorkspaceDirectory(input.repo.repoKey),
       model: input.model,
+      ...(input.variant ? { variant: input.variant } : {}),
       title: input.title,
       phase: 'queued',
       pendingPromptCount: 1,
@@ -367,6 +369,11 @@ export class Hub extends DurableObject<Env> {
         ...(patch.lastPromptAt ? { lastPromptAt: patch.lastPromptAt } : {}),
         updatedAt: new Date().toISOString()
       };
+      if (patch.variant === null) {
+        delete updated.variant;
+      } else if (patch.variant !== undefined) {
+        updated.variant = patch.variant;
+      }
       if (patch.lastError === null) {
         delete updated.lastError;
       } else if (patch.lastError !== undefined) {
