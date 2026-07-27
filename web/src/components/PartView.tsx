@@ -86,19 +86,20 @@ export function taskChildSessionId(part: MessagePart): string | undefined {
  * open-in-new-tab work the way they look like they should.
  */
 function ToolCall({ part, sessionId }: { part: MessagePart; sessionId?: string }) {
+  const [open, setOpen] = useState(false);
   const status = part.state?.status;
   const title = part.state?.title;
   const child = sessionId ? taskChildSessionId(part) : undefined;
+  const expandable = Boolean(title && !child);
 
   const body = (
     <>
       <span className="tool-name mono">{part.tool ?? 'tool'}</span>
-      {/* Truncated to one line in CSS; the tooltip is how a long command stays readable. */}
-      {title ? <span className="tool-title" title={title}>{title}</span> : null}
+      {title ? <span className="tool-title">{title}</span> : null}
       {status && status !== 'completed' ? (
         <span className="tool-status">{status}</span>
       ) : null}
-      {child ? (
+      {child || expandable ? (
         <span className="tool-open" aria-hidden="true">
           <ChevronRightIcon />
         </span>
@@ -107,7 +108,19 @@ function ToolCall({ part, sessionId }: { part: MessagePart; sessionId?: string }
   );
 
   if (!child || !sessionId) {
-    return <div className={`part-tool tool-${status ?? 'unknown'}`}>{body}</div>;
+    if (!expandable) {
+      return <div className={`part-tool tool-${status ?? 'unknown'}`}>{body}</div>;
+    }
+    return (
+      <button
+        type="button"
+        className={`part-tool tool-disclosure tool-${status ?? 'unknown'}${open ? ' open' : ''}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {body}
+      </button>
+    );
   }
 
   const href = agentPath(sessionId, child);
@@ -137,18 +150,30 @@ function ToolCall({ part, sessionId }: { part: MessagePart; sessionId?: string }
  * follows is what becomes enterable.
  */
 function Subtask({ part }: { part: MessagePart }) {
+  const [open, setOpen] = useState(false);
   const agent = typeof part.agent === 'string' ? part.agent : 'subagent';
   const description =
     typeof part.description === 'string' ? part.description : undefined;
+  if (!description) {
+    return (
+      <div className="part-tool part-subtask">
+        <span className="tool-name mono">{agent}</span>
+      </div>
+    );
+  }
   return (
-    <div className="part-tool part-subtask">
+    <button
+      type="button"
+      className={`part-tool part-subtask tool-disclosure${open ? ' open' : ''}`}
+      aria-expanded={open}
+      onClick={() => setOpen((value) => !value)}
+    >
       <span className="tool-name mono">{agent}</span>
-      {description ? (
-        <span className="tool-title" title={description}>
-          {description}
-        </span>
-      ) : null}
-    </div>
+      <span className="tool-title">{description}</span>
+      <span className="tool-open" aria-hidden="true">
+        <ChevronRightIcon />
+      </span>
+    </button>
   );
 }
 

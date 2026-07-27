@@ -1486,11 +1486,7 @@ summary:focus-visible {
   flex: 0 0 auto;
 }
 
-/*
- * A tool call stays exactly one line tall: a long bash command or file path is
- * a label here, not content, and letting it wrap turns the transcript into
- * walls of argument text. The full input is in the workspace panel.
- */
+/* A tool call stays one line tall until someone asks to see its full label. */
 .part-tool .tool-title {
   color: var(--text-dim);
   flex: 0 1 auto;
@@ -1498,6 +1494,41 @@ summary:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.part-tool.tool-disclosure {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.part-tool.tool-disclosure:hover,
+.part-tool.tool-disclosure:focus-visible {
+  border-color: var(--text-dim);
+  background: var(--surface-raised);
+}
+
+.part-tool.tool-disclosure .tool-open {
+  transition: transform 0.12s ease;
+}
+
+.part-tool.tool-disclosure.open {
+  align-items: flex-start;
+}
+
+.part-tool.tool-disclosure.open .tool-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+.part-tool.tool-disclosure.open .tool-open {
+  transform: rotate(90deg);
 }
 
 .part-tool .tool-status {
