@@ -184,6 +184,12 @@ export function SessionPage({
   // A banner plus a composer above an empty page only invites the reader to
   // type a second message, so the whole conversation is replaced by the boot
   // state until there is a transcript to show.
+  // Until the first session read lands nothing about this session is known —
+  // not even whether it is booting. Rendering the conversation in the meantime
+  // flashes an empty page and a composer for one frame before the boot state
+  // replaces them, so the main area waits instead.
+  const loading = !session && !loadError;
+
   const booting =
     Boolean(dispatching) &&
     !lost &&
@@ -325,7 +331,11 @@ export function SessionPage({
 
       <div className="session-split">
         <div className="session-main">
-          {booting ? (
+          {loading ? (
+            <div className="session-booting" role="status">
+              <i className="spinner big" aria-hidden="true" />
+            </div>
+          ) : booting ? (
             <div className="session-booting" role="status">
               <i className="spinner big" aria-hidden="true" />
               <p className="booting-title">Starting the runtime environment</p>
