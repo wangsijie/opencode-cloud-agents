@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState, type CSSProperties } from 'react';
 import type { SessionView } from '../api';
-import { describeWakeStages, formatDuration, formatUsage } from '../format';
 import { useResizable } from '../useResizable';
 import { CloseIcon } from './icons';
 import { WorkspacePanel } from './WorkspacePanel';
@@ -43,12 +42,6 @@ export function SessionDetails({
     max: 760,
     edge: 'start'
   });
-
-  const usage =
-    session.transcript?.usage && session.transcript.usage.assistantMessages > 0
-      ? formatUsage(session.transcript.usage)
-      : undefined;
-  const lastWake = session.instance.runtime.lastWake;
 
   return (
     <aside
@@ -95,23 +88,12 @@ export function SessionDetails({
       </header>
 
       {/*
-        The tally is about the session rather than either tab, so it sits above
-        both. The cold start is the one wait with no progress to show beyond a
-        spinner, so the last one's cost is stated rather than left to memory —
-        and only cold wakes are reported, because a server restart on a live
-        container is a different number and would flatter the average.
+        The token tally and the cold-start number used to sit here, as a line of
+        small print between the tabs and their content. They are about the
+        instance rather than either tab, and they are read occasionally rather
+        than watched — so they moved behind the status badge in the header,
+        where a modal has room to show the wake's stages too.
       */}
-      {usage || lastWake?.cold ? (
-        <p className="muted mono aside-meta">
-          {usage ?? ''}
-          {usage && lastWake?.cold ? ' · ' : ''}
-          {lastWake?.cold ? (
-            <span title={describeWakeStages(lastWake)}>
-              {`last wake ${formatDuration(lastWake.totalMs)}`}
-            </span>
-          ) : null}
-        </p>
-      ) : null}
 
       <div className="aside-body">
         {tab === 'changes' ? (

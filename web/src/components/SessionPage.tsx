@@ -25,6 +25,7 @@ import {
 import { isPlainClick, navigate } from '../router';
 import { useTranscript } from '../useTranscript';
 import { ArrowUpIcon, MenuIcon, PanelIcon, StopIcon } from './icons';
+import { InstanceModal } from './InstanceModal';
 import { MessageList } from './MessageList';
 import { ModelSelect } from './ModelSelect';
 import { SessionDetails } from './SessionDetails';
@@ -72,6 +73,7 @@ export function SessionPage({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<OptimisticPrompt[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [instanceOpen, setInstanceOpen] = useState(false);
   // The conversation scrolls inside the page rather than the page scrolling, so
   // the header and the composer stay where the reader left them.
   const scroller = useRef<HTMLDivElement>(null);
@@ -287,7 +289,12 @@ export function SessionPage({
           </div>
         ) : null}
         <span className="spacer" />
-        {session ? <StatusBadge status={session.status} /> : null}
+        {session ? (
+          <StatusBadge
+            status={session.status}
+            onClick={() => setInstanceOpen(true)}
+          />
+        ) : null}
         <button
           className={`icon-button${detailsOpen ? ' active' : ''}`}
           type="button"
@@ -300,6 +307,12 @@ export function SessionPage({
           <PanelIcon />
         </button>
       </header>
+
+      {/* Polling keeps the session record current, so the numbers behind the
+          badge stay live while the modal is open. */}
+      {session && instanceOpen ? (
+        <InstanceModal session={session} onClose={() => setInstanceOpen(false)} />
+      ) : null}
 
       <div className="session-split">
         <div className="session-main">
