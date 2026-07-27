@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { SessionView } from '../api';
 import { describeWakeStages, formatDuration, formatUsage } from '../format';
+import { useResizable } from '../useResizable';
 import { ChangesPanel } from './ChangesPanel';
 import { CloseIcon } from './icons';
 import { WorkspacePanel } from './WorkspacePanel';
@@ -30,6 +31,13 @@ export function SessionDetails({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('changes');
+  const { width, handleProps } = useResizable({
+    storageKey: 'hub.asideWidth',
+    fallback: 380,
+    min: 280,
+    max: 760,
+    edge: 'start'
+  });
 
   const usage =
     session.transcript?.usage && session.transcript.usage.assistantMessages > 0
@@ -38,7 +46,18 @@ export function SessionDetails({
   const lastWake = session.instance.runtime.lastWake;
 
   return (
-    <aside className="session-aside" aria-label="Session details">
+    <aside
+      className="session-aside"
+      aria-label="Session details"
+      style={{ '--aside-width': `${width}px` } as CSSProperties}
+    >
+      {/* Docked only above 1100px; below that the panel is an overlay sized
+          against the viewport, and the stylesheet hides this. */}
+      <div
+        className="resize-handle start"
+        aria-label="Resize details"
+        {...handleProps}
+      />
       <header className="aside-header">
         <div className="aside-tabs" role="tablist">
           <button

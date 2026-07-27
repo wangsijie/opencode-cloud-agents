@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   deleteSession,
   patchSession,
@@ -7,6 +7,7 @@ import {
 } from '../api';
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
+import { useResizable } from '../useResizable';
 import { DotsIcon, PlusIcon } from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
@@ -49,6 +50,13 @@ export function Sidebar({
   const [busyId, setBusyId] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const newLink = useRef<HTMLAnchorElement>(null);
+  const { width, handleProps } = useResizable({
+    storageKey: 'hub.sidebarWidth',
+    fallback: 288,
+    min: 200,
+    max: 520,
+    edge: 'end'
+  });
 
   // The drawer is a temporary surface: opening it should put the keyboard
   // inside, and Escape should be enough to leave.
@@ -111,7 +119,11 @@ export function Sidebar({
   })).filter((group) => group.entries.length > 0);
 
   return (
-    <nav className={`sidebar${open ? ' open' : ''}`} aria-label="Sessions">
+    <nav
+      className={`sidebar${open ? ' open' : ''}`}
+      aria-label="Sessions"
+      style={{ '--sidebar-width': `${width}px` } as CSSProperties}
+    >
       <div className="sidebar-brand">OpenCode Hub</div>
 
       <a
@@ -174,6 +186,10 @@ export function Sidebar({
           Sign out
         </button>
       </div>
+
+      {/* Hidden on a phone by the stylesheet: there the sidebar is a drawer
+          sized against the viewport, and there is no split to move. */}
+      <div className="resize-handle end" aria-label="Resize sessions" {...handleProps} />
     </nav>
   );
 }

@@ -304,13 +304,21 @@ code {
 
 @media (min-width: 1100px) {
   .session-aside {
-    position: static;
+    position: relative;
     width: var(--aside-width);
     box-shadow: none;
     animation: none;
   }
 
   .aside-backdrop {
+    display: none;
+  }
+}
+
+/* Undocked, the panel covers the conversation instead of sharing the row with
+   it: there is no split for the handle to move. */
+@media (max-width: 1099px) {
+  .session-aside .resize-handle {
     display: none;
   }
 }
@@ -353,9 +361,59 @@ code {
   padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
 }
 
+/* ---------- resize handles ---------- */
+
+/*
+  A panel edge you can drag. It is 7px of hit area laid over the 1px border
+  rather than a visible bar, so the split still reads as a line until the
+  pointer is on it — the widths themselves live in `localStorage`, not here.
+
+  Only rendered as an affordance where the panel is docked: the two media
+  queries below take it out of the drawer and the overlay, where dragging a
+  width against a viewport-clamped panel would do nothing.
+*/
+.resize-handle {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  width: 7px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resize-handle.end {
+  right: -3px;
+}
+
+.resize-handle.start {
+  left: -3px;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+/* Mid-drag the pointer is regularly off the handle and over text; without this
+   the conversation selects itself and the cursor flickers. */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing .resize-handle {
+  background: var(--accent-soft);
+}
+
 /* ---------- sidebar ---------- */
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: none;
@@ -1516,6 +1574,10 @@ summary:focus-visible {
     border: 0;
     padding: 0;
     background: rgb(0 0 0 / 0.4);
+  }
+
+  .sidebar .resize-handle {
+    display: none;
   }
 }
 
