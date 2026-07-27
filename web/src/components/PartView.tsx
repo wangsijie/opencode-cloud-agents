@@ -1,7 +1,25 @@
 import { useState } from 'react';
-import Markdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
+import { Streamdown, defaultRemarkPlugins } from 'streamdown';
+import { code } from '@streamdown/code';
 import type { MessagePart } from '../api';
+
+/*
+ * Module-level so the references stay stable across renders — Streamdown
+ * memoizes blocks by reference. The `remarkPlugins` prop REPLACES the
+ * defaults, so gfm + codeMeta must be spread back in or tables silently stop
+ * rendering. remark-breaks stays on top: agent output is written for a
+ * terminal, where a single newline is a line break, and plain markdown would
+ * fold a 40-line answer into one paragraph.
+ */
+const REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkBreaks];
+const STREAMDOWN_PLUGINS = { code };
+const CONTROLS = {
+  code: { copy: true, download: false },
+  table: { copy: true, download: false, fullscreen: false },
+  mermaid: false
+} as const;
+const LINK_SAFETY = { enabled: false };
 
 /**
  * Structural parts the agent loop emits around its actual output.
@@ -79,12 +97,15 @@ export function PartView({ part }: { part: MessagePart }) {
     case 'text':
       return (
         <div className="part-text">
-          {/*
-            Agent output is written for a terminal, where a single newline is a
-            line break. Plain markdown would fold those into spaces and collapse
-            a 40-line answer into one paragraph, so soft breaks are preserved.
-          */}
-          <Markdown remarkPlugins={[remarkBreaks]}>{part.text ?? ''}</Markdown>
+          <Streamdown
+            remarkPlugins={REMARK_PLUGINS}
+            plugins={STREAMDOWN_PLUGINS}
+            lineNumbers={false}
+            controls={CONTROLS}
+            linkSafety={LINK_SAFETY}
+          >
+            {part.text ?? ''}
+          </Streamdown>
         </div>
       );
     case 'reasoning':
