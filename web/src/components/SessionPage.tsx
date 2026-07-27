@@ -128,8 +128,8 @@ export function SessionPage({
   }, [sessionId]);
 
   // Dispatch is unfinished: the prompt is durable but the container has not
-  // been handed it yet. Only a wake gets a banner; on a running container the
-  // pending bubble's own spinner is the progress indicator.
+  // been handed it yet. The pending bubble's own spinner is the progress
+  // indicator; a wake only sharpens the poll and the boot screen's wording.
   const dispatching = session?.phase === 'queued' || session?.phase === 'starting';
   const waking = dispatching && !attached;
 
@@ -464,20 +464,13 @@ export function SessionPage({
               </div>
 
               {/*
-                Progress and errors sit with the composer rather than at the end
-                of the conversation — where they would only be visible if the
-                reader happened to be scrolled to the bottom. Sleeping is already
-                on the status pill; no extra banner.
+                Errors sit with the composer rather than at the end of the
+                conversation — where they would only be visible if the reader
+                happened to be scrolled to the bottom. Progress lives on the
+                pending message's own spinner, and sleeping is already on the
+                status pill; no extra banner.
               */}
               <div className="composer-area">
-                {waking ? (
-                  <p className="banner progress" role="status">
-                    <i className="spinner" aria-hidden="true" />
-                    Waking the sandbox… a cold start usually takes tens of
-                    seconds, and the message goes out once it is back.
-                  </p>
-                ) : null}
-
                 {actionError ? (
                   <p className="banner error" role="alert">
                     {actionError}
