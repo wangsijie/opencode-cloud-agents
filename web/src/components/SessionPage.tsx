@@ -121,7 +121,8 @@ export function SessionPage({
   }, [sessionId]);
 
   // Dispatch is unfinished: the prompt is durable but the container has not
-  // been handed it yet. Which of the two it is waiting on decides the wording.
+  // been handed it yet. Only a wake gets a banner; on a running container the
+  // pending bubble's own spinner is the progress indicator.
   const dispatching = session?.phase === 'queued' || session?.phase === 'starting';
   const waking = dispatching && !attached;
 
@@ -196,12 +197,20 @@ export function SessionPage({
     (messages?.length ?? 0) === 0 &&
     pending.length === 0;
 
+  // The newest unacknowledged prompt carries a spinner: it is the one whose
+  // dispatch the reader is waiting on, so the loading mark lives on the
+  // message itself rather than in a banner by the composer.
   const optimistic = useMemo(
     () =>
-      pending.map((entry) => (
+      pending.map((entry, index) => (
         <article key={entry.id} className="message user pending">
           <div className="message-body">
-            <p className="part-text">{entry.text}</p>
+            <p className="part-text">
+              {entry.text}
+              {index === pending.length - 1 ? (
+                <i className="spinner" aria-hidden="true" />
+              ) : null}
+            </p>
           </div>
         </article>
       )),
@@ -339,11 +348,9 @@ export function SessionPage({
             <div className="session-booting" role="status">
               <i className="spinner big" aria-hidden="true" />
               <p className="booting-title">Starting the runtime environment</p>
-              <p className="muted">
-                {waking
-                  ? 'A cold start usually takes tens of seconds.'
-                  : 'Handing your message to the agent…'}
-              </p>
+              {waking ? (
+                <p className="muted">A cold start usually takes tens of seconds.</p>
+              ) : null}
             </div>
           ) : (
             <>
@@ -435,12 +442,11 @@ export function SessionPage({
                 on the status pill; no extra banner.
               */}
               <div className="composer-area">
-                {dispatching ? (
+                {waking ? (
                   <p className="banner progress" role="status">
                     <i className="spinner" aria-hidden="true" />
-                    {waking
-                      ? 'Waking the sandbox… a cold start usually takes tens of seconds, and the message goes out once it is back.'
-                      : 'Sandbox is ready, handing the message to the agent…'}
+                    Waking the sandbox… a cold start usually takes tens of
+                    seconds, and the message goes out once it is back.
                   </p>
                 ) : null}
 
