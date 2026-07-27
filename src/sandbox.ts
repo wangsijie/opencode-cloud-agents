@@ -510,18 +510,19 @@ export class Sandbox extends BaseSandbox<Env> {
       // container is what starts it, and that call is the restore.
       timings.restoreMs = since(restoreStartedAt);
 
-      // Credentials live outside /workspace, so a restored snapshot never
-      // carries them; every boot injects them fresh before anything reaches
-      // the repository over SSH.
-      const credentialsStartedAt = Date.now();
-      const containerEnv = await this.injectContainerCredentials();
-      timings.credentialsMs = since(credentialsStartedAt);
-
       // Provisioning and the server start share one control-plane scope. The
       // resumed-checkout fetch outlives the call that started it, and the scope
       // is what admits its container traffic — closing it in between would fail
       // the fetch on the next command it issues.
       await this.withControlPlaneAccess(async () => {
+        // Credentials live outside /workspace, so a restored snapshot never
+        // carries them; every boot injects them fresh, inside this scope
+        // (exec and writeFile ride the control plane, which is only admitted
+        // here) and before anything reaches the repository over SSH.
+        const credentialsStartedAt = Date.now();
+        const containerEnv = await this.injectContainerCredentials();
+        timings.credentialsMs = since(credentialsStartedAt);
+
         const provisionStartedAt = Date.now();
         const deferredFetch = await this.ensureRepoProvisioned();
         timings.repoMs = since(provisionStartedAt);
