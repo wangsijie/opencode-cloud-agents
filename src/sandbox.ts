@@ -985,7 +985,6 @@ export class Sandbox extends BaseSandbox<Env> {
         'Creating an OpenCode session'
       );
       const session = await client.session.create({
-        title: input.title,
         directory: input.directory
       });
       const id = session.data?.id;

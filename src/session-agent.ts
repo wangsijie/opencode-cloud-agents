@@ -471,7 +471,7 @@ export class SessionAgent extends DurableObject<Env> {
     if (!this.state?.opencodeSessionId) {
       const opencodeSessionId = await sandbox.createOpencodeSession(
         wake.runtimeEpoch,
-        { title: state.title, directory: state.directory }
+        { directory: state.directory }
       );
       await this.update({ opencodeSessionId });
     }

@@ -26,7 +26,6 @@ export const OPENCODE_PORT = 4096;
 export const RUNTIME_EPOCH_HEADER = 'x-opencode-hub-runtime';
 
 export interface CreateOpencodeSessionInput {
-  title: string;
   directory: string;
 }
 
