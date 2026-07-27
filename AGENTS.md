@@ -15,6 +15,18 @@ When changing an OpenCode provider, model, capability or version:
 2. Remember the Hub's session model picker derives from the same file: removing a model drops it from the composer and breaks any session still pinned to it.
 3. Keep OpenCode and SDK versions aligned unless a documented platform constraint requires otherwise.
 
+## An unanswered permission is a hung session
+
+OpenCode falls through to `ask` for any permission no rule matches, and an ask
+blocks the tool call on a promise only a reply settles. Nothing in the Hub
+answers one — there is no permission UI and no operator — so a single ask leaves
+the tool part `running`, the container busy and the session `working` until
+somebody aborts it. `permission` in `src/opencode-config.ts` therefore decides
+every key OpenCode accepts, and a new key added by an OpenCode upgrade has to be
+added there too. `external_directory` is the one that fires in practice: a model
+reading a file outside the checkout, and Grok does it often enough that it
+looked like a Grok bug.
+
 ## Repository catalog
 
 GitHub is the only catalog. The Hub lists the account's pushable repositories

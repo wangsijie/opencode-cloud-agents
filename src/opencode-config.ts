@@ -18,6 +18,29 @@ export const DEFAULT_MODEL_REF = DEFAULT_MODEL;
 export const OPENCODE_CONFIG: Config = {
   model: DEFAULT_MODEL,
   small_model: DEFAULT_MODEL,
+  /**
+   * Nobody is at the keyboard, so every permission must be decided here.
+   *
+   * OpenCode's permission check falls through to `ask` for anything no rule
+   * matches, and an ask parks the tool call on a promise that only a reply can
+   * settle. The Hub has no permission UI and never answers, so a single ask
+   * strands the session: the tool part stays `running`, the container stays
+   * busy, and the only way out is aborting the conversation. `external_directory`
+   * is the one that fires in practice — a model reading a file outside the
+   * checkout, say OpenCode's own `node_modules` under `/root/.config` — and
+   * `doom_loop` is the same trap for a model that keeps re-exploring.
+   *
+   * These are the sandbox's own files in a container that exists to run this
+   * one conversation, so `allow` is what the operator would answer every time.
+   * Keep every key here set: an omitted one is an `ask`, and an `ask` is a hang.
+   */
+  permission: {
+    edit: 'allow',
+    bash: 'allow',
+    webfetch: 'allow',
+    doom_loop: 'allow',
+    external_directory: 'allow'
+  },
   mcp: {
     linear: {
       type: 'remote',
