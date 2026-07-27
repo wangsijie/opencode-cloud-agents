@@ -138,15 +138,12 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const route = useRoute();
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogError, setCatalogError] = useState<string>();
-  const [showArchived, setShowArchived] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const refreshedStale = useRef(false);
   const catalogRef = useRef<Catalog | undefined>(undefined);
   const previousRoute = useRef(route.name);
 
-  const { sessions, error: listError, refresh } = useSessions(
-    showArchived ? '1' : undefined
-  );
+  const { sessions, error: listError, refresh } = useSessions();
 
   const loadCatalog = useCallback(async (refreshRepos = false) => {
     try {
@@ -217,8 +214,6 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
         sessions={sessions}
         listError={listError}
         activeId={route.name === 'session' ? route.id : undefined}
-        showArchived={showArchived}
-        onToggleArchived={() => setShowArchived((value) => !value)}
         refresh={refresh}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}

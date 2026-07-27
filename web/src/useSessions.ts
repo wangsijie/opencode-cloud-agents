@@ -15,14 +15,14 @@ const POLL_INTERVAL_MS = 5_000;
  * poll is usually a sleeping laptop, and blanking the page for it would be
  * worse than showing data that is a few seconds stale.
  */
-export function useSessions(archived?: '1' | 'all') {
+export function useSessions() {
   const [sessions, setSessions] = useState<SessionView[]>();
   const [error, setError] = useState<string>();
   const loaded = useRef(false);
 
   const refresh = useCallback(async (silent = false) => {
     try {
-      const next = await listSessions(archived);
+      const next = await listSessions();
       setSessions(next);
       loaded.current = true;
       setError(undefined);
@@ -31,9 +31,7 @@ export function useSessions(archived?: '1' | 'all') {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     }
-    // Switching between the working set and the archive is a different list, so
-    // the fetch identity has to change with it.
-  }, [archived]);
+  }, []);
 
   useEffect(() => {
     void refresh();

@@ -34,7 +34,6 @@ export interface SessionRow {
   pending_prompt_count: number;
   last_error: string | null;
   last_prompt_at: string | null;
-  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -72,7 +71,6 @@ export function rowToSession(row: SessionRow): SessionRecord {
     pendingPromptCount: row.pending_prompt_count,
     ...(row.last_error === null ? {} : { lastError: row.last_error }),
     ...(row.last_prompt_at === null ? {} : { lastPromptAt: row.last_prompt_at }),
-    ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
     ...(row.title_locked ? { titleLocked: true } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at

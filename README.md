@@ -312,14 +312,10 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/publish \
   -H 'Content-Type: application/json' \
   --data '{"message":"Fix the lint errors","pullRequest":{"title":"Fix the lint errors"}}'
 
-# Rename or archive. Neither touches the container.
+# Rename a session. Does not touch the container.
 curl -X PATCH http://localhost:8787/api/sessions/<session-id> \
   -H 'Content-Type: application/json' \
-  --data '{"archived":true}'
-
-# The default list hides archived sessions; `?archived=1` shows only those and
-# `?archived=all` shows everything.
-curl 'http://localhost:8787/api/sessions?archived=1'
+  --data '{"title":"A better name"}'
 
 # Browse the checkout inside a running container. `path` is relative to it and
 # cannot leave it; `&read=1` returns one file (text capped at 256 KB).

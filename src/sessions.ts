@@ -68,11 +68,6 @@ export interface SessionRecord {
   lastError?: string;
   lastPromptAt?: string;
   /**
-   * Set once the session has been archived: it keeps its container, history and
-   * mirror, and only leaves the default list. Sending a message brings it back.
-   */
-  archivedAt?: string;
-  /**
    * Set when a human named this session. OpenCode titles a conversation of its
    * own accord, and adopting that title is an improvement on the first line of
    * the opening prompt — but never on a name somebody chose.

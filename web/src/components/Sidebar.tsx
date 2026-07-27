@@ -29,8 +29,6 @@ export function Sidebar({
   sessions,
   listError,
   activeId,
-  showArchived,
-  onToggleArchived,
   refresh,
   open,
   onClose,
@@ -39,8 +37,6 @@ export function Sidebar({
   sessions?: SessionView[];
   listError?: string;
   activeId?: string;
-  showArchived: boolean;
-  onToggleArchived: () => void;
   refresh: (silent?: boolean) => Promise<void>;
   open: boolean;
   onClose: () => void;
@@ -151,9 +147,7 @@ export function Sidebar({
         ) : !sessions ? (
           <p className="muted sidebar-empty">Loading…</p>
         ) : groups.length === 0 ? (
-          <p className="muted sidebar-empty">
-            {showArchived ? 'No archived sessions.' : 'No sessions yet.'}
-          </p>
+          <p className="muted sidebar-empty">No sessions yet.</p>
         ) : (
           groups.map((group) => (
             <div key={group.bucket}>
@@ -176,9 +170,6 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <button className="link-button" onClick={onToggleArchived}>
-          {showArchived ? '← Back to active' : 'View archived'}
-        </button>
         <div className="sidebar-account-actions">
           <button
             className="icon-button"
@@ -305,24 +296,13 @@ function Row({
             </button>
           ) : null}
           <button
-            type="button"
-            role="menuitem"
-            onClick={() =>
-              void run(session.id, () =>
-                patchSession(session.id, { archived: !session.archivedAt })
-              )
-            }
-          >
-            {session.archivedAt ? 'Unarchive' : 'Archive'}
-          </button>
-          <button
             className="danger"
             type="button"
             role="menuitem"
             onClick={() => {
               if (
                 confirm(
-                  `Delete session "${session.displayTitle}"? The container and its snapshot go with it, and this cannot be undone. Archiving only hides it from the list — that is a different thing.`
+                  `Delete session "${session.displayTitle}"? The container and its snapshot go with it, and this cannot be undone.`
                 )
               ) {
                 void run(session.id, async () => {

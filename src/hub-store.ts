@@ -224,36 +224,6 @@ export async function updateSession(
 }
 
 /**
- * Archive or restore a session.
- *
- * Archiving is a list-level decision and nothing more: the container, the
- * history and the mirror are untouched, so an archived session can be read and
- * continued exactly as before. That is what makes it the safe alternative to
- * deleting, which destroys the workspace. A session already in the requested
- * state is returned untouched, `updatedAt` included.
- */
-export async function setSessionArchived(
-  env: Env,
-  id: string,
-  archived: boolean
-): Promise<SessionRecord | undefined> {
-  const now = new Date().toISOString();
-  const row = await env.DB.prepare(
-    `UPDATE sessions SET archived_at = ?2, updated_at = ?3
-     WHERE id = ?1 AND (archived_at IS NOT NULL) != (?2 IS NOT NULL)
-     RETURNING *`
-  )
-    .bind(id, archived ? now : null, now)
-    .first<SessionRow>();
-  if (row) {
-    return rowToSession(row);
-  }
-  // No row changed: either the session does not exist, or it was already in
-  // the requested state — the read distinguishes the two.
-  return getSession(env, id);
-}
-
-/**
  * Name a session by hand.
  *
  * This also stops the automatic title from applying: a session OpenCode would

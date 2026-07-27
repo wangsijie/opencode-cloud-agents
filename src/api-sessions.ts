@@ -70,16 +70,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 
   if (url.pathname === '/api/sessions') {
     if (request.method === 'GET') {
-      // Archived sessions are excluded by default rather than deleted: the list
-      // is a working set, and everything stays reachable behind `?archived=`.
-      const archived = url.searchParams.get('archived');
-      const entries = (await hubStore.listRegistry(env)).filter(({ session }) =>
-        archived === 'all'
-          ? true
-          : archived === '1'
-            ? Boolean(session.archivedAt)
-            : !session.archivedAt
-      );
+      const entries = await hubStore.listRegistry(env);
       return json(
         await Promise.all(
           entries.map(({ session, instance }) =>
@@ -580,11 +571,6 @@ async function sendSessionPrompt(
     promptId,
     ...(refs.length > 0 ? { attachments: refs } : {})
   });
-  if (record.archivedAt) {
-    // Archiving says "I am done with this"; sending a message says otherwise.
-    // Making the user un-archive first would only be a step to click through.
-    await hubStore.setSessionArchived(env, record.id, false);
-  }
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
 
@@ -614,12 +600,10 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
 }
 
 /**
- * Rename or archive a session.
+ * Rename a session.
  *
- * Both are registry edits: neither touches the container, so they work whether
- * the session is awake, asleep, or has never started. That is the point of
- * archiving — it is the ending that keeps the work, next to deletion which
- * destroys the workspace with it.
+ * A registry edit: it does not touch the container, so it works whether the
+ * session is awake, asleep, or has never started.
  */
 async function patchSession(
   request: Request,
@@ -635,27 +619,19 @@ async function patchSession(
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HttpError(400, 'Request body must be a JSON object');
   }
-  const { title, archived } = value as { title?: unknown; archived?: unknown };
-  if (title === undefined && archived === undefined) {
+  const { title } = value as { title?: unknown };
+  if (title === undefined) {
     throw new HttpError(400, 'Nothing to change');
   }
 
-  if (title !== undefined) {
-    const trimmed = typeof title === 'string' ? title.trim() : '';
-    if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
-      throw new HttpError(
-        400,
-        `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
-      );
-    }
-    await hubStore.renameSession(env, record.id, trimmed);
+  const trimmed = typeof title === 'string' ? title.trim() : '';
+  if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
+    throw new HttpError(
+      400,
+      `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
+    );
   }
-  if (archived !== undefined) {
-    if (typeof archived !== 'boolean') {
-      throw new HttpError(400, 'archived must be a boolean');
-    }
-    await hubStore.setSessionArchived(env, record.id, archived);
-  }
+  await hubStore.renameSession(env, record.id, trimmed);
   return json(await getSessionView(env, await requireSession(env, record.id)));
 }
 

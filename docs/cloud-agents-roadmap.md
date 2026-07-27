@@ -614,10 +614,9 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
   路径约定。composer 有「刷新仓库」按钮走 `?refresh=1` 跳过缓存。**顺带修掉一个隐患**：仓库定义现在在建会话时钉死到
   session/instance/Sandbox 三处记录上，`findRepo(repoKey)` 不再出现在服务存量会话的路径上，
   "仓库离开目录表 → 唤醒被拒"这条失败模式消失。
-- ✅ **会话管理**：归档（`PATCH /api/sessions/:id {archived}`，列表默认隐藏、发消息自动取消
-  归档、容器与历史全留着，与删除明确区分）、重命名（双击标题，`titleLocked` 之后不再被
-  自动标题覆盖）、自动标题（镜像携带 OpenCode 自己起的 title，`displayTitle` 优先用它）、
-  token 用量与成本（从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）。
+- ✅ **会话管理**：重命名（双击标题，`titleLocked` 之后不再被自动标题覆盖）、自动标题
+  （镜像携带 OpenCode 自己起的 title，`displayTitle` 优先用它）、token 用量与成本
+  （从 assistant 消息累加，进镜像摘要，列表页与会话页都显示）。归档功能已移除。
   **完成时通知已删除**：浏览器原生 Notification 只在标签页开着时有效，价值太薄，
   本项目暂不做推送。
 - ✅ **自建 UI 补齐逃生舱能力**：新增 `src/workspace-files.ts`（纯逻辑：相对路径规范化与

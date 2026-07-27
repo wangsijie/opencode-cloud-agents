@@ -74,7 +74,6 @@ export interface SessionView {
   title: string;
   /** What to show — OpenCode's own title once it has one. */
   displayTitle: string;
-  archivedAt?: string;
   phase: 'queued' | 'starting' | 'working' | 'failed' | 'lost';
   status: SessionStatus;
   lastActivityAt: string;
@@ -357,17 +356,10 @@ export interface WorkspaceFile {
   truncated: boolean;
 }
 
-/** `archived`: the default list hides archived sessions. */
-export const listSessions = (archived?: '1' | 'all') =>
-  call<SessionView[]>(
-    archived ? `/api/sessions?archived=${archived}` : '/api/sessions'
-  );
+export const listSessions = () => call<SessionView[]>('/api/sessions');
 
-/** Rename or archive a session. Neither touches the container. */
-export const patchSession = (
-  id: string,
-  input: { title?: string; archived?: boolean }
-) =>
+/** Rename a session. Does not touch the container. */
+export const patchSession = (id: string, input: { title?: string }) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(input)
