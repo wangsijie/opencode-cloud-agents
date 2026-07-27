@@ -45,6 +45,10 @@ export function buildCatalog(): Catalog {
         modelName: 'Gemini 3 Pro Preview (extremely long model name for truncation testing)'
       }
     ],
+    defaultSelection: {
+      model: 'anthropic/claude-opus-4-5',
+      variant: 'medium'
+    },
     // Stale on the first read: the Hub page performs its one-shot refresh,
     // which the mock answers with a fresh timestamp.
     reposFetchedAt: daysAgo(3),
