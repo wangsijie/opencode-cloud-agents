@@ -1651,25 +1651,46 @@ a.part-task:focus-visible {
    starts from. It is quiet until the message is hovered or the button is
    focused, so a scrolled-back thread stays text rather than a column of
    controls — and on touch, where nothing is ever hovered, it stays visible. */
+.message {
+  position: relative;
+}
+
 .message-actions {
   display: flex;
   margin-top: 2px;
 }
 
 .message-actions .copy-button {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
 }
 
 @media (hover: hover) {
+  /* Out of flow so a hidden button does not reserve a full row between
+     messages; it paints into the gap only while the message is hovered. */
+  .message-actions {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 0;
+    z-index: 1;
+  }
+
+  .message.user .message-actions {
+    left: auto;
+    right: 0;
+  }
+
   .message-actions .copy-button {
     opacity: 0;
+    pointer-events: none;
     transition: opacity 0.12s ease;
   }
 
   .message:hover .copy-button,
   .message-actions .copy-button:focus-visible {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 
