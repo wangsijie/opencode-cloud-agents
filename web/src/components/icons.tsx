@@ -73,6 +73,23 @@ export function RefreshIcon() {
   );
 }
 
+export function UnifiedDiffIcon() {
+  return (
+    <Icon>
+      <path d="M4 5h16M4 9h16M4 15h16M4 19h16" />
+    </Icon>
+  );
+}
+
+export function SplitDiffIcon() {
+  return (
+    <Icon>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M12 4v16M6 8h3M6 12h3M15 8h3M15 12h3" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon() {
   return (
     <Icon>

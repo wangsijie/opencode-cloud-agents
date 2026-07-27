@@ -2060,8 +2060,6 @@ a.part-task:focus-visible {
   gap: 10px;
 }
 
-/* Refresh, or the workspace's own tabs: the panel's heading is the sidebar tab
-   now, so this row only carries controls and hangs to the right. */
 .changes-header {
   display: flex;
   align-items: center;
@@ -2069,23 +2067,22 @@ a.part-task:focus-visible {
   gap: var(--gap);
 }
 
-.changes-header .link-button {
-  color: var(--text);
+.changes-summary {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
 }
 
 .diff-mode-toggle {
   display: flex;
-  gap: 12px;
-}
-
-.diff-mode-toggle .link-button {
-  color: var(--text-dim);
-}
-
-.diff-mode-toggle .link-button.active {
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .file-status {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchChanges, type ChangedFile, type SessionChanges } from '../api';
 import { usePrefersDark } from '../usePrefersDark';
 import { FileDiff, type DiffMode } from './FileDiff';
+import { RefreshIcon, SplitDiffIcon, UnifiedDiffIcon } from './icons';
 
 const STATUS_LABELS: Record<string, string> = {
   added: 'added',
@@ -296,36 +297,58 @@ export function ChangesPanel({
     <section className="changes-panel">
       {attached ? (
         <header className="changes-header">
-          {changes && changes.files.length > 0 ? (
-            <div className="diff-mode-toggle" role="group" aria-label="Diff layout">
-              <button
-                className={`link-button${mode === 'unified' ? ' active' : ''}`}
-                type="button"
-                aria-pressed={mode === 'unified'}
-                onClick={() => setDiffMode('unified')}
-              >
-                Unified
-              </button>
-              <button
-                className={`link-button${mode === 'split' ? ' active' : ''}`}
-                type="button"
-                aria-pressed={mode === 'split'}
-                onClick={() => setDiffMode('split')}
-              >
-                Split
-              </button>
-            </div>
+          {changes ? (
+            <p className="changes-summary muted mono">
+              {changes.branch}
+              {changes.onDefaultBranch ? ' (default branch)' : ''} ·{' '}
+              {changes.files.length} files
+              {changes.unpushedCommits > 0
+                ? ` · ${changes.unpushedCommits} unpushed commits`
+                : ''}
+            </p>
           ) : (
             <span />
           )}
-          <button
-            className="link-button"
-            type="button"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            Refresh
-          </button>
+          <div className="changes-actions">
+            {changes && changes.files.length > 0 ? (
+              <div
+                className="diff-mode-toggle"
+                role="group"
+                aria-label="Diff layout"
+              >
+                <button
+                  className={`icon-button${mode === 'unified' ? ' active' : ''}`}
+                  type="button"
+                  aria-pressed={mode === 'unified'}
+                  aria-label="Unified diff"
+                  title="Unified diff"
+                  onClick={() => setDiffMode('unified')}
+                >
+                  <UnifiedDiffIcon />
+                </button>
+                <button
+                  className={`icon-button${mode === 'split' ? ' active' : ''}`}
+                  type="button"
+                  aria-pressed={mode === 'split'}
+                  aria-label="Split diff"
+                  title="Split diff"
+                  onClick={() => setDiffMode('split')}
+                >
+                  <SplitDiffIcon />
+                </button>
+              </div>
+            ) : null}
+            <button
+              className="icon-button"
+              type="button"
+              disabled={loading}
+              aria-label="Refresh changes"
+              title="Refresh changes"
+              onClick={() => void load()}
+            >
+              <RefreshIcon />
+            </button>
+          </div>
         </header>
       ) : null}
 
@@ -340,14 +363,6 @@ export function ChangesPanel({
         <>
           {changes ? (
             <>
-              <p className="muted mono">
-                {changes.branch}
-                {changes.onDefaultBranch ? ' (default branch)' : ''} ·{' '}
-                {changes.files.length} files
-                {changes.unpushedCommits > 0
-                  ? ` · ${changes.unpushedCommits} unpushed commits`
-                  : ''}
-              </p>
               {changes.files.length > 0 && tree ? (
                 <nav className="file-tree-root" aria-label="Changed files">
                   <TreeLevel node={tree} onSelect={scrollToFile} />
