@@ -1,7 +1,23 @@
 import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
-import type { SessionMessage } from '../api';
+import type { MessagePart, SessionMessage } from '../api';
 import { turnDiffsByMessage } from '../patch-diffs';
+import { CopyButton } from './CopyButton';
 import { isRenderablePart, PartView } from './PartView';
+
+/**
+ * What copying a message puts on the clipboard: what it says, and nothing else.
+ *
+ * Tool calls, reasoning and patches are the work behind the answer rather than
+ * the answer, so only the text parts come along — which also means a message
+ * that is pure machinery offers no copy button at all.
+ */
+function messageText(parts: MessagePart[]): string {
+  return parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('\n\n')
+    .trim();
+}
 
 /**
  * The conversation.
@@ -62,6 +78,7 @@ export function MessageList({
         if (parts.length === 0 && !failure) {
           return null;
         }
+        const copyable = messageText(parts);
         return (
           <article key={message.info.id} className={`message ${message.info.role}`}>
             <div className="message-body">
@@ -83,6 +100,14 @@ export function MessageList({
                 </p>
               ) : null}
             </div>
+            {copyable ? (
+              <div className="message-actions">
+                <CopyButton
+                  text={copyable}
+                  label={message.info.role === 'user' ? 'Copy your message' : 'Copy the reply'}
+                />
+              </div>
+            ) : null}
           </article>
         );
       })}

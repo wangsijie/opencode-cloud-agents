@@ -1405,6 +1405,32 @@ a.part-task:focus-visible {
   font-size: 13px;
 }
 
+/* The copy button sits under the message it copies, at the edge its text
+   starts from. It is quiet until the message is hovered or the button is
+   focused, so a scrolled-back thread stays text rather than a column of
+   controls — and on touch, where nothing is ever hovered, it stays visible. */
+.message-actions {
+  display: flex;
+  margin-top: 2px;
+}
+
+.message-actions .copy-button {
+  width: 28px;
+  height: 28px;
+}
+
+@media (hover: hover) {
+  .message-actions .copy-button {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .message:hover .copy-button,
+  .message-actions .copy-button:focus-visible {
+    opacity: 1;
+  }
+}
+
 /* A sent message the container has not acknowledged yet. It reads as the user's
    own words already, so it is dimmed rather than restyled. */
 .message.pending .message-body {

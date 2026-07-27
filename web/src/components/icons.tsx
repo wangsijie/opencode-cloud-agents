@@ -106,6 +106,16 @@ export function CheckIcon() {
   );
 }
 
+/** Two stacked sheets: the copy glyph everywhere else in the app's world. */
+export function CopyIcon() {
+  return (
+    <Icon size={16}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h8" />
+    </Icon>
+  );
+}
+
 /** Opens and closes the details panel: a page with a pane down its right side. */
 export function PanelIcon() {
   return (
