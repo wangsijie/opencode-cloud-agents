@@ -237,6 +237,26 @@ export function PartView({
       return <Todo part={part} />;
     case 'patch':
       return <PatchView part={part} diffs={turnDiffs} />;
+    case 'file': {
+      // An image attachment sent with a prompt; the url is a data URL, so it
+      // renders without another request. Other mimes just name themselves.
+      const mime = typeof part.mime === 'string' ? part.mime : '';
+      const url = typeof part.url === 'string' ? part.url : undefined;
+      const filename =
+        typeof part.filename === 'string' ? part.filename : undefined;
+      if (url && mime.startsWith('image/')) {
+        return (
+          <img
+            className="part-image"
+            src={url}
+            alt={filename ?? 'Attached image'}
+          />
+        );
+      }
+      return (
+        <div className="part-placeholder">{filename ?? 'Attachment'}</div>
+      );
+    }
     default:
       // Named rather than hidden: an unrendered part is still evidence that
       // something happened, and the type is what tells us what to build next.

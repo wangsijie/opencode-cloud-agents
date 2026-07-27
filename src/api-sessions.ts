@@ -46,7 +46,11 @@ import {
   deriveSessionStatus,
   deriveSessionTitle,
   MAX_SESSION_TITLE_LENGTH,
+  normalizeSessionAttachments,
   normalizeSessionPrompt,
+  promptAttachmentKey,
+  type SessionAttachmentInput,
+  type SessionAttachmentRef,
   type SessionMessage,
   type SessionRecord,
   type SessionTranscript,
@@ -227,6 +231,15 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     catalog
   );
   try {
+    // The prompt id is fixed here so the staged attachment keys are known
+    // before the prompt becomes durable on the agent's queue.
+    const promptId = crypto.randomUUID();
+    const attachments = await stageAttachments(
+      env,
+      record.id,
+      promptId,
+      input.attachments
+    );
     await resolveSessionAgent(env, record.id).startSession({
       sessionId: record.id,
       instanceId: record.instanceId,
@@ -235,7 +248,9 @@ async function createSession(request: Request, env: Env): Promise<Response> {
       model: record.model,
       ...(record.variant ? { variant: record.variant } : {}),
       title: record.title,
-      prompt: input.prompt
+      prompt: input.prompt,
+      promptId,
+      ...(attachments.length > 0 ? { attachments } : {})
     });
   } catch (error) {
     // The session exists, so surface the failure on the record instead of
@@ -266,6 +281,55 @@ interface CreateSessionInput {
   model: string;
   variant?: string;
   prompt: string;
+  /** Validated images, still base64 — staged to R2 once the record exists. */
+  attachments: SessionAttachmentInput[];
+}
+
+/** Extract and validate the `attachments` field of a request body. */
+function readAttachmentsField(value: object): SessionAttachmentInput[] {
+  const attachments = normalizeSessionAttachments(
+    (value as { attachments?: unknown }).attachments
+  );
+  if (attachments === undefined) {
+    throw new HttpError(
+      400,
+      'Attachments must be up to 4 images (png, jpeg, webp or gif), 5MB each'
+    );
+  }
+  return attachments;
+}
+
+/**
+ * Stage image bytes in R2 and return the references that ride the prompt
+ * queue. Staging happens before the prompt becomes durable, so dispatch can
+ * never observe a missing object; keys are deterministic per promptId, so a
+ * client retry re-puts the same content instead of orphaning copies.
+ */
+async function stageAttachments(
+  env: Env,
+  sessionId: string,
+  promptId: string,
+  attachments: SessionAttachmentInput[]
+): Promise<SessionAttachmentRef[]> {
+  const refs: SessionAttachmentRef[] = [];
+  for (const [index, attachment] of attachments.entries()) {
+    const binary = atob(attachment.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const key = promptAttachmentKey(sessionId, promptId, index);
+    await env.BACKUP_BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: attachment.mime }
+    });
+    refs.push({
+      key,
+      mime: attachment.mime,
+      ...(attachment.filename ? { filename: attachment.filename } : {}),
+      size: bytes.byteLength
+    });
+  }
+  return refs;
 }
 
 async function readCreateSessionInput(
@@ -306,7 +370,8 @@ async function readCreateSessionInput(
     repoKey,
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
-    prompt: text
+    prompt: text,
+    attachments: readAttachmentsField(value)
   };
 }
 
@@ -505,7 +570,16 @@ async function sendSessionPrompt(
     // A container being deleted is the one state no amount of waking fixes.
     throw new HttpError(409, 'This session is not ready to receive messages');
   }
-  await resolveSessionAgent(env, record.id).queuePrompt(input);
+  const { attachments, ...prompt } = input;
+  // The prompt id must be fixed before staging so the R2 keys are deterministic
+  // and a client retry overwrites the same objects instead of orphaning more.
+  const promptId = prompt.promptId ?? crypto.randomUUID();
+  const refs = await stageAttachments(env, record.id, promptId, attachments);
+  await resolveSessionAgent(env, record.id).queuePrompt({
+    ...prompt,
+    promptId,
+    ...(refs.length > 0 ? { attachments: refs } : {})
+  });
   if (record.archivedAt) {
     // Archiving says "I am done with this"; sending a message says otherwise.
     // Making the user un-archive first would only be a step to click through.
@@ -736,10 +810,15 @@ async function requireAwakeRuntime(
   return { instance, runtimeEpoch };
 }
 
+/** A send-message body: the queue input plus images not yet staged to R2. */
+interface SendPromptRequest extends Omit<QueuePromptInput, 'attachments'> {
+  attachments: SessionAttachmentInput[];
+}
+
 async function readSendPromptInput(
   request: Request,
   catalog: ModelCatalog
-): Promise<QueuePromptInput> {
+): Promise<SendPromptRequest> {
   let value: unknown;
   try {
     value = await request.json();
@@ -787,7 +866,8 @@ async function readSendPromptInput(
     prompt: text,
     ...(model === undefined ? {} : { model }),
     ...(typeof variant === 'string' && variant ? { variant } : {}),
-    ...(promptId === undefined ? {} : { promptId })
+    ...(promptId === undefined ? {} : { promptId }),
+    attachments: readAttachmentsField(value)
   };
 }
 

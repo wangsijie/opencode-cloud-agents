@@ -23,6 +23,12 @@ import {
 } from '../optimistic';
 import { isPlainClick, navigate } from '../router';
 import { useTranscript } from '../useTranscript';
+import {
+  AttachButton,
+  AttachmentChips,
+  toAttachmentPayload,
+  useComposerAttachments
+} from './ComposerAttachments';
 import { ArrowUpIcon, MenuIcon, PanelIcon, StopIcon } from './icons';
 import { InstanceModal } from './InstanceModal';
 import { MessageList } from './MessageList';
@@ -73,6 +79,7 @@ export function SessionPage({
   const [pending, setPending] = useState<OptimisticPrompt[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [instanceOpen, setInstanceOpen] = useState(false);
+  const attachmentsApi = useComposerAttachments(setActionError);
   // The conversation scrolls inside the page rather than the page scrolling, so
   // the header and the composer stay where the reader left them.
   const scroller = useRef<HTMLDivElement>(null);
@@ -205,6 +212,14 @@ export function SessionPage({
       pending.map((entry, index) => (
         <article key={entry.id} className="message user pending">
           <div className="message-body">
+            {entry.attachments?.map((attachment, i) => (
+              <img
+                key={i}
+                className="pending-attachment"
+                src={attachment.previewUrl}
+                alt=""
+              />
+            ))}
             <p className="part-text">
               {entry.text}
               {index === pending.length - 1 ? (
@@ -220,27 +235,39 @@ export function SessionPage({
   async function send(event: FormEvent) {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text || busy || !canSend) {
+    if (!text || busy || !canSend || attachmentsApi.reading) {
       return;
     }
     setBusy(true);
     setActionError(undefined);
+    const attachments = attachmentsApi.attachments;
     const entry: OptimisticPrompt = {
       // The id makes a retried request the same prompt rather than a second
       // one, which matters because sending is the least reversible action here.
       id: crypto.randomUUID(),
       text,
       sentAt: new Date().toISOString(),
-      ...(lastMessageId(messages) ? { afterMessageId: lastMessageId(messages)! } : {})
+      ...(lastMessageId(messages) ? { afterMessageId: lastMessageId(messages)! } : {}),
+      ...(attachments.length > 0
+        ? {
+            attachments: attachments.map((attachment) => ({
+              previewUrl: attachment.dataUrl
+            }))
+          }
+        : {})
     };
     setPending((current) => [...current, entry]);
     setPrompt('');
+    attachmentsApi.clear();
     try {
       await sendMessage(sessionId, {
         prompt: text,
         ...(model ? { model } : {}),
         ...(variant ? { variant } : {}),
-        promptId: entry.id
+        promptId: entry.id,
+        ...(attachments.length > 0
+          ? { attachments: toAttachmentPayload(attachments) }
+          : {})
       });
       await refreshSession();
       onSessionsChanged();
@@ -249,6 +276,7 @@ export function SessionPage({
       // the text back rather than leaving a message that will never be answered.
       setPending((current) => current.filter((queued) => queued.id !== entry.id));
       setPrompt((current) => (current ? current : text));
+      attachmentsApi.restore(attachments);
       setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
@@ -457,6 +485,7 @@ export function SessionPage({
                 ) : null}
 
                 <form className="composer-box" onSubmit={send} aria-busy={busy}>
+                  <AttachmentChips api={attachmentsApi} />
                   <textarea
                     className="prompt"
                     rows={2}
@@ -470,6 +499,7 @@ export function SessionPage({
                     value={prompt}
                     disabled={busy || !canSend}
                     onChange={(event) => setPrompt(event.target.value)}
+                    onPaste={attachmentsApi.onPaste}
                     onKeyDown={(event) => {
                       // Enter sends, Shift+Enter breaks the line — but not while an
                       // input method is mid-composition, where Enter is how you
@@ -485,6 +515,10 @@ export function SessionPage({
                     }}
                   />
                   <div className="composer-row">
+                    <AttachButton
+                      api={attachmentsApi}
+                      disabled={busy || !canSend}
+                    />
                     {catalog ? (
                       <ModelSelect
                         models={catalog.models}
@@ -528,7 +562,12 @@ export function SessionPage({
                       <button
                         className="send-button"
                         type="submit"
-                        disabled={busy || !canSend || !prompt.trim()}
+                        disabled={
+                          busy ||
+                          !canSend ||
+                          !prompt.trim() ||
+                          attachmentsApi.reading
+                        }
                         aria-label="Send"
                         title="Send"
                       >

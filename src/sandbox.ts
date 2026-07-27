@@ -90,7 +90,7 @@ import {
   type WorkspaceFile,
   type WorkspaceListing
 } from './workspace-files';
-import type { SessionMessage } from './sessions';
+import type { SessionAttachmentRef, SessionMessage } from './sessions';
 import {
   buildTranscriptMirror,
   deleteTranscriptMirror,
@@ -1089,6 +1089,31 @@ export class Sandbox extends BaseSandbox<Env> {
         runtimeEpoch,
         'Dispatching an OpenCode prompt'
       );
+      const parts: Array<
+        | { type: 'text'; text: string }
+        | { type: 'file'; mime: string; filename?: string; url: string }
+      > = [];
+      for (const attachment of input.attachments ?? []) {
+        const object = await this.persistenceEnv.BACKUP_BUCKET.get(
+          attachment.key
+        );
+        if (!object) {
+          // The staging copy is gone for good; deliver the text rather than
+          // wedging the retry ladder on an object no retry can bring back.
+          console.warn('Prompt attachment missing from R2', {
+            key: attachment.key
+          });
+          continue;
+        }
+        const bytes = new Uint8Array(await object.arrayBuffer());
+        parts.push({
+          type: 'file',
+          mime: attachment.mime,
+          ...(attachment.filename ? { filename: attachment.filename } : {}),
+          url: `data:${attachment.mime};base64,${encodeBase64(bytes)}`
+        });
+      }
+      parts.push({ type: 'text', text: input.text });
       // The message id is left to OpenCode: it encodes a sortable timestamp
       // that message ordering depends on, so an arbitrary id is not safe.
       const result = await client.session.promptAsync({
@@ -1099,7 +1124,7 @@ export class Sandbox extends BaseSandbox<Env> {
           modelID: input.modelID
         },
         ...(input.variant ? { variant: input.variant } : {}),
-        parts: [{ type: 'text', text: input.text }]
+        parts
       });
       if (result.error !== undefined || result.response.status >= 400) {
         throw new Error(
@@ -2874,6 +2899,21 @@ function isWorkspaceLocation(value: string): boolean {
 }
 
 /** Summarize an OpenCode SDK result whose body is an error or unexpected. */
+/**
+ * Base64-encode in chunks: spreading a multi-megabyte image into one
+ * `String.fromCharCode(...)` call overflows the argument limit.
+ */
+function encodeBase64(bytes: Uint8Array): string {
+  const CHUNK_SIZE = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + CHUNK_SIZE)
+    );
+  }
+  return btoa(binary);
+}
+
 function describeSdkFailure(result: {
   error?: unknown;
   response?: { status: number };

@@ -106,3 +106,28 @@ test('lastMessageId reports the newest message, or nothing', () => {
     'msg_2'
   )
 })
+
+test('file parts do not break text matching', () => {
+  const message = {
+    info: { id: 'msg_1', role: 'user' },
+    parts: [
+      { id: 'msg_1-f', type: 'file', mime: 'image/png', url: 'data:image/png;base64,AAAA' },
+      { id: 'msg_1-p', type: 'text', text: 'look at this' }
+    ]
+  }
+  assert.deepEqual(
+    reconcileOptimisticPrompts([prompt('a', 'look at this')], [message]),
+    []
+  )
+})
+
+test('attachment previews on a prompt do not change reconciliation', () => {
+  const pending = [
+    { ...prompt('a', 'look at this'), attachments: [{ previewUrl: 'data:x' }] }
+  ]
+  assert.equal(reconcileOptimisticPrompts(pending, []), pending)
+  assert.deepEqual(
+    reconcileOptimisticPrompts(pending, [userMessage('msg_1', 'look at this')]),
+    []
+  )
+})

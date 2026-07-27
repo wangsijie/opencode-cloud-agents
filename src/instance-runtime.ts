@@ -10,6 +10,7 @@
 import { getSandbox } from '@cloudflare/sandbox';
 import type { InstanceRuntimeStatus } from './instances';
 import type { LifecycleStatus } from './lifecycle';
+import type { SessionAttachmentRef } from './sessions';
 
 /** How long an explicit wake stays attached to a queued lifecycle transition. */
 const WAKE_POLL_INTERVAL_MS = 500;
@@ -37,6 +38,8 @@ export interface PromptOpencodeSessionInput {
   /** OpenCode model variant (reasoning effort), when the model defines any. */
   variant?: string;
   text: string;
+  /** R2-staged images; the Sandbox fetches the bytes by key at dispatch. */
+  attachments?: SessionAttachmentRef[];
 }
 
 export interface ListOpencodeSessionMessagesInput {

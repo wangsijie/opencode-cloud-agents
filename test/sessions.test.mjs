@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  MAX_SESSION_ATTACHMENT_BYTES,
+  MAX_SESSION_ATTACHMENTS,
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
   deriveDisplayTitle,
@@ -9,7 +11,10 @@ import {
   deriveSessionStatus,
   deriveSessionTitle,
   isSessionPhase,
-  normalizeSessionPrompt
+  normalizeSessionAttachments,
+  normalizeSessionPrompt,
+  promptAttachmentKey,
+  promptAttachmentPrefix
 } from '../src/sessions.ts'
 
 // The model catalog's own behaviour is covered in model-catalog.test.mjs,
@@ -133,4 +138,88 @@ test('OpenCode may rename a session, a human outranks it', () => {
     }),
     record.title
   )
+})
+
+// A base64 string whose decoded size is exactly `bytes`. The content never
+// matters to normalization, so length is all that is constructed.
+const base64OfSize = (bytes) => {
+  const whole = Math.floor(bytes / 3)
+  const rest = bytes % 3
+  return (
+    'AAAA'.repeat(whole) + (rest === 0 ? '' : rest === 1 ? 'AA==' : 'AAA=')
+  )
+}
+
+test('attachments are optional and default to none', () => {
+  assert.deepEqual(normalizeSessionAttachments(undefined), [])
+  assert.deepEqual(normalizeSessionAttachments(null), [])
+})
+
+test('valid attachments round-trip with cleaned filenames', () => {
+  const result = normalizeSessionAttachments([
+    { mime: 'image/png', filename: 'shot.png', data: base64OfSize(9) },
+    { mime: 'image/jpeg', data: base64OfSize(10) }
+  ])
+  assert.equal(result.length, 2)
+  assert.equal(result[0].filename, 'shot.png')
+  assert.equal(result[1].filename, undefined)
+})
+
+test('attachment filenames lose their paths and are bounded', () => {
+  const [a] = normalizeSessionAttachments([
+    { mime: 'image/png', filename: '../../etc/x.png', data: base64OfSize(3) }
+  ])
+  assert.equal(a.filename, 'x.png')
+  const [b] = normalizeSessionAttachments([
+    { mime: 'image/png', filename: 'C:\\Users\\me\\shot.png', data: base64OfSize(3) }
+  ])
+  assert.equal(b.filename, 'shot.png')
+  const [c] = normalizeSessionAttachments([
+    { mime: 'image/png', filename: 'n'.repeat(200), data: base64OfSize(3) }
+  ])
+  assert.equal(c.filename.length, 128)
+})
+
+test('malformed attachments reject the whole request', () => {
+  const png = (data) => [{ mime: 'image/png', data }]
+  assert.equal(normalizeSessionAttachments('nope'), undefined)
+  assert.equal(normalizeSessionAttachments([null]), undefined)
+  assert.equal(
+    normalizeSessionAttachments([{ mime: 'image/tiff', data: base64OfSize(3) }]),
+    undefined
+  )
+  assert.equal(normalizeSessionAttachments(png('')), undefined)
+  assert.equal(normalizeSessionAttachments(png('not base64!!')), undefined)
+  assert.equal(normalizeSessionAttachments(png('AAA')), undefined)
+  assert.equal(normalizeSessionAttachments(png('====')), undefined)
+})
+
+test('attachment size and count limits hold', () => {
+  const oversized = base64OfSize(MAX_SESSION_ATTACHMENT_BYTES + 3)
+  assert.equal(
+    normalizeSessionAttachments([{ mime: 'image/png', data: oversized }]),
+    undefined
+  )
+  const atLimit = base64OfSize(MAX_SESSION_ATTACHMENT_BYTES)
+  assert.equal(
+    normalizeSessionAttachments([{ mime: 'image/png', data: atLimit }]).length,
+    1
+  )
+  const one = { mime: 'image/png', data: base64OfSize(3) }
+  assert.equal(
+    normalizeSessionAttachments(Array(MAX_SESSION_ATTACHMENTS + 1).fill(one)),
+    undefined
+  )
+  // Three near-limit images pass the per-image cap but land over the total.
+  const nearLimit = { mime: 'image/png', data: atLimit }
+  assert.equal(
+    normalizeSessionAttachments([nearLimit, nearLimit, nearLimit]),
+    undefined
+  )
+})
+
+test('attachment keys are per prompt and swept per session', () => {
+  const key = promptAttachmentKey('s1', 'p1', 0)
+  assert.equal(key, 'prompt-attachments/s1/p1/0')
+  assert.ok(key.startsWith(promptAttachmentPrefix('s1')))
 })

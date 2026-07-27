@@ -402,9 +402,22 @@ export const fetchAgentSession = (id: string, agentSessionId: string) =>
     `/api/sessions/${encodeURIComponent(id)}/agent-session${childQuery(agentSessionId)}`
   );
 
+/** An image going out with a prompt: base64 bytes without a `data:` prefix. */
+export interface MessageAttachment {
+  mime: string;
+  filename?: string;
+  data: string;
+}
+
 export const sendMessage = (
   id: string,
-  input: { prompt: string; model?: string; variant?: string; promptId?: string }
+  input: {
+    prompt: string;
+    model?: string;
+    variant?: string;
+    promptId?: string;
+    attachments?: MessageAttachment[];
+  }
 ) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
@@ -456,6 +469,7 @@ export const createSession = (input: {
   model: string;
   variant?: string;
   prompt: string;
+  attachments?: MessageAttachment[];
 }) => call<SessionView>('/api/sessions', { method: 'POST', body: JSON.stringify(input) });
 
 export const deleteSession = (id: string) =>

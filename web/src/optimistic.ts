@@ -17,9 +17,16 @@ export interface OptimisticPrompt {
    * this one. Absent when the transcript was still empty.
    */
   afterMessageId?: string;
+  /** Preview thumbnails for images sent with this prompt. Display only —
+   * reconciliation still matches by text alone. */
+  attachments?: { previewUrl: string }[];
 }
 
-/** The user-visible text of a message, which is what a prompt turns into. */
+/**
+ * The user-visible text of a message, which is what a prompt turns into.
+ * File parts (image attachments) are deliberately excluded: prompts always
+ * carry text, and that text is the reconciliation key.
+ */
 function userMessageText(message: SessionMessage): string | undefined {
   if (message.info.role !== 'user') {
     return undefined;

@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { createSession, type Catalog } from '../api';
 import { navigate, sessionPath } from '../router';
+import {
+  AttachButton,
+  AttachmentChips,
+  toAttachmentPayload,
+  useComposerAttachments
+} from './ComposerAttachments';
 import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
 import { ModelSelect } from './ModelSelect';
 import { RepoSelect } from './RepoSelect';
@@ -37,6 +43,7 @@ export function NewSessionPage({
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const attachmentsApi = useComposerAttachments(setError);
 
   const repos = catalog?.repos;
   const selectedModel = useMemo(
@@ -85,20 +92,25 @@ export function NewSessionPage({
   async function submit(event: FormEvent) {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text || busy) {
+    if (!text || busy || attachmentsApi.reading) {
       setError(text ? undefined : 'Describe what you want done first');
       return;
     }
     setBusy(true);
     setError(undefined);
+    const attachments = attachmentsApi.attachments;
     try {
       const created = await createSession({
         repoKey,
         model,
         ...(variant ? { variant } : {}),
-        prompt: text
+        prompt: text,
+        ...(attachments.length > 0
+          ? { attachments: toAttachmentPayload(attachments) }
+          : {})
       });
       setPrompt('');
+      attachmentsApi.clear();
       onCreated();
       navigate(sessionPath(created.id));
     } catch (cause) {
@@ -150,6 +162,7 @@ export function NewSessionPage({
             </section>
           ) : (
             <form className="composer-box" onSubmit={submit} aria-busy={busy || loading}>
+              <AttachmentChips api={attachmentsApi} />
               <textarea
                 className="prompt"
                 rows={3}
@@ -158,6 +171,7 @@ export function NewSessionPage({
                 disabled={busy}
                 autoFocus={matchMedia('(min-width: 768px)').matches}
                 onChange={(event) => setPrompt(event.target.value)}
+                onPaste={attachmentsApi.onPaste}
                 onKeyDown={(event) => {
                   // Enter starts the session, Shift+Enter breaks the line — but
                   // not while an input method is mid-composition, where Enter is
@@ -173,6 +187,7 @@ export function NewSessionPage({
                 }}
               />
               <div className="composer-row">
+                <AttachButton api={attachmentsApi} disabled={busy} />
                 <RepoSelect
                   repos={catalog?.repos}
                   value={repoKey}
@@ -200,7 +215,9 @@ export function NewSessionPage({
                 <button
                   className="send-button"
                   type="submit"
-                  disabled={busy || loading || !prompt.trim()}
+                  disabled={
+                    busy || loading || !prompt.trim() || attachmentsApi.reading
+                  }
                   aria-label="Start session"
                 >
                   <ArrowUpIcon />

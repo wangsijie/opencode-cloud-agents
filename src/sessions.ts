@@ -300,3 +300,124 @@ export function normalizeSessionPrompt(value: unknown): string | undefined {
   }
   return prompt;
 }
+
+export const SESSION_ATTACHMENT_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif'
+] as const;
+export const MAX_SESSION_ATTACHMENTS = 4;
+export const MAX_SESSION_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_SESSION_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024;
+const MAX_SESSION_ATTACHMENT_FILENAME_LENGTH = 128;
+
+/** An image as submitted by the browser: bytes still base64-encoded. */
+export interface SessionAttachmentInput {
+  mime: (typeof SESSION_ATTACHMENT_MIME_TYPES)[number];
+  filename?: string;
+  /** Raw base64 without a `data:` prefix. */
+  data: string;
+}
+
+/**
+ * An image after staging: bytes live in R2 and only this reference travels
+ * through the SessionAgent queue and Sandbox RPC, both of which have size
+ * limits far below one image.
+ */
+export interface SessionAttachmentRef {
+  key: string;
+  mime: string;
+  filename?: string;
+  /** Decoded size in bytes. */
+  size: number;
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Decoded byte count of a base64 string, computed without decoding it. */
+function base64DecodedSize(data: string): number {
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+  return (data.length / 4) * 3 - padding;
+}
+
+function normalizeAttachmentFilename(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const basename = value.slice(
+    Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\')) + 1
+  );
+  const filename = basename
+    .trim()
+    .slice(0, MAX_SESSION_ATTACHMENT_FILENAME_LENGTH);
+  return filename || undefined;
+}
+
+/**
+ * Normalize submitted image attachments. Absent input means no attachments;
+ * anything malformed or over the size/count limits rejects the whole request
+ * (undefined) rather than silently dropping images the user meant to send.
+ */
+export function normalizeSessionAttachments(
+  value: unknown
+): SessionAttachmentInput[] | undefined {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_SESSION_ATTACHMENTS) {
+    return undefined;
+  }
+  const attachments: SessionAttachmentInput[] = [];
+  let totalBytes = 0;
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) {
+      return undefined;
+    }
+    const { mime, filename, data } = entry as {
+      mime?: unknown;
+      filename?: unknown;
+      data?: unknown;
+    };
+    if (!SESSION_ATTACHMENT_MIME_TYPES.some((allowed) => allowed === mime)) {
+      return undefined;
+    }
+    if (
+      typeof data !== 'string' ||
+      data.length === 0 ||
+      data.length % 4 !== 0 ||
+      !BASE64_PATTERN.test(data)
+    ) {
+      return undefined;
+    }
+    const size = base64DecodedSize(data);
+    if (size === 0 || size > MAX_SESSION_ATTACHMENT_BYTES) {
+      return undefined;
+    }
+    totalBytes += size;
+    if (totalBytes > MAX_SESSION_ATTACHMENT_TOTAL_BYTES) {
+      return undefined;
+    }
+    const cleanFilename = normalizeAttachmentFilename(filename);
+    attachments.push({
+      mime: mime as SessionAttachmentInput['mime'],
+      ...(cleanFilename ? { filename: cleanFilename } : {}),
+      data
+    });
+  }
+  return attachments;
+}
+
+/** R2 key for one staged prompt attachment. */
+export function promptAttachmentKey(
+  sessionId: string,
+  promptId: string,
+  index: number
+): string {
+  return `prompt-attachments/${sessionId}/${promptId}/${index}`;
+}
+
+/** Prefix covering every staged attachment of a session, for deletion sweeps. */
+export function promptAttachmentPrefix(sessionId: string): string {
+  return `prompt-attachments/${sessionId}/`;
+}

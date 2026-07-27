@@ -29,7 +29,12 @@ import {
 } from './instance-runtime';
 import { loadModelCatalog } from './model-catalog';
 import { WORKSPACE_ROOT } from './repos';
-import type { SessionPhase, SessionStatePatch } from './sessions';
+import {
+  promptAttachmentPrefix,
+  type SessionAttachmentRef,
+  type SessionPhase,
+  type SessionStatePatch
+} from './sessions';
 
 const STATE_KEY = 'session-agent:state';
 const SCHEMA_VERSION = 1;
@@ -92,6 +97,11 @@ interface PendingPrompt {
   model: string;
   /** OpenCode variant for this prompt; absent when the model has none. */
   variant?: string;
+  /**
+   * R2 references to staged images. Only references ride the queue: the whole
+   * agent state is one storage value with a 128 KiB cap, far below one image.
+   */
+  attachments?: SessionAttachmentRef[];
   queuedAt: string;
 }
 
@@ -131,6 +141,7 @@ export interface StartSessionInput {
   title: string;
   prompt: string;
   promptId?: string;
+  attachments?: SessionAttachmentRef[];
 }
 
 export interface QueuePromptInput {
@@ -144,6 +155,7 @@ export interface QueuePromptInput {
   variant?: string;
   /** Supplied by a client that may retry, so a resend is not a second prompt. */
   promptId?: string;
+  attachments?: SessionAttachmentRef[];
 }
 
 /**
@@ -236,6 +248,9 @@ export class SessionAgent extends DurableObject<Env> {
           text: input.prompt,
           model: input.model,
           ...(variant ? { variant } : {}),
+          ...(input.attachments?.length
+            ? { attachments: input.attachments }
+            : {}),
           queuedAt: now
         }
       ],
@@ -299,6 +314,9 @@ export class SessionAgent extends DurableObject<Env> {
           text: input.prompt,
           model,
           ...(variant ? { variant } : {}),
+          ...(input.attachments?.length
+            ? { attachments: input.attachments }
+            : {}),
           queuedAt: now
         }
       ],
@@ -369,8 +387,36 @@ export class SessionAgent extends DurableObject<Env> {
   /** Drop persisted state when the owning instance is deleted. */
   async markDeleted(): Promise<void> {
     await this.ready;
+    const sessionId = this.state?.sessionId;
     this.state = undefined;
     await this.agentState.storage.deleteAll();
+    if (sessionId) {
+      // Sweep staged attachments the dispatch path never got to delete — the
+      // one place a lost/failed session's staging copies are reclaimed.
+      await this.deleteStagedAttachments(sessionId).catch((error) => {
+        console.warn('Failed to sweep staged prompt attachments', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+    }
+  }
+
+  private async deleteStagedAttachments(sessionId: string): Promise<void> {
+    const prefix = promptAttachmentPrefix(sessionId);
+    let cursor: string | undefined;
+    do {
+      const page = await this.env.BACKUP_BUCKET.list({
+        prefix,
+        ...(cursor ? { cursor } : {})
+      });
+      if (page.objects.length > 0) {
+        await this.env.BACKUP_BUCKET.delete(
+          page.objects.map((object) => object.key)
+        );
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
   }
 
   override async alarm(): Promise<void> {
@@ -491,7 +537,10 @@ export class SessionAgent extends DurableObject<Env> {
         providerID: model.providerID,
         modelID: model.modelID,
         ...(prompt.variant ? { variant: prompt.variant } : {}),
-        text: prompt.text
+        text: prompt.text,
+        ...(prompt.attachments?.length
+          ? { attachments: prompt.attachments }
+          : {})
       });
       await this.update({
         model: prompt.model,
@@ -503,6 +552,19 @@ export class SessionAgent extends DurableObject<Env> {
         ].slice(-MAX_DELIVERED_PROMPT_IDS),
         lastPromptAt: new Date().toISOString()
       });
+      if (prompt.attachments?.length) {
+        // Only after the dequeue is durable: a dispatch that throws must leave
+        // the staged bytes in place for the retry ladder.
+        await this.env.BACKUP_BUCKET.delete(
+          prompt.attachments.map((attachment) => attachment.key)
+        ).catch((error) => {
+          console.warn('Failed to delete staged prompt attachments', {
+            sessionId: state.sessionId,
+            promptId: prompt.id,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        });
+      }
       delivered = true;
       if (this.state && this.state.pending.length > 0) {
         await this.awaitPromptSettled(sandbox, wake.runtimeEpoch, {
