@@ -79,6 +79,7 @@ export function MessageList({
           return null;
         }
         const copyable = messageText(parts);
+        const isUser = message.info.role === 'user';
         const lastTextIndex = parts.reduce(
           (last, part, index) => (part.type === 'text' ? index : last),
           -1
@@ -99,7 +100,7 @@ export function MessageList({
                     }
                   />
                 );
-                if (!copyable || index !== lastTextIndex) {
+                if (isUser || !copyable || index !== lastTextIndex) {
                   return partView;
                 }
                 return (
@@ -124,6 +125,11 @@ export function MessageList({
                 </p>
               ) : null}
             </div>
+            {isUser && copyable ? (
+              <div className="message-actions user-message-actions">
+                <CopyButton text={copyable} label="Copy your message" />
+              </div>
+            ) : null}
           </article>
         );
       })}

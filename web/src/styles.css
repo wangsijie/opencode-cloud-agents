@@ -1499,6 +1499,11 @@ summary:focus-visible {
   padding: 10px 14px;
 }
 
+.message.user {
+  align-items: flex-end;
+  gap: 2px;
+}
+
 .message.assistant .part-text {
   font-size: 15px;
   line-height: 1.6;
@@ -1778,6 +1783,10 @@ a.part-task:focus-visible {
   display: flex;
 }
 
+.user-message-actions {
+  position: static;
+}
+
 .message-actions .copy-button {
   width: 22px;
   height: 22px;
@@ -1791,6 +1800,7 @@ a.part-task:focus-visible {
   }
 
   .copyable-text:hover .copy-button,
+  .message.user:hover > .user-message-actions .copy-button,
   .message-actions .copy-button:focus-visible {
     opacity: 1;
     pointer-events: auto;
