@@ -91,6 +91,7 @@ import type { SessionMessage } from './sessions';
 import {
   buildTranscriptMirror,
   deleteTranscriptMirror,
+  isOpencodePlaceholderTitle,
   putTranscriptMirror,
   transcriptMirrorSummary,
   type TranscriptMirrorReason,
@@ -1899,20 +1900,26 @@ export class Sandbox extends BaseSandbox<Env> {
   /**
    * The title OpenCode gave this conversation, for the mirror to carry.
    *
-   * A failure returns the title already known rather than dropping it, because
-   * losing a good title to a transient read would rename the session in the list.
+   * The placeholder a fresh session wears until OpenCode names it counts as no
+   * title: adopting it would briefly rename the session to "New session - …"
+   * between the prompt-derived label and the generated one. A failure returns
+   * the title already known rather than dropping it, because losing a good
+   * title to a transient read would rename the session in the list.
    */
   private async readOpencodeTitle(
     target: TranscriptTarget
   ): Promise<string | undefined> {
-    const known = this.transcriptMirror?.opencodeTitle;
+    const stored = this.transcriptMirror?.opencodeTitle;
+    const known =
+      stored && !isOpencodePlaceholderTitle(stored) ? stored : undefined;
     try {
       const result = await this.createTranscriptClient().session.get({
         sessionID: target.opencodeSessionId,
         directory: target.directory
       });
-      const title = result.data?.title;
-      return typeof title === 'string' && title.trim() ? title.trim() : known;
+      const title =
+        typeof result.data?.title === 'string' ? result.data.title.trim() : '';
+      return title && !isOpencodePlaceholderTitle(title) ? title : known;
     } catch {
       return known;
     }

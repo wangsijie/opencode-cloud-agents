@@ -157,4 +157,12 @@ test('OpenCode may rename a session, a human outranks it', () => {
     ),
     record.title
   )
+  // The stamp OpenCode puts on a not-yet-named session is not a rename: the
+  // prompt-derived label holds until a real title arrives.
+  assert.equal(
+    deriveDisplayTitle(record, {
+      opencodeTitle: 'New session - 2026-07-26T10:00:00.000Z'
+    }),
+    record.title
+  )
 })

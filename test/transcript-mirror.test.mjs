@@ -5,6 +5,7 @@ import {
   buildTranscriptMirror,
   deleteTranscriptMirror,
   getTranscriptMirror,
+  isOpencodePlaceholderTitle,
   parseTranscriptMirror,
   putTranscriptMirror,
   summarizeSessionUsage,
@@ -144,6 +145,14 @@ test('a built mirror carries its own summary', () => {
     lastMessageAt: new Date(1_000).toISOString(),
     usage: emptyUsage(1)
   })
+})
+
+test('only the exact not-yet-named stamp counts as a placeholder', () => {
+  assert.ok(isOpencodePlaceholderTitle('New session - 2026-07-26T10:00:00.000Z'))
+  assert.ok(isOpencodePlaceholderTitle('Child session - 2026-07-26T10:00:00.000Z'))
+  // A generated or human title that merely resembles the stamp still wins.
+  assert.ok(!isOpencodePlaceholderTitle('New session - flow cleanup'))
+  assert.ok(!isOpencodePlaceholderTitle('Fix login error copy'))
 })
 
 test('anything that is not a current-schema mirror reads as no mirror', () => {

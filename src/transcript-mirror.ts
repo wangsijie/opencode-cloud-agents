@@ -67,6 +67,19 @@ export interface TranscriptMirrorSummary {
   opencodeTitle?: string;
 }
 
+/**
+ * Whether a title is the stamp OpenCode puts on a session it has not named yet
+ * ("New session - <ISO timestamp>", or "Child session - …" for subagents).
+ * OpenCode reports it like any other title, but treating it as one would
+ * rename the session away from the label built from the user's own prompt —
+ * only to rename it again once the real title arrives.
+ */
+export function isOpencodePlaceholderTitle(title: string): boolean {
+  return /^(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
+    title
+  );
+}
+
 /** The full mirror, as stored in R2. */
 export interface StoredTranscriptMirror extends TranscriptMirrorSummary {
   schemaVersion: number;

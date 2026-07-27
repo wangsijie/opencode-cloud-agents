@@ -11,7 +11,10 @@
  */
 import type { Message, Part } from '@opencode-ai/sdk/v2';
 import type { InstanceRuntimeStatus, InstanceView } from './instances';
-import type { TranscriptMirrorSummary } from './transcript-mirror';
+import {
+  isOpencodePlaceholderTitle,
+  type TranscriptMirrorSummary
+} from './transcript-mirror.ts';
 
 export type SessionPhase =
   /** Accepted, waiting for the agent alarm to start dispatch. */
@@ -142,7 +145,13 @@ export function deriveDisplayTitle(
   record: SessionRecord,
   transcript?: TranscriptMirrorSummary
 ): string {
-  if (record.titleLocked || !transcript?.opencodeTitle) {
+  // Mirrors written before the placeholder filter may still carry OpenCode's
+  // "New session - …" stamp; it is not a title anyone chose, so it never wins.
+  if (
+    record.titleLocked ||
+    !transcript?.opencodeTitle ||
+    isOpencodePlaceholderTitle(transcript.opencodeTitle)
+  ) {
     return record.title;
   }
   return transcript.opencodeTitle;
