@@ -1,15 +1,7 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react';
-import { DiffFile, DiffModeEnum, DiffView } from '@git-diff-view/react';
-import '@git-diff-view/react/styles/diff-view.css';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchChanges, type ChangedFile, type SessionChanges } from '../api';
 import { usePrefersDark } from '../usePrefersDark';
+import { FileDiff, type DiffMode } from './FileDiff';
 
 const STATUS_LABELS: Record<string, string> = {
   added: 'added',
@@ -30,8 +22,6 @@ const STATUS_CODES: Record<string, string> = {
   untracked: 'U',
   conflicted: 'C'
 };
-
-type DiffMode = 'unified' | 'split';
 
 const MODE_KEY = 'hub.diffViewMode';
 
@@ -77,11 +67,6 @@ interface FileSection {
   block?: string;
   binary: boolean;
   hasHunks: boolean;
-  // The 200k truncation can cut a hunk header in half, and the parser throws
-  // on that inside the viewer's own effect — too late to catch. Each block is
-  // parsed once up front so a broken tail degrades to plain text instead of
-  // taking the panel down.
-  parses: boolean;
 }
 
 function buildSections(changes: SessionChanges): FileSection[] {
@@ -89,26 +74,14 @@ function buildSections(changes: SessionChanges): FileSection[] {
   return changes.files.map((file) => {
     const block = byPath.get(file.path);
     if (!block) {
-      return { file, binary: false, hasHunks: false, parses: false };
+      return { file, binary: false, hasHunks: false };
     }
-    const binary = /^(Binary files |GIT binary patch)/m.test(block);
-    const hasHunks = /^@@ /m.test(block);
-    let parses = false;
-    if (!binary && hasHunks) {
-      try {
-        const probe = DiffFile.createInstance({
-          oldFile: { fileName: file.renamedFrom ?? file.path },
-          newFile: { fileName: file.path },
-          hunks: [block]
-        });
-        probe.initRaw();
-        probe.clear();
-        parses = true;
-      } catch {
-        // Leave `parses` false; the raw block still gets shown.
-      }
-    }
-    return { file, block, binary, hasHunks, parses };
+    return {
+      file,
+      block,
+      binary: /^(Binary files |GIT binary patch)/m.test(block),
+      hasHunks: /^@@ /m.test(block)
+    };
   });
 }
 
@@ -209,9 +182,7 @@ function TreeLevel({
   );
 }
 
-// The viewer parses and highlights on mount, which is work worth keeping: memo
-// stops a refresh of unrelated state from re-rendering every file's diff.
-const FileDiffBody = memo(function FileDiffBody({
+function FileDiffBody({
   section,
   mode,
   dark
@@ -220,17 +191,17 @@ const FileDiffBody = memo(function FileDiffBody({
   mode: DiffMode;
   dark: boolean;
 }) {
-  const { file, block, binary, hasHunks, parses } = section;
-  const data = useMemo(
+  const { file, block, binary, hasHunks } = section;
+  const source = useMemo(
     () =>
-      block && parses
+      block
         ? {
-            oldFile: { fileName: file.renamedFrom ?? file.path },
-            newFile: { fileName: file.path },
-            hunks: [block]
+            path: file.path,
+            ...(file.renamedFrom ? { oldPath: file.renamedFrom } : {}),
+            patch: block
           }
         : undefined,
-    [file, block, parses]
+    [file, block]
   );
 
   if (file.status === 'untracked') {
@@ -246,25 +217,11 @@ const FileDiffBody = memo(function FileDiffBody({
   if (binary) {
     return <p className="muted diff-file-note">Binary file — no text diff.</p>;
   }
-  if (!hasHunks) {
+  if (!hasHunks || !source) {
     return <p className="muted diff-file-note">No content changes.</p>;
   }
-  if (!data) {
-    // A block the parser refuses (usually the truncated tail) is still a diff
-    // someone can read.
-    return <pre className="diff-raw mono">{block}</pre>;
-  }
-  return (
-    <DiffView
-      data={data}
-      diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
-      diffViewTheme={dark ? 'dark' : 'light'}
-      diffViewHighlight
-      diffViewWrap
-      diffViewFontSize={12}
-    />
-  );
-});
+  return <FileDiff source={source} mode={mode} dark={dark} />;
+}
 
 /**
  * What the agent changed, read-only.

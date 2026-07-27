@@ -1,45 +1,27 @@
 import { useMemo, useState } from 'react';
-import { DiffFile, DiffModeEnum, DiffView } from '@git-diff-view/react';
-import '@git-diff-view/react/styles/diff-view.css';
 import type { MessageDiff, MessagePart } from '../api';
 import { summarizePatch, type PatchFile } from '../patch-diffs';
 import { usePrefersDark } from '../usePrefersDark';
+import { FileDiff } from './FileDiff';
 import { ChevronRightIcon } from './icons';
 
 /**
- * The transcript is a column inside a page, not a review pane, so the diff is
- * always unified: two columns at this width is two unreadable columns.
- */
-const MODE = DiffModeEnum.Unified;
-
-/**
- * A file's diff, or the plainest honest thing that can be said instead.
- *
- * The parser throws from inside the viewer's own effect, too late to catch, so
- * every block is probed here first — a patch it refuses is still a patch a
- * person can read.
+ * A file's diff, or the plainest honest thing that can be said instead. The
+ * transcript is a column inside a page rather than a review pane, so the diff
+ * is always unified: two columns at this width is two unreadable columns.
  */
 function FileDiffBody({ file, dark }: { file: PatchFile; dark: boolean }) {
-  const data = useMemo(() => {
-    if (!file.patch) {
-      return undefined;
-    }
-    const value = {
-      oldFile: { fileName: file.path },
-      newFile: { fileName: file.path },
-      hunks: [file.patch]
-    };
-    try {
-      const probe = DiffFile.createInstance(value);
-      probe.initRaw();
-      probe.clear();
-      return value;
-    } catch {
-      return undefined;
-    }
-  }, [file]);
+  const source = useMemo(
+    () =>
+      file.patch
+        ? // OpenCode writes these with the whole file as context, so they can
+          // be cut down and expanded again.
+          { path: file.path, patch: file.patch, wholeFile: true }
+        : undefined,
+    [file]
+  );
 
-  if (!file.patch) {
+  if (!source) {
     return (
       <p className="muted diff-file-note">
         No diff recorded for this file — the turn it belongs to has not been
@@ -47,19 +29,7 @@ function FileDiffBody({ file, dark }: { file: PatchFile; dark: boolean }) {
       </p>
     );
   }
-  if (!data) {
-    return <pre className="diff-raw mono">{file.patch}</pre>;
-  }
-  return (
-    <DiffView
-      data={data}
-      diffViewMode={MODE}
-      diffViewTheme={dark ? 'dark' : 'light'}
-      diffViewHighlight
-      diffViewWrap
-      diffViewFontSize={12}
-    />
-  );
+  return <FileDiff source={source} dark={dark} />;
 }
 
 /**
