@@ -16,11 +16,14 @@ import { isRenderablePart, PartView } from './PartView';
 export function MessageList({
   messages,
   trailing,
-  scrollerRef
+  scrollerRef,
+  sessionId
 }: {
   messages: SessionMessage[];
   trailing?: ReactNode;
   scrollerRef: RefObject<HTMLDivElement | null>;
+  /** Which Hub session this is, so a `task` call can lead into its subagent. */
+  sessionId?: string;
 }) {
   const pinned = useRef(true);
 
@@ -57,7 +60,7 @@ export function MessageList({
           <article key={message.info.id} className={`message ${message.info.role}`}>
             <div className="message-body">
               {parts.map((part) => (
-                <PartView key={part.id} part={part} />
+                <PartView key={part.id} part={part} sessionId={sessionId} />
               ))}
               {failure ? (
                 <p className="message-failure">

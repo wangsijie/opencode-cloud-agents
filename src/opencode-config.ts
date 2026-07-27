@@ -33,13 +33,16 @@ export const OPENCODE_CONFIG: Config = {
    * These are the sandbox's own files in a container that exists to run this
    * one conversation, so `allow` is what the operator would answer every time.
    * Keep every key here set: an omitted one is an `ask`, and an `ask` is a hang.
+   * `task` is the subagent spawn, and it hangs the same way — the parent parks
+   * on the tool call while the child session it would have started never exists.
    */
   permission: {
     edit: 'allow',
     bash: 'allow',
     webfetch: 'allow',
     doom_loop: 'allow',
-    external_directory: 'allow'
+    external_directory: 'allow',
+    task: 'allow'
   },
   mcp: {
     linear: {

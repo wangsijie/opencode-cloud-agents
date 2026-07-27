@@ -3,6 +3,8 @@ import remarkBreaks from 'remark-breaks';
 import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { code } from '@streamdown/code';
 import type { MessagePart } from '../api';
+import { agentPath, isPlainClick, navigate } from '../router';
+import { ChevronRightIcon } from './icons';
 
 /*
  * Module-level so the references stay stable across renders — Streamdown
@@ -54,21 +56,96 @@ function Reasoning({ text }: { text: string }) {
 }
 
 /**
+ * The subagent session a `task` call is running, once it has one.
+ *
+ * OpenCode's task tool creates a child session and reports its id in the
+ * call's own metadata — the single thread between a one-line tool call and the
+ * whole conversation behind it. Before the call starts there is no metadata and
+ * no session, so this answers `undefined` and the row stays inert rather than
+ * offering a link to nowhere.
+ */
+export function taskChildSessionId(part: MessagePart): string | undefined {
+  if (part.type !== 'tool' || part.tool !== 'task') {
+    return undefined;
+  }
+  const metadata = part.state?.metadata;
+  const id = metadata?.sessionId ?? metadata?.sessionID;
+  return typeof id === 'string' && id ? id : undefined;
+}
+
+/**
  * A tool call, as one line.
  *
  * The full input and output are not repeated here: the useful signal is which
  * tool ran, on what, and whether it finished.
+ *
+ * A `task` call is the exception, because its output is a summary of a whole
+ * conversation that happened elsewhere. Given the session it belongs to, the
+ * row becomes the way into that conversation — a link, so middle-click and
+ * open-in-new-tab work the way they look like they should.
  */
-function ToolCall({ part }: { part: MessagePart }) {
+function ToolCall({ part, sessionId }: { part: MessagePart; sessionId?: string }) {
   const status = part.state?.status;
   const title = part.state?.title;
-  return (
-    <div className={`part-tool tool-${status ?? 'unknown'}`}>
+  const child = sessionId ? taskChildSessionId(part) : undefined;
+
+  const body = (
+    <>
       <span className="tool-name mono">{part.tool ?? 'tool'}</span>
       {/* Truncated to one line in CSS; the tooltip is how a long command stays readable. */}
       {title ? <span className="tool-title" title={title}>{title}</span> : null}
       {status && status !== 'completed' ? (
         <span className="tool-status">{status}</span>
+      ) : null}
+      {child ? (
+        <span className="tool-open" aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
+      ) : null}
+    </>
+  );
+
+  if (!child || !sessionId) {
+    return <div className={`part-tool tool-${status ?? 'unknown'}`}>{body}</div>;
+  }
+
+  const href = agentPath(sessionId, child);
+  return (
+    <a
+      className={`part-tool part-task tool-${status ?? 'unknown'}`}
+      href={href}
+      title="Open this subagent's conversation"
+      onClick={(event) => {
+        if (!isPlainClick(event)) {
+          return;
+        }
+        event.preventDefault();
+        navigate(href);
+      }}
+    >
+      {body}
+    </a>
+  );
+}
+
+/**
+ * A subagent the user asked for by name, rather than one the model started.
+ *
+ * It carries the request and not the conversation — there is no session id to
+ * follow — so it reads as the one line it is, and the `task` tool call that
+ * follows is what becomes enterable.
+ */
+function Subtask({ part }: { part: MessagePart }) {
+  const agent = typeof part.agent === 'string' ? part.agent : 'subagent';
+  const description =
+    typeof part.description === 'string' ? part.description : undefined;
+  return (
+    <div className="part-tool part-subtask">
+      <span className="tool-name mono">{agent}</span>
+      {description ? (
+        <span className="tool-title" title={description}>
+          {description}
+        </span>
       ) : null}
     </div>
   );
@@ -92,7 +169,18 @@ function Todo({ part }: { part: MessagePart }) {
   );
 }
 
-export function PartView({ part }: { part: MessagePart }) {
+/**
+ * `sessionId` is the Hub session this transcript belongs to. A subagent is
+ * addressable only inside one, so without it a `task` call has nowhere to lead
+ * and renders as the plain row it always did.
+ */
+export function PartView({
+  part,
+  sessionId
+}: {
+  part: MessagePart;
+  sessionId?: string;
+}) {
   switch (part.type) {
     case 'text':
       return (
@@ -111,7 +199,9 @@ export function PartView({ part }: { part: MessagePart }) {
     case 'reasoning':
       return <Reasoning text={part.text ?? ''} />;
     case 'tool':
-      return <ToolCall part={part} />;
+      return <ToolCall part={part} sessionId={sessionId} />;
+    case 'subtask':
+      return <Subtask part={part} />;
     case 'todo':
       return <Todo part={part} />;
     default:

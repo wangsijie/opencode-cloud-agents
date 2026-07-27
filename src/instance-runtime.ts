@@ -44,6 +44,18 @@ export interface ListOpencodeSessionMessagesInput {
   directory: string;
 }
 
+/**
+ * Resolve where a subagent session sits under the container's root session.
+ * `rootOpencodeSessionId` is what the walk has to reach for the requested id to
+ * be readable through this Hub session at all (see
+ * [session-lineage.ts](session-lineage.ts)).
+ */
+export interface GetOpencodeSessionLineageInput {
+  opencodeSessionId: string;
+  rootOpencodeSessionId: string;
+  directory: string;
+}
+
 export interface AbortOpencodeSessionInput {
   opencodeSessionId: string;
   directory: string;

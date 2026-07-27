@@ -275,6 +275,18 @@ curl http://localhost:8787/api/sessions/<session-id>/messages
 # back is how the page learns the session woke or went to sleep.
 curl -N http://localhost:8787/api/sessions/<session-id>/events
 
+# Read a subagent's own conversation. OpenCode's `task` tool runs its work in a
+# child session inside the same container; `?child=` narrows both the transcript
+# and the event stream to it. Unlike the parent it has no R2 mirror, so a
+# sleeping container answers `"state":"sleeping"` with no messages.
+curl 'http://localhost:8787/api/sessions/<session-id>/messages?child=<opencode-session-id>'
+curl -N 'http://localhost:8787/api/sessions/<session-id>/events?child=<opencode-session-id>'
+
+# Where that subagent sits under the session that started it: the path from the
+# root session down to it, which is also the check that the id belongs here at
+# all (404 otherwise). Needs a running container, so a sleeping one answers 409.
+curl 'http://localhost:8787/api/sessions/<session-id>/agent-session?child=<opencode-session-id>'
+
 # Continue the conversation. Returns HTTP 202 whether the container is running
 # or asleep: a prompt to a sleeping session is queued and wakes it. `model`
 # switches models, and `promptId` makes a retried request the same prompt

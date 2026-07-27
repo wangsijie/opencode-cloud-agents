@@ -6,6 +6,7 @@ import {
   UNAUTHORIZED_EVENT,
   type Catalog
 } from './api';
+import { AgentSessionPage } from './components/AgentSessionPage';
 import { NewSessionPage } from './components/NewSessionPage';
 import { SessionPage } from './components/SessionPage';
 import { Sidebar } from './components/Sidebar';
@@ -132,7 +133,16 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
       ) : null}
 
       <div className="content">
-        {route.name === 'session' ? (
+        {route.name === 'session' && route.agent ? (
+          // Keyed to the subagent as well as the session, so stepping between
+          // levels of a nest never shows one conversation under another's name.
+          <AgentSessionPage
+            key={`${route.id}/${route.agent}`}
+            sessionId={route.id}
+            agentSessionId={route.agent}
+            onMenu={() => setSidebarOpen(true)}
+          />
+        ) : route.name === 'session' ? (
           // Keyed to the session: switching straight from one conversation to
           // another must not carry over the previous one's transcript, draft or
           // model.

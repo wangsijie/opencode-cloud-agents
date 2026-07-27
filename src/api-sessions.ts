@@ -44,6 +44,7 @@ import {
   forwardSessionEventStream,
   type SessionStateEvent
 } from './session-events';
+import { isSafeOpencodeSessionId } from './session-lineage';
 import {
   deriveDisplayTitle,
   deriveLastActivityAt,
@@ -125,9 +126,14 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     return methodNotAllowed('GET, PATCH, DELETE');
   }
 
+  // A subagent's session, addressed inside the session that started it. It is
+  // only ever a read: the container reached the child through its own `task`
+  // tool, and nothing outside that conversation may prompt it.
+  const child = readChildSessionId(url);
+
   if (action === 'messages') {
     if (request.method === 'GET') {
-      const transcript = await readSessionTranscript(env, record);
+      const transcript = await readSessionTranscript(env, record, child);
       return json(transcript, 200, {
         'X-OpenCode-Hub-Transcript-State': transcript.state,
         'X-OpenCode-Hub-Transcript-Source': transcript.source,
@@ -140,6 +146,9 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       });
     }
     if (request.method === 'POST') {
+      if (child) {
+        throw new HttpError(400, 'Subagent sessions are read-only');
+      }
       return await sendSessionPrompt(request, env, record);
     }
     return methodNotAllowed('GET, POST');
@@ -161,7 +170,14 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     if (request.method !== 'GET') {
       return methodNotAllowed('GET');
     }
-    return await streamSessionEvents(env, record);
+    return await streamSessionEvents(env, record, child);
+  }
+
+  if (action === 'agent-session') {
+    if (request.method !== 'GET') {
+      return methodNotAllowed('GET');
+    }
+    return await readAgentSession(env, record, child);
   }
 
   if (action === 'files') {
@@ -300,6 +316,64 @@ async function readCreateSessionInput(
  */
 function sessionDirectory(record: SessionRecord): string {
   return record.directory ?? repoWorkspaceDirectory(record.repoKey);
+}
+
+/**
+ * The subagent session a read is aimed at, if any.
+ *
+ * A query parameter rather than a path segment: the session routes allow one
+ * action after the id, and a child is a narrowing of an existing read rather
+ * than a new kind of one. `?child=` therefore reads the same on `messages`,
+ * `events` and `agent-session` without any of them growing a second shape.
+ */
+function readChildSessionId(url: URL): string | undefined {
+  const child = url.searchParams.get('child');
+  if (child === null) {
+    return undefined;
+  }
+  if (!isSafeOpencodeSessionId(child)) {
+    throw new HttpError(400, 'Invalid subagent session id');
+  }
+  return child;
+}
+
+/**
+ * Where a subagent session sits under the session that owns its container.
+ *
+ * This is the breadcrumb's source, and the check that the id belongs here at
+ * all. Unlike the transcript it needs a running container — the lineage lives
+ * in OpenCode's own session store and the Hub mirrors none of it — so a
+ * sleeping session answers 409 the way the diff and the file browser do, and
+ * the page falls back to a breadcrumb it can build without this.
+ */
+async function readAgentSession(
+  env: Env,
+  record: SessionRecord,
+  child: string | undefined
+): Promise<Response> {
+  if (!child) {
+    throw new HttpError(400, 'A subagent session id is required');
+  }
+  if (!record.opencodeSessionId) {
+    throw new HttpError(404, 'This session has no conversation yet');
+  }
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    'read a subagent from'
+  );
+  const lineage = await resolveSandbox(env, instance).getOpencodeSessionLineage(
+    runtimeEpoch,
+    {
+      opencodeSessionId: child,
+      rootOpencodeSessionId: record.opencodeSessionId,
+      directory: sessionDirectory(record)
+    }
+  );
+  if (!lineage) {
+    throw new HttpError(404, 'Subagent session not found in this session');
+  }
+  return json(lineage);
 }
 
 async function requireSession(env: Env, id: string): Promise<SessionRecord> {
@@ -743,21 +817,27 @@ function isSafePromptId(value: unknown): value is string {
  * forwards only this session's frames. When there is nothing to attach to the
  * response is still a valid stream: it reports the state and closes, and the
  * browser's own reconnect is what eventually notices a wake.
+ *
+ * `child` narrows the same stream to a subagent's session instead. The filter
+ * is an equality test on the frame's own session id, so watching a child is
+ * the same code with a different id — and the parent's own frames, including
+ * the `task` tool part that reports the subagent's progress, keep flowing to
+ * whoever is watching the parent.
  */
 async function streamSessionEvents(
   env: Env,
-  record: SessionRecord
+  record: SessionRecord,
+  child?: string
 ): Promise<Response> {
+  const watched = child ?? record.opencodeSessionId;
   const state: SessionStateEvent = {
     state: 'live',
     sessionId: record.id,
-    ...(record.opencodeSessionId
-      ? { opencodeSessionId: record.opencodeSessionId }
-      : {}),
+    ...(watched ? { opencodeSessionId: watched } : {}),
     at: new Date().toISOString()
   };
 
-  if (!record.opencodeSessionId) {
+  if (!watched) {
     return closedSessionEventStream({ ...state, state: 'pending' });
   }
   const directory = sessionDirectory(record);
@@ -806,22 +886,35 @@ async function streamSessionEvents(
  * mirror the Sandbox exported on its way down (see
  * [transcript-mirror.ts](transcript-mirror.ts)), which is what makes a sleeping
  * session's history readable at all.
+ *
+ * A subagent's transcript (`child`) is the same read against a different
+ * OpenCode session id, with one difference: the mirror holds only the root
+ * conversation, so a sleeping container has no subagent history to fall back
+ * on. Serving the root's mirror under a child's name would be the wrong
+ * conversation entirely, so those reads answer `sleeping` with nothing, and
+ * the page says so.
  */
 async function readSessionTranscript(
   env: Env,
-  record: SessionRecord
+  record: SessionRecord,
+  child?: string
 ): Promise<SessionTranscript> {
   const observedAt = new Date().toISOString();
+  const target = child ?? record.opencodeSessionId;
   const base = {
     sessionId: record.id,
-    ...(record.opencodeSessionId
-      ? { opencodeSessionId: record.opencodeSessionId }
-      : {}),
+    ...(target ? { opencodeSessionId: target } : {}),
     observedAt,
     messages: [] as SessionMessage[]
   };
+  // Only the root conversation is mirrored; a subagent read has no history
+  // behind it and says `none` rather than borrowing the parent's.
+  const asleep = (): Promise<SessionTranscript> | SessionTranscript =>
+    child
+      ? { ...base, state: 'sleeping', source: 'none' }
+      : sleepingTranscript(env, record, base);
 
-  if (!record.opencodeSessionId) {
+  if (!target) {
     // Dispatch has not reached `session.create` yet, so there is nothing to
     // read anywhere — not in a container and not in a mirror.
     return { ...base, state: 'pending', source: 'none' };
@@ -830,19 +923,19 @@ async function readSessionTranscript(
   const directory = sessionDirectory(record);
   const instance = await hubStore.getInstance(env, record.instanceId);
   if (!instance || instance.lifecycle !== 'ready') {
-    return sleepingTranscript(env, record, base);
+    return await asleep();
   }
 
   const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
   if (!runtimeEpoch) {
-    return sleepingTranscript(env, record, base);
+    return await asleep();
   }
 
   try {
     const messages = await resolveSandbox(env, instance).listOpencodeSessionMessages(
       runtimeEpoch,
       {
-        opencodeSessionId: record.opencodeSessionId,
+        opencodeSessionId: target,
         directory
       }
     );
@@ -852,12 +945,12 @@ async function readSessionTranscript(
     // race is a sleeping session, not a failure worth showing the user.
     const message = error instanceof Error ? error.message : String(error);
     if (await isRuntimeGoneError(env, record.instanceId, runtimeEpoch)) {
-      return sleepingTranscript(env, record, base);
+      return await asleep();
     }
     console.warn(`Failed to read session ${record.id} messages`, error);
     // A container that is up but unreadable still has a mirror behind it.
     // Showing the older history alongside the error beats showing nothing.
-    const mirrored = await readTranscriptMirrorFor(env, record);
+    const mirrored = child ? undefined : await readTranscriptMirrorFor(env, record);
     return {
       ...base,
       ...(mirrored ?? { source: 'none' as const }),

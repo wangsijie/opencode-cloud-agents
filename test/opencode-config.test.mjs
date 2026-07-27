@@ -15,7 +15,10 @@ const PERMISSIONS = [
   'bash',
   'webfetch',
   'doom_loop',
-  'external_directory'
+  'external_directory',
+  // The subagent spawn. An ask here parks the parent on the tool call and the
+  // child session it would have started never exists.
+  'task'
 ]
 
 test('every permission is decided, because nothing can answer an ask', () => {

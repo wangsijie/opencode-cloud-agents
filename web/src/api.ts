@@ -169,7 +169,16 @@ export interface MessagePart {
   type: string;
   text?: string;
   tool?: string;
-  state?: { status?: string; title?: string };
+  /**
+   * `metadata` is the tool's own bag, and its contents differ per tool. The
+   * `task` tool puts the subagent session it started in there, which is the
+   * only link between a transcript and the conversation it spawned.
+   */
+  state?: {
+    status?: string;
+    title?: string;
+    metadata?: Record<string, unknown>;
+  };
   [key: string]: unknown;
 }
 
@@ -195,6 +204,20 @@ export interface Transcript {
   mirroredAt?: string;
   messages: SessionMessage[];
   error?: string;
+}
+
+/** Mirrors `AgentSessionEntry` in the Worker's `src/session-lineage.ts`. */
+export interface AgentSessionEntry {
+  id: string;
+  title: string;
+  /** Which subagent ran here. Absent on the root session. */
+  agent?: string;
+  parentID?: string;
+}
+
+export interface AgentSessionLineage {
+  /** Root first, the requested subagent last. */
+  lineage: AgentSessionEntry[];
 }
 
 /** Summary of a session's mirrored history, as shown in the list. */
@@ -277,8 +300,31 @@ export const patchSession = (
 export const getSession = (id: string) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`);
 
-export const fetchTranscript = (id: string) =>
-  call<Transcript>(`/api/sessions/${encodeURIComponent(id)}/messages`);
+/**
+ * A session's messages, or a subagent's when `agentSessionId` is given.
+ *
+ * The subagent read has no mirror behind it, so a sleeping container answers
+ * `sleeping` with no messages rather than the parent's history.
+ */
+export const fetchTranscript = (id: string, agentSessionId?: string) =>
+  call<Transcript>(
+    `/api/sessions/${encodeURIComponent(id)}/messages${childQuery(agentSessionId)}`
+  );
+
+const childQuery = (agentSessionId?: string) =>
+  agentSessionId ? `?child=${encodeURIComponent(agentSessionId)}` : '';
+
+/**
+ * Where a subagent sits under the session that started it.
+ *
+ * Root first, the subagent last, with every level in between — which is what
+ * the breadcrumb needs, and what proves the id belongs to this session at all.
+ * Needs a running container, so a sleeping one answers 409.
+ */
+export const fetchAgentSession = (id: string, agentSessionId: string) =>
+  call<AgentSessionLineage>(
+    `/api/sessions/${encodeURIComponent(id)}/agent-session${childQuery(agentSessionId)}`
+  );
 
 export const sendMessage = (
   id: string,

@@ -35,6 +35,7 @@ import {
   RUNTIME_EPOCH_HEADER,
   type AbortOpencodeSessionInput,
   type CreateOpencodeSessionInput,
+  type GetOpencodeSessionLineageInput,
   type ListOpencodeSessionMessagesInput,
   type OpencodeSessionActivityInput,
   type PromptOpencodeSessionInput
@@ -74,6 +75,10 @@ import {
   type SessionChangesHead
 } from './session-changes';
 import { frameBelongsToSession, SseFrameBuffer } from './session-events';
+import {
+  walkSessionLineage,
+  type AgentSessionLineage
+} from './session-lineage';
 import {
   buildWorkspaceFile,
   buildWorkspaceListing,
@@ -1117,6 +1122,60 @@ export class Sandbox extends BaseSandbox<Env> {
         );
       }
       return result.data ?? [];
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Resolve a subagent session's place under this container's root session.
+   *
+   * Passive like the message read, and for the same reason: the breadcrumb over
+   * a subagent transcript is not worth waking a container for. `undefined` is
+   * the honest answer for an id this container's session tree does not contain,
+   * and the caller answers 404 rather than reading its messages.
+   */
+  async getOpencodeSessionLineage(
+    runtimeEpoch: string,
+    input: GetOpencodeSessionLineageInput
+  ): Promise<AgentSessionLineage | undefined> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Reading OpenCode session lineage'
+      );
+      const lineage = await walkSessionLineage(
+        input.opencodeSessionId,
+        input.rootOpencodeSessionId,
+        async (id) => {
+          const result = await client.session.get({
+            sessionID: id,
+            directory: input.directory
+          });
+          // A session OpenCode does not know is a dead end for the walk, not a
+          // failure: it is how an id from a stale link reports itself.
+          if (result.response.status === 404) {
+            return undefined;
+          }
+          if (result.error !== undefined || result.response.status >= 400) {
+            throw new Error(
+              `Failed to read OpenCode session: ${describeSdkFailure(result)}`
+            );
+          }
+          const session = result.data;
+          return session
+            ? {
+                id: session.id,
+                title: session.title,
+                ...(session.agent ? { agent: session.agent } : {}),
+                ...(session.parentID ? { parentID: session.parentID } : {})
+              }
+            : undefined;
+        }
+      );
+      return lineage ? { lineage } : undefined;
     } finally {
       this.finishActiveOperation();
     }

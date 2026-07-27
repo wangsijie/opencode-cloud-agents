@@ -360,6 +360,7 @@ export function SessionPage({
                       messages={messages ?? []}
                       trailing={optimistic}
                       scrollerRef={scroller}
+                      sessionId={sessionId}
                     />
                   ) : state === 'live' ? (
                     <p className="muted">No messages yet.</p>

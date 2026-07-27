@@ -75,6 +75,23 @@ test('only the watched session frames are forwarded', () => {
   assert.equal(frameBelongsToSession('data: not json', 'ses_mine'), false)
 })
 
+/*
+ * Watching a subagent is the same filter with the child's id. It has to be:
+ * a subagent runs in its own OpenCode session on the same server-wide stream,
+ * so the only thing separating its transcript from its parent's is which id
+ * the forwarder was given.
+ */
+test('a subagent is watched by pointing the same filter at its session', () => {
+  const child = 'data: ' + JSON.stringify({
+    type: 'message.part.updated',
+    properties: { sessionID: 'ses_child', part: { id: 'prt_1' } }
+  })
+  assert.equal(frameBelongsToSession(child, 'ses_child'), true)
+  // And the parent's stream never carries it, which is what keeps the two
+  // transcripts from merging into one.
+  assert.equal(frameBelongsToSession(child, 'ses_parent'), false)
+})
+
 test('hub frames are serialized as named SSE events', () => {
   assert.equal(
     sseFrame('hub', { state: 'sleeping', sessionId: 'inst-1' }),

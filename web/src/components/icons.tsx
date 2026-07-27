@@ -81,6 +81,14 @@ export function ChevronDownIcon() {
   );
 }
 
+export function ChevronRightIcon() {
+  return (
+    <Icon size={16}>
+      <path d="m9 6 6 6-6 6" />
+    </Icon>
+  );
+}
+
 export function SearchIcon() {
   return (
     <Icon size={16}>

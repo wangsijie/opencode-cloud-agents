@@ -56,8 +56,17 @@ interface OpencodeEvent {
  * is the right cadence for noticing a wake nobody asked for — but far too slow
  * for a wake the user just triggered by sending a message. Changing this
  * re-attaches immediately instead of waiting that interval out.
+ *
+ * `agentSessionId` reads a subagent's conversation inside the same container
+ * instead of the session's own. Nothing else changes: the Worker narrows both
+ * the read and the stream to that session, so what arrives here is one
+ * transcript either way.
  */
-export function useTranscript(sessionId: string, runtimeKey?: string) {
+export function useTranscript(
+  sessionId: string,
+  runtimeKey?: string,
+  agentSessionId?: string
+) {
   const [messages, setMessages] = useState<SessionMessage[]>();
   const [state, setState] = useState<TranscriptState>();
   const [mirroredAt, setMirroredAt] = useState<string>();
@@ -68,7 +77,7 @@ export function useTranscript(sessionId: string, runtimeKey?: string) {
 
   const load = useCallback(async () => {
     try {
-      const transcript = await fetchTranscript(sessionId);
+      const transcript = await fetchTranscript(sessionId, agentSessionId);
       building.current = toMap(transcript.messages);
       setMessages(toList(building.current));
       setState(transcript.state);
@@ -80,7 +89,7 @@ export function useTranscript(sessionId: string, runtimeKey?: string) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [sessionId]);
+  }, [sessionId, agentSessionId]);
 
   useEffect(() => {
     void load();
@@ -88,7 +97,9 @@ export function useTranscript(sessionId: string, runtimeKey?: string) {
 
   useEffect(() => {
     const source = new EventSource(
-      `/api/sessions/${encodeURIComponent(sessionId)}/events`
+      `/api/sessions/${encodeURIComponent(sessionId)}/events${
+        agentSessionId ? `?child=${encodeURIComponent(agentSessionId)}` : ''
+      }`
     );
 
     const apply = (event: OpencodeEvent) => {
@@ -163,7 +174,7 @@ export function useTranscript(sessionId: string, runtimeKey?: string) {
     });
 
     return () => source.close();
-  }, [sessionId, load, runtimeKey]);
+  }, [sessionId, agentSessionId, load, runtimeKey]);
 
   return { messages, state, mirroredAt, error, reload: load };
 }
