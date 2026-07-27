@@ -8,7 +8,7 @@ import {
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
 import { useResizable } from '../useResizable';
-import { DotsIcon, PlusIcon } from './icons';
+import { DotsIcon, PlusIcon, SettingsIcon, SignOutIcon } from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
 
@@ -179,21 +179,29 @@ export function Sidebar({
         <button className="link-button" onClick={onToggleArchived}>
           {showArchived ? '← Back to active' : 'View archived'}
         </button>
-        <button
-          className="link-button"
-          onClick={() => {
-            navigate('/settings');
-            onClose();
-          }}
-        >
-          Settings
-        </button>
-        <button
-          className="link-button"
-          onClick={() => void onSignOut().catch(() => undefined)}
-        >
-          Sign out
-        </button>
+        <div className="sidebar-account-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => {
+              navigate('/settings');
+              onClose();
+            }}
+          >
+            <SettingsIcon />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Sign out"
+            title="Sign out"
+            onClick={() => void onSignOut().catch(() => undefined)}
+          >
+            <SignOutIcon />
+          </button>
+        </div>
       </div>
 
       {/* Hidden on a phone by the stylesheet: there the sidebar is a drawer

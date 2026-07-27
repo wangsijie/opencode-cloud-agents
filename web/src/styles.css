@@ -694,6 +694,12 @@ body.resizing .resize-handle {
   border-top: 1px solid var(--border);
 }
 
+.sidebar-account-actions {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
 .sidebar-error {
   margin: 0 8px 8px;
   padding: 8px 10px;
