@@ -109,13 +109,33 @@ const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
 const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
 
 /**
- * Paths left out of the workspace snapshot.
+ * Nothing is left out of the workspace snapshot.
  *
- * Regenerable caches only. OpenCode rebuilds its own cache on demand, and the
- * archive is what every later wake downloads and unpacks — so anything in here
- * is paid for on every cold start, forever, in exchange for nothing.
+ * This used to exclude `.opencode-state/cache`, and that one entry silently
+ * dropped the whole `.opencode-state` tree from every archive — including
+ * `data/opencode/opencode.db`, which is the entire conversation. Every session
+ * that slept between 2026-07-26 08:15 UTC and this fix came back to a container
+ * that had never heard of it, and answered the next prompt with a 404.
+ *
+ * The mechanism is in the container, not here. `createArchive` expands every
+ * exclude into two patterns — the pattern itself and `... <pattern>`, the
+ * match-at-any-depth form — and writes both into an `-ef` file. Verified inside
+ * `cloudflare/sandbox:0.12.3`, whose mksquashfs is 4.5:
+ *
+ *   .opencode-state/cache        → drops the cache, correctly
+ *   ... .opencode-state/cache    → drops all of .opencode-state
+ *
+ * So any exclude with a `/` in it takes its parent directory with it. (4.6
+ * locally does not, which is what makes this so easy to miss.)
+ *
+ * Do not add an exclude back without unpacking a real archive afterwards to see
+ * what survived. This failure is invisible from every angle the Hub can see:
+ * the checkpoint succeeds, the restore succeeds, `hasBackup` is true, and the
+ * only symptom arrives one wake later as somebody else's 404.
+ *
+ * The cache it was saving was 3 MB of a 165 MB archive.
  */
-const CHECKPOINT_EXCLUDES = ['.opencode-state/cache'];
+const CHECKPOINT_EXCLUDES: string[] = [];
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;

@@ -50,6 +50,16 @@ and never onto the repository's default branch. Anything interpolated into a
 container shell command goes through `shellQuote`/`isSafeBranchName` in
 `src/session-changes.ts`; commit messages and pull request bodies are user text.
 
+## Never exclude anything from the workspace snapshot
+
+`CHECKPOINT_EXCLUDES` in `src/sandbox.ts` is empty and must stay that way unless
+somebody unpacks a real archive to prove otherwise. The container expands each
+exclude into `<pattern>` *and* `... <pattern>`, and mksquashfs 4.5 in
+`cloudflare/sandbox:0.12.3` reads the second form as "drop the parent
+directory". One entry for `.opencode-state/cache` therefore removed all of
+`.opencode-state` — OpenCode's database, and so every conversation — from every
+snapshot for eight hours, while every checkpoint and restore reported success.
+
 ## A session can be lost, and that is terminal
 
 OpenCode keeps its whole state inside `/workspace` (`OPENCODE_ENV` in
