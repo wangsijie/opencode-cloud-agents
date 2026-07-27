@@ -227,6 +227,9 @@ function validateSkills(value: unknown): string[] {
   return errors;
 }
 
+/** GitHub organization/user names: alphanumerics and hyphens, at most 39. */
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
 function validateGitIdentity(value: unknown): string[] {
   const record = value as Partial<GitIdentitySetting> | null;
   if (typeof record !== 'object' || record === null) {
@@ -238,6 +241,35 @@ function validateGitIdentity(value: unknown): string[] {
   }
   if (typeof record.email !== 'string' || !record.email.includes('@')) {
     errors.push('The git identity needs an email address');
+  }
+  if (record.overrides !== undefined) {
+    if (!Array.isArray(record.overrides)) {
+      errors.push('Overrides must be a list of { owner, name, email }');
+      return errors;
+    }
+    const seen = new Set<string>();
+    for (const entry of record.overrides) {
+      if (
+        typeof entry?.owner !== 'string' ||
+        !GITHUB_OWNER_PATTERN.test(entry.owner)
+      ) {
+        errors.push(
+          `"${String(entry?.owner)}" is not a valid GitHub organization name`
+        );
+        continue;
+      }
+      const key = entry.owner.toLowerCase();
+      if (seen.has(key)) {
+        errors.push(`Organization "${entry.owner}" has two overrides`);
+      }
+      seen.add(key);
+      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+        errors.push(`The override for "${entry.owner}" needs a name`);
+      }
+      if (typeof entry.email !== 'string' || !entry.email.includes('@')) {
+        errors.push(`The override for "${entry.owner}" needs an email address`);
+      }
+    }
   }
   return errors;
 }

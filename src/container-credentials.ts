@@ -104,17 +104,42 @@ export function credentialFiles(
 }
 
 /**
+ * The identity this container should commit as: the override for the
+ * repository's owner when one exists, otherwise the base identity. Owner
+ * comparison is case-insensitive, as GitHub's owner names are.
+ */
+export function resolveGitIdentity(
+  gitIdentity: GitIdentitySetting | undefined,
+  repoOwner?: string
+): { name: string; email: string } | undefined {
+  if (!gitIdentity) {
+    return undefined;
+  }
+  const override = repoOwner
+    ? gitIdentity.overrides?.find(
+        (entry) => entry.owner.toLowerCase() === repoOwner.toLowerCase()
+      )
+    : undefined;
+  return override ?? gitIdentity;
+}
+
+/**
  * The git configuration a wake applies, mirroring what the Dockerfile used to
  * bake in: identity when one is set, SSH commit signing when a key exists.
+ *
+ * `repoOwner` is the owner of the instance's repository; it selects a
+ * per-organization identity override when the settings hold one.
  */
 export function gitConfigCommands(
-  settings: ContainerCredentialSettings
+  settings: ContainerCredentialSettings,
+  repoOwner?: string
 ): string[] {
   const commands: string[] = [];
-  if (settings.gitIdentity) {
+  const identity = resolveGitIdentity(settings.gitIdentity, repoOwner);
+  if (identity) {
     commands.push(
-      `git config --global user.name ${shellQuote(settings.gitIdentity.name)}`,
-      `git config --global user.email ${shellQuote(settings.gitIdentity.email)}`
+      `git config --global user.name ${shellQuote(identity.name)}`,
+      `git config --global user.email ${shellQuote(identity.email)}`
     );
   }
   if (settings.sshKey) {

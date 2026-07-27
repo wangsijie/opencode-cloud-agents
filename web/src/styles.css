@@ -1284,6 +1284,12 @@ summary:focus-visible {
   font-weight: 600;
 }
 
+.settings-section h3 {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .settings-section p {
   margin: 0;
 }

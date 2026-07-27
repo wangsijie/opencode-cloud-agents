@@ -116,6 +116,54 @@ test('skill names are path segments and env names are POSIX', () => {
   )
 })
 
+test('git identity overrides need a valid owner, no duplicates, and full identities', () => {
+  const identity = findDescriptor('git.identity')
+  assert.deepEqual(identity.validate({ name: 'Op', email: 'op@example.com' }), [])
+  assert.deepEqual(
+    identity.validate({
+      name: 'Op',
+      email: 'op@example.com',
+      overrides: [{ owner: 'silverhand-io', name: 'Work', email: 'work@silverhand.io' }]
+    }),
+    []
+  )
+  assert.ok(
+    identity.validate({ name: 'Op', email: 'op@example.com', overrides: 'nope' })
+      .length > 0
+  )
+  assert.ok(
+    identity
+      .validate({
+        name: 'Op',
+        email: 'op@example.com',
+        overrides: [{ owner: 'bad owner!', name: 'Work', email: 'work@silverhand.io' }]
+      })
+      .some((error) => error.includes('organization name'))
+  )
+  // Owners are GitHub's, so a duplicate differing only in case is a duplicate.
+  assert.ok(
+    identity
+      .validate({
+        name: 'Op',
+        email: 'op@example.com',
+        overrides: [
+          { owner: 'acme', name: 'A', email: 'a@example.com' },
+          { owner: 'ACME', name: 'B', email: 'b@example.com' }
+        ]
+      })
+      .some((error) => error.includes('two overrides'))
+  )
+  assert.ok(
+    identity
+      .validate({
+        name: 'Op',
+        email: 'op@example.com',
+        overrides: [{ owner: 'acme', name: '', email: 'not-an-email' }]
+      })
+      .length >= 2
+  )
+})
+
 test('the ssh key descriptor wants an OpenSSH pair', () => {
   const ssh = findDescriptor('container.ssh-key')
   assert.deepEqual(

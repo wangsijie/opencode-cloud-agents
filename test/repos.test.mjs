@@ -5,6 +5,7 @@ import {
   WORKSPACE_ROOT,
   isSafeRepoDefinition,
   isSafeRepoKey,
+  repoOwnerFromCloneUrl,
   repoWorkspaceDirectory
 } from '../src/repos.ts'
 
@@ -42,6 +43,16 @@ test('repository keys stay usable as a path segment', () => {
   ]) {
     assert.equal(isSafeRepoKey(key), false, String(key))
   }
+})
+
+test('the owner comes out of both clone URL forms', () => {
+  assert.equal(repoOwnerFromCloneUrl('git@github.com:logto-io/logto.git'), 'logto-io')
+  assert.equal(repoOwnerFromCloneUrl('git@github.com:logto-io/logto'), 'logto-io')
+  assert.equal(repoOwnerFromCloneUrl('https://github.com/silverhand-io/repo.git'), 'silverhand-io')
+  assert.equal(repoOwnerFromCloneUrl('https://github.com/silverhand-io/repo/'), 'silverhand-io')
+  // No owner segment → no owner, and identity overrides simply do not apply.
+  assert.equal(repoOwnerFromCloneUrl('https://example.com/repo'), undefined)
+  assert.equal(repoOwnerFromCloneUrl('https://gitlab.com/group/sub/repo'), undefined)
 })
 
 test('catalog entries are validated before they can reach a shell', () => {

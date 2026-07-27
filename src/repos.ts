@@ -38,6 +38,18 @@ export function repoWorkspaceDirectory(repoKey: string): string {
 }
 
 /**
+ * The owner segment of a clone URL — the GitHub organization or user — for
+ * both https and scp-style ssh forms. Undefined when the URL has no
+ * owner/repository tail, in which case identity overrides simply do not apply.
+ */
+export function repoOwnerFromCloneUrl(cloneUrl: string): string | undefined {
+  const match = /^(?:https:\/\/[^/]+\/|git@[^:]+:)([^/]+)\/[^/]+$/.exec(
+    cloneUrl.replace(/\.git$/, '').replace(/\/+$/, '')
+  );
+  return match?.[1];
+}
+
+/**
  * Repository keys become directory names and reach container shell commands, so
  * they are constrained rather than escaped.
  */

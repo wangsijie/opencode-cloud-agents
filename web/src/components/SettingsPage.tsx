@@ -792,6 +792,12 @@ function SkillsSection({
   );
 }
 
+interface IdentityOverrideRow {
+  owner: string;
+  name: string;
+  email: string;
+}
+
 function GitIdentitySection({
   setting,
   onSaved
@@ -800,14 +806,31 @@ function GitIdentitySection({
   onSaved: () => void;
 }) {
   const storedIdentity = setting?.value as
-    | { name?: string; email?: string }
+    | { name?: string; email?: string; overrides?: IdentityOverrideRow[] }
     | undefined;
   const [name, setName] = useState<string>();
   const [email, setEmail] = useState<string>();
+  const [overrides, setOverrides] = useState<IdentityOverrideRow[]>();
   const { busy, error, notice, run } = useSave();
 
   const currentName = name ?? storedIdentity?.name ?? '';
   const currentEmail = email ?? storedIdentity?.email ?? '';
+  const currentOverrides = overrides ?? storedIdentity?.overrides ?? [];
+
+  const editOverride = (index: number, patch: Partial<IdentityOverrideRow>) => {
+    setOverrides(
+      currentOverrides.map((row, at) =>
+        at === index ? { ...row, ...patch } : row
+      )
+    );
+  };
+
+  const overridesComplete = currentOverrides.every(
+    (row) =>
+      row.owner.trim().length > 0 &&
+      row.name.trim().length > 0 &&
+      row.email.trim().length > 0
+  );
 
   return (
     <section className="settings-section">
@@ -834,16 +857,85 @@ function GitIdentitySection({
           onChange={(event) => setEmail(event.target.value)}
         />
       </div>
+      <h3>Per-organization overrides</h3>
+      <p className="muted">
+        Repositories under a listed GitHub organization commit as that identity
+        instead of the one above.
+      </p>
+      {currentOverrides.map((row, index) => (
+        <div key={index} className="settings-row">
+          <input
+            type="text"
+            placeholder="organization"
+            aria-label="GitHub organization"
+            value={row.owner}
+            disabled={busy}
+            onChange={(event) => editOverride(index, { owner: event.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Name"
+            aria-label={`Author name for ${row.owner || 'organization'}`}
+            value={row.name}
+            disabled={busy}
+            onChange={(event) => editOverride(index, { name: event.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="email@example.com"
+            aria-label={`Author email for ${row.owner || 'organization'}`}
+            value={row.email}
+            disabled={busy}
+            onChange={(event) => editOverride(index, { email: event.target.value })}
+          />
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={`Remove the override for ${row.owner || 'this organization'}`}
+            disabled={busy}
+            onClick={() =>
+              setOverrides(currentOverrides.filter((_, at) => at !== index))
+            }
+          >
+            ×
+          </button>
+        </div>
+      ))}
       <div className="actions">
         <button
+          className="button"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            setOverrides([
+              ...currentOverrides,
+              { owner: '', name: '', email: '' }
+            ])
+          }
+        >
+          Add override
+        </button>
+        <button
           className="button primary"
-          disabled={busy || !currentName.trim() || !currentEmail.trim()}
+          disabled={
+            busy ||
+            !currentName.trim() ||
+            !currentEmail.trim() ||
+            !overridesComplete
+          }
           onClick={() =>
             void run(async () => {
+              const list = currentOverrides.map((row) => ({
+                owner: row.owner.trim(),
+                name: row.name.trim(),
+                email: row.email.trim()
+              }));
               await saveSetting('git.identity', {
                 name: currentName.trim(),
-                email: currentEmail.trim()
+                email: currentEmail.trim(),
+                ...(list.length > 0 ? { overrides: list } : {})
               });
+              setOverrides(undefined);
               onSaved();
               return undefined;
             })

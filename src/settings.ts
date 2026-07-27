@@ -48,10 +48,20 @@ export interface SkillSetting {
   content: string;
 }
 
+/** One entry in `git.identity.overrides`: the identity for one GitHub owner. */
+export interface GitIdentityOverride {
+  /** GitHub organization (or user) whose repositories use this identity. */
+  owner: string;
+  name: string;
+  email: string;
+}
+
 /** Stored shape of `git.identity`. */
 export interface GitIdentitySetting {
   name: string;
   email: string;
+  /** Per-organization identities that beat the base one, matched on owner. */
+  overrides?: GitIdentityOverride[];
 }
 
 export async function readSetting<T>(

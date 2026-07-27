@@ -60,6 +60,7 @@ import {
 } from './opencode-activity';
 import {
   isSafeRepoDefinition,
+  repoOwnerFromCloneUrl,
   repoWorkspaceDirectory,
   WORKSPACE_ROOT,
   type RepoDefinition
@@ -665,7 +666,12 @@ export class Sandbox extends BaseSandbox<Env> {
       // a private key other users could read.
       await this.mustExec(`chmod ${file.mode} ${shellQuote(file.path)}`);
     }
-    for (const command of gitConfigCommands(settings)) {
+    // The instance is bound to one repository, so the identity choice — a
+    // per-organization override or the base one — is made here, not by git.
+    const repoOwner = this.instanceIdentity?.repo
+      ? repoOwnerFromCloneUrl(this.instanceIdentity.repo.cloneUrl)
+      : undefined;
+    for (const command of gitConfigCommands(settings, repoOwner)) {
       await this.mustExec(command);
     }
     return containerEnv(settings);

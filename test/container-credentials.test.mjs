@@ -72,6 +72,31 @@ test('git identity and signing are configured only for what exists', () => {
   assert.equal(keyOnly.length, 3)
 })
 
+test('a per-organization override beats the base identity for its owner only', () => {
+  const settings = {
+    env: [],
+    skills: [],
+    gitIdentity: {
+      name: 'Op Erator',
+      email: 'op@example.com',
+      overrides: [{ owner: 'Silverhand-io', name: 'Work Me', email: 'work@silverhand.io' }]
+    }
+  }
+
+  // Owner match is case-insensitive, as GitHub's owner names are.
+  assert.deepEqual(gitConfigCommands(settings, 'silverhand-io'), [
+    "git config --global user.name 'Work Me'",
+    "git config --global user.email 'work@silverhand.io'"
+  ])
+  // Any other owner — or no owner at all — falls back to the base identity.
+  for (const owner of ['logto-io', undefined]) {
+    assert.deepEqual(gitConfigCommands(settings, owner), [
+      "git config --global user.name 'Op Erator'",
+      "git config --global user.email 'op@example.com'"
+    ])
+  }
+})
+
 test('identity values are shell-quoted', () => {
   const commands = gitConfigCommands({
     env: [],
