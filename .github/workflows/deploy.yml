@@ -21,6 +21,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # The image decision below diffs this push against its predecessor.
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -40,8 +43,44 @@ jobs:
       - name: Run typecheck
         run: pnpm run typecheck
 
+      # A container rollout replaces every running instance, and an instance
+      # that has been busy since it was created has no checkpoint to come back
+      # from — its session is lost. The image is rebuilt from the Dockerfile on
+      # every deploy and its digest rarely reproduces, so wrangler would treat
+      # each one as a new image and roll out even when nothing about the
+      # container changed. Decide here instead, from the paths that actually
+      # define it, and leave running containers alone for everything else.
+      - name: Decide whether the container image is affected
+        id: container
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE}" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "Previous commit ${BEFORE} is unavailable; deploying the container too."
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          changed="$(git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- Dockerfile docker wrangler.jsonc)"
+          if [ -n "${changed}" ]; then
+            echo "Container-defining paths changed:"
+            echo "${changed}"
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No container-defining path changed; deploying the Worker only."
+            echo "affected=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Deploy to Cloudflare
+        if: steps.container.outputs.affected == 'true'
         run: pnpm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy to Cloudflare without touching the container
+        if: steps.container.outputs.affected == 'false'
+        run: pnpm run deploy:worker-only
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

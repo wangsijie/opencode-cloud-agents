@@ -38,11 +38,18 @@
       "migrations_dir": "migrations"
     }
   ],
+  // A rollout replaces every running container, and a container that dies
+  // without checkpointing takes its conversation with it — checkpoints happen
+  // only at idle-stop. The grace period is the minimum time an active instance
+  // is left alone before it becomes eligible for updating, so a session in the
+  // middle of a prompt survives a deploy instead of being lost. The cost is
+  // that new Worker code drives old-image containers for that whole window.
   "containers": [
     {
       "class_name": "Sandbox",
       "image": "./Dockerfile",
-      "instance_type": "standard-4"
+      "instance_type": "standard-4",
+      "rollout_active_grace_period": 900
     }
   ],
   "durable_objects": {

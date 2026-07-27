@@ -143,6 +143,54 @@ wedged local run.
 production.** There is no separate release step and no manual `pnpm run deploy`
 to offer afterwards.
 
+## A deploy that touches the image is a deploy that can lose sessions
+
+Deploying a changed container image rolls out: each running instance is sent
+`SIGTERM`, given 15 minutes, then `SIGKILL`. Nothing in the Worker checkpoints
+on the way down — `createCheckpoint` runs only at idle-stop and from the manual
+`/api/instances/:id/checkpoint` route — so an instance that has been busy since
+it was created has no snapshot, comes up on an empty `/workspace`, and its
+session goes to `lost`.
+
+`rollout_active_grace_period` in `wrangler.jsonc` is set to 900 so an active
+instance is left alone for fifteen minutes before it becomes eligible. **It buys
+time; it does not make a deploy safe.** Two things follow.
+
+The Worker version updates immediately and globally while containers roll out
+gradually, so for that whole window new Worker code is driving old-image
+containers. Nothing here is written to tolerate that yet, and the dangerous
+change is the one that moves both sides at once: bumping `@opencode-ai/sdk` in
+`package.json` together with `OPENCODE_VERSION` in the `Dockerfile`, or
+upgrading `@cloudflare/sandbox` — the SDK is in the Worker, its agent is in the
+image. Ship a version bump like that on its own, and expect the window to be
+inconsistent rather than assume it is not.
+
+And anything still running past the grace period is killed regardless. A deploy
+that must not lose work needs the instances drained first — checkpoint, then
+stop — not a longer grace period.
+
+## Most deploys do not touch the container at all
+
+`.github/workflows/deploy.yml` diffs the push against its predecessor and only
+runs `pnpm run deploy` when `Dockerfile`, `docker/` or `wrangler.jsonc` changed.
+Everything else ships with `pnpm run deploy:worker-only`, which passes
+`--containers-rollout=none`: the Worker is deployed without building or updating
+the container, and running instances are left alone entirely.
+
+This has to be decided from the paths, not left to wrangler. Wrangler does skip
+a rollout when the container application's config does not change, but the image
+is built from the `Dockerfile` on every deploy and its digest rarely reproduces
+across runners and days — `apt-get` and `npm install --global` see to that — so
+wrangler would see a new image nearly every time.
+
+Two consequences. `wrangler.jsonc` is on the list because a container
+configuration change (instance type, grace period, region constraints) reaches
+the platform through the same application update a rollout carries; skip it and
+the change silently does not apply. And a Worker-only deploy leaves the fleet on
+the old image indefinitely, so the version-skew warning above is not confined to
+a fifteen-minute window — the image only catches up on the next deploy that
+touches it.
+
 ## Verification
 
 Run before pushing, because the same commands gate the deploy:

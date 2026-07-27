@@ -6,7 +6,9 @@
   "description": "Experiment running the OpenCode web UI inside Cloudflare Sandbox",
   "scripts": {
     "build:web": "vite build",
-    "deploy": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply opencode-cloud --remote && WRANGLER_WRITE_LOGS=false wrangler deploy",
+    "deploy": "pnpm run deploy:prepare && WRANGLER_WRITE_LOGS=false wrangler deploy",
+    "deploy:prepare": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply opencode-cloud --remote",
+    "deploy:worker-only": "pnpm run deploy:prepare && WRANGLER_WRITE_LOGS=false wrangler deploy --containers-rollout=none",
     "dev": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "dev:web": "vite",
     "start": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
