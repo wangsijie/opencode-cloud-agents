@@ -72,20 +72,28 @@ export function NewSessionPage({
       return;
     }
     setModel((current) =>
-      models.some((option) => option.id === current) ? current : models[0].id
+      models.some((option) => option.id === current)
+        ? current
+        : catalog.defaultSelection.model
     );
-  }, [catalog?.models]);
+  }, [catalog]);
 
   // Reset effort when the model changes, or when the current choice is no
   // longer listed for that model.
   useEffect(() => {
     const variants =
       catalog?.models.find((option) => option.id === model)?.variants ?? [];
-    const next = defaultVariant(variants);
+    const remembered =
+      model === catalog?.defaultSelection.model
+        ? catalog.defaultSelection.variant
+        : undefined;
+    const next = variants.some((entry) => entry.id === remembered)
+      ? remembered
+      : defaultVariant(variants);
     setVariant((current) =>
       next && variants.some((entry) => entry.id === current) ? current : (next ?? '')
     );
-  }, [catalog?.models, model]);
+  }, [catalog, model]);
 
   const loading = !catalog;
 

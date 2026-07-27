@@ -40,6 +40,11 @@ export interface ModelOption {
   variants: readonly ModelVariantOption[];
 }
 
+export interface ModelSelection {
+  model: string;
+  variant?: string;
+}
+
 export interface ModelCatalog {
   options: readonly ModelOption[];
   /** The config's `model`: the default `providerID/modelID` reference. */
@@ -165,6 +170,29 @@ export function catalogFromConfig(config: Config): ModelCatalog {
       return defaultVariantForModel(modelRef);
     }
   };
+}
+
+/**
+ * Pick the model and effort the new-session composer should start with.
+ *
+ * Session rows are the durable record of the last selection. A forced config
+ * change can remove that model or one of its variants, so every remembered
+ * value is resolved against the current catalog before it reaches the browser.
+ */
+export function resolveDefaultModelSelection(
+  catalog: ModelCatalog,
+  recent?: ModelSelection
+): ModelSelection {
+  const model = catalog.isModelRef(recent?.model)
+    ? recent.model
+    : catalog.isModelRef(catalog.defaultModelRef)
+      ? catalog.defaultModelRef
+      : (catalog.options[0]?.id ?? '');
+  const variant = catalog.resolveVariant(
+    model,
+    recent?.model === model ? recent.variant : undefined
+  );
+  return { model, ...(variant ? { variant } : {}) };
 }
 
 /**

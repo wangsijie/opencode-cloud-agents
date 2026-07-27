@@ -105,6 +105,11 @@ export interface Catalog {
   /** Ordered by last use, so the first entry is the composer's default. */
   repos: RepoOption[];
   models: ModelOption[];
+  /** Last-used model and effort, resolved against the current config. */
+  defaultSelection: {
+    model: string;
+    variant?: string;
+  };
   /** When the Hub last read the repository list from GitHub. */
   reposFetchedAt?: string;
   /** The stored list is past its TTL: worth one refresh once the page is up. */
@@ -511,4 +516,3 @@ export const retrySession = (id: string) =>
 
 export const stopInstance = (id: string) =>
   call<unknown>(`/api/instances/${encodeURIComponent(id)}/stop`, { method: 'POST' });
-

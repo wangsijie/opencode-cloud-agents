@@ -24,9 +24,12 @@ import { handleSessionApi } from './api-sessions';
 import { handleSettingsApi } from './api-settings';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
-import { listRepoCatalog } from './hub-store';
+import { lastModelSelection, listRepoCatalog } from './hub-store';
 import { LifecycleCoordinator } from './lifecycle';
-import { loadModelCatalog } from './model-catalog';
+import {
+  loadModelCatalog,
+  resolveDefaultModelSelection
+} from './model-catalog';
 import { Sandbox } from './sandbox';
 import { SessionAgent } from './session-agent';
 
@@ -111,13 +114,18 @@ export default {
         // `?refresh=1` after the page has rendered. A failure with nothing
         // stored raises, and the dashboard renders that rather than an empty
         // picker that would read as "you have no repositories".
-        const [catalog, models] = await Promise.all([
+        const [catalog, models, recentModelSelection] = await Promise.all([
           listRepoCatalog(env, url.searchParams.get('refresh') === '1'),
-          loadModelCatalog(env)
+          loadModelCatalog(env),
+          lastModelSelection(env)
         ]);
         return json({
           repos: catalog.repos,
           models: models.options,
+          defaultSelection: resolveDefaultModelSelection(
+            models,
+            recentModelSelection
+          ),
           reposFetchedAt: catalog.fetchedAt,
           reposStale: catalog.stale
         });

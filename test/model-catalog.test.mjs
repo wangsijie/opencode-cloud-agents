@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { catalogFromConfig } from '../src/model-catalog.ts'
+import {
+  catalogFromConfig,
+  resolveDefaultModelSelection
+} from '../src/model-catalog.ts'
 
 /**
  * The catalog used to be derived from a hardcoded config at module load;
@@ -102,6 +105,53 @@ test('resolveVariant keeps a valid preference and replaces an invalid one', () =
   assert.equal(catalog.resolveVariant('acme/plain', 'gone'), 'medium')
   assert.equal(catalog.resolveVariant('acme/plain', undefined), 'medium')
   assert.equal(catalog.resolveVariant('acme/ag/nested-model', 'anything'), undefined)
+})
+
+test('the composer default keeps the most recent valid model and variant', () => {
+  const catalog = catalogFromConfig(fixture())
+  assert.deepEqual(
+    resolveDefaultModelSelection(catalog, {
+      model: 'acme/plain',
+      variant: 'xhigh'
+    }),
+    { model: 'acme/plain', variant: 'xhigh' }
+  )
+})
+
+test('the composer default replaces a removed variant', () => {
+  const catalog = catalogFromConfig(fixture())
+  assert.deepEqual(
+    resolveDefaultModelSelection(catalog, {
+      model: 'acme/plain',
+      variant: 'gone'
+    }),
+    { model: 'acme/plain', variant: 'medium' }
+  )
+})
+
+test('the composer default falls back from a removed model to config.model', () => {
+  const catalog = catalogFromConfig(fixture())
+  assert.deepEqual(
+    resolveDefaultModelSelection(catalog, {
+      model: 'gone/model',
+      variant: 'high'
+    }),
+    { model: 'acme/ag/nested-model' }
+  )
+  assert.deepEqual(resolveDefaultModelSelection(catalog), {
+    model: 'acme/ag/nested-model'
+  })
+})
+
+test('the composer default omits effort for a model without variants', () => {
+  const catalog = catalogFromConfig(fixture())
+  assert.deepEqual(
+    resolveDefaultModelSelection(catalog, {
+      model: 'acme/ag/nested-model',
+      variant: 'medium'
+    }),
+    { model: 'acme/ag/nested-model' }
+  )
 })
 
 test('variant labels capitalize, with xhigh spelled XHigh', () => {

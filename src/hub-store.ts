@@ -30,7 +30,7 @@ import {
 } from './hub-rows';
 import { HUB_DURABLE_OBJECT_ID, type InstanceRecord } from './instances';
 import type { LifecycleCoordinator } from './lifecycle';
-import type { ModelCatalog } from './model-catalog';
+import type { ModelCatalog, ModelSelection } from './model-catalog';
 import {
   isSafeRepoDefinition,
   repoWorkspaceDirectory,
@@ -392,6 +392,24 @@ export async function findCatalogRepo(
   return (await listRepoCatalog(env)).repos.find(
     (repo) => repo.repoKey === repoKey
   );
+}
+
+/** The model and effort attached to the session worked in most recently. */
+export async function lastModelSelection(
+  env: Env
+): Promise<ModelSelection | undefined> {
+  const row = await env.DB.prepare(
+    `SELECT model, variant
+     FROM sessions
+     ORDER BY CASE WHEN last_prompt_at > created_at
+                   THEN last_prompt_at ELSE created_at END DESC,
+              created_at DESC,
+              id DESC
+     LIMIT 1`
+  ).first<{ model: string; variant: string | null }>();
+  return row
+    ? { model: row.model, ...(row.variant ? { variant: row.variant } : {}) }
+    : undefined;
 }
 
 /** The stored catalog, in GitHub's own order, refreshed only when asked. */
