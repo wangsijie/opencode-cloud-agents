@@ -47,7 +47,8 @@ function ToolCall({ part }: { part: MessagePart }) {
   return (
     <div className={`part-tool tool-${status ?? 'unknown'}`}>
       <span className="tool-name mono">{part.tool ?? 'tool'}</span>
-      {title ? <span className="tool-title">{title}</span> : null}
+      {/* Truncated to one line in CSS; the tooltip is how a long command stays readable. */}
+      {title ? <span className="tool-title" title={title}>{title}</span> : null}
       {status && status !== 'completed' ? (
         <span className="tool-status">{status}</span>
       ) : null}
