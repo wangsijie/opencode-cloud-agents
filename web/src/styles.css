@@ -1749,23 +1749,27 @@ a.part-task:focus-visible {
   font-size: 13px;
 }
 
-/* The copy button sits under the message it copies, at the edge its text
-   starts from. It is quiet until the message is hovered or the button is
-   focused, so a scrolled-back thread stays text rather than a column of
-   controls — and on touch, where nothing is ever hovered, it stays visible. */
+/* Keep the copy action attached to the reply's text rather than the whole turn:
+   tool rows can continue below it without moving the action away from what it
+   copies. The reserved lower edge keeps the control from covering any text. */
 .message {
-  position: relative;
   display: flex;
   flex-direction: column;
 }
 
-.message-actions {
+.copyable-text {
+  position: relative;
   display: flex;
-  margin-top: 2px;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: 22px;
 }
 
-.message.user .message-actions {
-  align-self: flex-end;
+.message-actions {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
 }
 
 .message-actions .copy-button {
@@ -1774,28 +1778,13 @@ a.part-task:focus-visible {
 }
 
 @media (hover: hover) {
-  /* Out of flow so a hidden button does not reserve a full row between
-     messages; it paints into the gap only while the message is hovered. */
-  .message-actions {
-    position: absolute;
-    left: 0;
-    top: 100%;
-    margin-top: 0;
-    z-index: 1;
-  }
-
-  .message.user .message-actions {
-    left: auto;
-    right: 0;
-  }
-
   .message-actions .copy-button {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.12s ease;
   }
 
-  .message:hover .copy-button,
+  .copyable-text:hover .copy-button,
   .message-actions .copy-button:focus-visible {
     opacity: 1;
     pointer-events: auto;

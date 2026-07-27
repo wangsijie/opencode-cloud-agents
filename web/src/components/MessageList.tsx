@@ -79,35 +79,51 @@ export function MessageList({
           return null;
         }
         const copyable = messageText(parts);
+        const lastTextIndex = parts.reduce(
+          (last, part, index) => (part.type === 'text' ? index : last),
+          -1
+        );
         return (
           <article key={message.info.id} className={`message ${message.info.role}`}>
             <div className="message-body">
-              {parts.map((part) => (
-                <PartView
-                  key={part.id}
-                  part={part}
-                  sessionId={sessionId}
-                  turnDiffs={
-                    message.info.parentID
-                      ? turnDiffs.get(message.info.parentID)
-                      : undefined
-                  }
-                />
-              ))}
+              {parts.map((part, index) => {
+                const partView = (
+                  <PartView
+                    key={part.id}
+                    part={part}
+                    sessionId={sessionId}
+                    turnDiffs={
+                      message.info.parentID
+                        ? turnDiffs.get(message.info.parentID)
+                        : undefined
+                    }
+                  />
+                );
+                if (!copyable || index !== lastTextIndex) {
+                  return partView;
+                }
+                return (
+                  <div key={part.id} className="copyable-text">
+                    {partView}
+                    <div className="message-actions">
+                      <CopyButton
+                        text={copyable}
+                        label={
+                          message.info.role === 'user'
+                            ? 'Copy your message'
+                            : 'Copy the reply'
+                        }
+                      />
+                    </div>
+                  </div>
+                );
+              })}
               {failure ? (
                 <p className="message-failure">
                   {failure.data?.message ?? failure.name ?? 'Generation interrupted'}
                 </p>
               ) : null}
             </div>
-            {copyable ? (
-              <div className="message-actions">
-                <CopyButton
-                  text={copyable}
-                  label={message.info.role === 'user' ? 'Copy your message' : 'Copy the reply'}
-                />
-              </div>
-            ) : null}
           </article>
         );
       })}
