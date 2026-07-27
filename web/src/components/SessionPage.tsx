@@ -16,7 +16,6 @@ import {
   type RuntimeLifecycle,
   type SessionView
 } from '../api';
-import { formatTime } from '../format';
 import {
   lastMessageId,
   reconcileOptimisticPrompts,
@@ -104,7 +103,6 @@ export function SessionPage({
   const {
     messages,
     state,
-    mirroredAt,
     error: transcriptError
     // Keyed to the runtime so a wake the user just triggered re-attaches the
     // event stream at once, rather than after the browser's reconnect delay.
@@ -421,24 +419,12 @@ export function SessionPage({
               </div>
 
               {/*
-                These three are all about sending, so they sit with the composer
-                rather than at the end of the conversation — where they would only
-                be visible if the reader happened to be scrolled to the bottom.
+                Progress and errors sit with the composer rather than at the end
+                of the conversation — where they would only be visible if the
+                reader happened to be scrolled to the bottom. Sleeping is already
+                on the status pill; no extra banner.
               */}
               <div className="composer-area">
-                {/*
-                  A sleeping session is only worth calling out while it is still
-                  asleep. Once a message has queued a wake, the progress banner says
-                  everything this one would, and more usefully.
-                */}
-                {state === 'sleeping' && !dispatching && !lost ? (
-                  <p className="banner">
-                    {mirroredAt
-                      ? `This session is asleep. Above is the mirror from ${formatTime(mirroredAt)}. Send a message to wake it and carry on.`
-                      : 'This session is asleep and has no mirror yet. Send a message to wake it and carry on.'}
-                  </p>
-                ) : null}
-
                 {dispatching ? (
                   <p className="banner progress" role="status">
                     <i className="spinner" aria-hidden="true" />
