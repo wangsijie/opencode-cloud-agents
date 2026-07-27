@@ -51,6 +51,7 @@ export function NewSessionPage({
   // the last session ran in.
   useEffect(() => {
     if (!repos || repos.length === 0) {
+      setRepoKey('');
       return;
     }
     setRepoKey((current) =>

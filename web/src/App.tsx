@@ -7,6 +7,7 @@ import {
   UNAUTHORIZED_EVENT,
   type Catalog
 } from './api';
+import { enteredNewSessionPage } from './catalog-refresh';
 import { AgentSessionPage } from './components/AgentSessionPage';
 import { NewSessionPage } from './components/NewSessionPage';
 import { SessionPage } from './components/SessionPage';
@@ -129,8 +130,9 @@ function SettingsGate({ onSignedOut }: { onSignedOut: () => void }) {
  * it stays put while the conversation beside it changes, so it must not be
  * re-fetched by whatever is currently on screen.
  *
- * The catalog is fetched once; the session list polls, because its state
- * changes underneath the page as containers wake, work and sleep.
+ * The catalog is fetched on arrival and when the new-session page is entered;
+ * the session list polls, because its state changes underneath the page as
+ * containers wake, work and sleep.
  */
 function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const route = useRoute();
@@ -139,6 +141,8 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const refreshedStale = useRef(false);
+  const catalogRef = useRef<Catalog | undefined>(undefined);
+  const previousRoute = useRef(route.name);
 
   const { sessions, error: listError, refresh } = useSessions(
     showArchived ? '1' : undefined
@@ -146,7 +150,9 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
 
   const loadCatalog = useCallback(async (refreshRepos = false) => {
     try {
-      setCatalog(await fetchCatalog(refreshRepos));
+      const next = await fetchCatalog(refreshRepos);
+      catalogRef.current = next;
+      setCatalog(next);
       setCatalogError(undefined);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -158,6 +164,29 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   useEffect(() => {
     void loadCatalog().catch(() => undefined);
   }, [loadCatalog]);
+
+  useEffect(() => {
+    const enteringNewSession = enteredNewSessionPage(
+      previousRoute.current,
+      route.name
+    );
+    previousRoute.current = route.name;
+    if (!enteringNewSession) {
+      return;
+    }
+
+    // A normal catalog read keeps GitHub's stored list but reorders it from
+    // current session use. Hide the old order while it loads so the composer
+    // does not preserve yesterday's valid selection over the new first repo.
+    const previousCatalog = catalogRef.current;
+    setCatalog(undefined);
+    void loadCatalog().catch(() => {
+      if (previousCatalog) {
+        catalogRef.current = previousCatalog;
+        setCatalog(previousCatalog);
+      }
+    });
+  }, [loadCatalog, route.name]);
 
   /*
     The Hub keeps GitHub's answer for good and hands it over without asking
