@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchTranscript,
+  openSessionEvents,
   type MessagePart,
   type SessionMessage,
   type TranscriptState
@@ -96,11 +97,7 @@ export function useTranscript(
   }, [load]);
 
   useEffect(() => {
-    const source = new EventSource(
-      `/api/sessions/${encodeURIComponent(sessionId)}/events${
-        agentSessionId ? `?child=${encodeURIComponent(agentSessionId)}` : ''
-      }`
-    );
+    const source = openSessionEvents(sessionId, agentSessionId);
 
     const apply = (event: OpencodeEvent) => {
       const { properties } = event;

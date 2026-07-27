@@ -232,6 +232,27 @@ pnpm dev:web
 It serves <http://localhost:5173> and proxies every Worker-owned route to
 `wrangler dev`, so the UI talks to real Durable Objects and real containers.
 
+### Front end only: mock mode
+
+When the work is purely front end, none of that machinery is needed:
+
+```bash
+pnpm dev:mock
+```
+
+This is the Vite dev server alone — no Wrangler, no Docker, no D1. `VITE_MOCK=1`
+makes `main.tsx` install an in-memory backend (`web/src/mock/`) behind the API
+layer before the first render: every `/api` request is answered from fixtures,
+and the session event stream is simulated. The fixtures cover one session per
+UI state (streaming live, idle with a kitchen-sink transcript and subagents,
+sleeping, waking, queued, starting, failed, lost, error, deleting, CJK and
+overlong titles), plus rich changes/workspace/catalog/settings data.
+One session streams a scripted reply forever; sending a prompt to a sleeping
+session plays the whole queued → starting → cold-wake → reply arc. Mutations
+(rename, delete, settings saves) work but live in memory and reset on
+reload. The mock chunk is dev-only: `vite build` excludes it entirely (grep the
+bundle for `OPENCODE_HUB_MOCK_FIXTURES` to prove it).
+
 Local-mode restore pushes the whole snapshot archive through the container
 control-plane file API, which rejects large bodies (HTTP 413). Large repository
 workspaces (for example `logto`) therefore cannot be restored after a stop in

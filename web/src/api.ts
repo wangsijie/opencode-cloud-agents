@@ -120,8 +120,17 @@ export interface Catalog {
  */
 export const UNAUTHORIZED_EVENT = 'hub:unauthorized';
 
+type FetchLike = (path: string, init?: RequestInit) => Promise<Response>;
+
+let fetchImpl: FetchLike = (path, init) => fetch(path, init);
+
+/** Dev-only seam for `web/src/mock`; production builds never call this. */
+export function setApiFetch(impl: FetchLike): void {
+  fetchImpl = impl;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetchImpl(path, {
     ...init,
     headers: {
       accept: 'application/json',
@@ -381,6 +390,34 @@ export const fetchTranscript = (id: string, agentSessionId?: string) =>
 
 const childQuery = (agentSessionId?: string) =>
   agentSessionId ? `?child=${encodeURIComponent(agentSessionId)}` : '';
+
+/** The surface `useTranscript` uses from an event stream. */
+export interface SessionEventSource {
+  addEventListener(
+    type: string,
+    listener: (event: MessageEvent<string>) => void
+  ): void;
+  close(): void;
+}
+
+let eventSourceImpl: (url: string) => SessionEventSource = (url) =>
+  new EventSource(url);
+
+/** Dev-only seam for `web/src/mock`; production builds never call this. */
+export function setSessionEventSource(
+  impl: (url: string) => SessionEventSource
+): void {
+  eventSourceImpl = impl;
+}
+
+/** The live event stream behind `fetchTranscript`, same session semantics. */
+export const openSessionEvents = (
+  id: string,
+  agentSessionId?: string
+): SessionEventSource =>
+  eventSourceImpl(
+    `/api/sessions/${encodeURIComponent(id)}/events${childQuery(agentSessionId)}`
+  );
 
 /**
  * Where a subagent sits under the session that started it.

@@ -145,6 +145,13 @@ a stale one before assuming the proxy is at fault. `.wrangler/state` holds only
 local Durable Object and R2 data; deleting it is the way to recover from a
 wedged local run.
 
+For front-end-only work, `pnpm dev:mock` runs the Vite dev server against
+in-memory fixtures (`web/src/mock/`) — no wrangler, no Docker, no D1. Fixtures
+cover every session UI state; mutations reset on reload. The mock is installed
+in `main.tsx` behind `import.meta.env.DEV && VITE_MOCK`, so it never reaches a
+production bundle. When touching frontend types in `web/src/api.ts`, keep the
+fixtures compiling — `pnpm typecheck` covers them.
+
 ## Deployment is automatic on push to master
 
 `.github/workflows/deploy.yml` runs `pnpm test`, `pnpm run typecheck` and

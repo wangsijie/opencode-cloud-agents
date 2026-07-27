@@ -10,6 +10,7 @@
     "deploy:prepare": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply opencode-cloud --remote",
     "deploy:worker-only": "pnpm run deploy:prepare && WRANGLER_WRITE_LOGS=false wrangler deploy --containers-rollout=none",
     "dev": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
+    "dev:mock": "VITE_MOCK=1 vite",
     "dev:web": "vite",
     "start": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "test": "node --test test/*.test.mjs",
