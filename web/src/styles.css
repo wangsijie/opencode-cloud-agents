@@ -1286,6 +1286,10 @@ a.part-task:focus-visible {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  /* The row aligns on the text baseline, which an icon does not have: left to
+     take part it sits a pixel low and makes the row taller than the plain tool
+     rows stacked above it. */
+  align-self: center;
   /* Sits at the far end, unless a status is already holding that place. */
   margin-left: auto;
   color: var(--text-dim);
@@ -1342,11 +1346,14 @@ a.part-task:focus-visible {
   background: var(--surface-raised);
 }
 
-/* The chevron leads the row here rather than closing it: it is a disclosure,
-   not a link onwards, so it points down once the diff is open. */
+/* The chevron sits where a tool row's does; it is a disclosure rather than a
+   link onwards, so it turns to point down once the diff is open. */
 .part-tool.patch-summary .tool-open {
-  margin-left: 0;
   transition: transform 0.12s ease;
+}
+
+.patch-counts + .tool-open {
+  margin-left: 0;
 }
 
 .part-tool.patch-summary.open .tool-open {

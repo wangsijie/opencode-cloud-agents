@@ -98,9 +98,9 @@ export function PatchView({
         title={hash ? `Snapshot ${hash}` : undefined}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="tool-open" aria-hidden="true">
-          <ChevronRightIcon />
-        </span>
+        {/* Label first, chevron last, exactly like a tool row: these rows sit
+            in a stack with them, and an indent for the arrow would leave every
+            other line in the column starting somewhere else. */}
         <span className="tool-name">
           Changed {count} {count === 1 ? 'file' : 'files'}
         </span>
@@ -110,6 +110,9 @@ export function PatchView({
             <span className="patch-del">−{summary.deletions}</span>
           </span>
         ) : null}
+        <span className="tool-open" aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
       </button>
 
       {open ? (
