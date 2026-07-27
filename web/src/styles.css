@@ -345,7 +345,12 @@ code {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+/* A flex column so a panel that wants the whole height can ask for it (the file
+   browser does — see `.workspace-panel`); one that does not keeps its natural
+   height and scrolls here as before. */
 .aside-body {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
@@ -1611,10 +1616,23 @@ summary:focus-visible {
 
 /* ---------- workspace panel ---------- */
 
+/* The directory listing has no natural length worth respecting: capped at a
+   fraction of the viewport it left the bottom of the panel empty, so it takes
+   the panel's full height and scrolls inside it instead. */
 .workspace-panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .file-path {
@@ -1633,8 +1651,10 @@ summary:focus-visible {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 45vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   font-size: 13px;
 }
 
@@ -1667,6 +1687,13 @@ summary:focus-visible {
   flex: 0 0 auto;
 }
 
+.file-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .file-view-header {
   display: flex;
   align-items: baseline;
@@ -1675,10 +1702,13 @@ summary:focus-visible {
   font-size: 13px;
 }
 
-/* Source lines are as wide as they are: the viewer scrolls, the page does not. */
+/* Source lines are as wide as they are: the viewer scrolls, the page does not.
+   It is as tall as the panel for the same reason the listing is. */
 .file-content {
-  max-height: 45vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   margin: 8px 0 0;
   padding: 10px;
   background: var(--surface-sunken);
