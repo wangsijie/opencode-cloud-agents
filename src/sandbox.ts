@@ -66,6 +66,7 @@ import {
   type RepoDefinition
 } from './repos';
 import {
+  decodeGitStatusOutput,
   isSafeBranchName,
   limitDiff,
   normalizeCommitMessage,
@@ -1386,7 +1387,9 @@ export class Sandbox extends BaseSandbox<Env> {
           Promise.all([
             this.exec(`git -C ${at} rev-parse --abbrev-ref HEAD`),
             this.exec(`git -C ${at} log -1 --format='%H%x09%s'`),
-            this.exec(`git -C ${at} status --porcelain=v1 -z`),
+            // Wrapped in base64 because the NUL separators do not reliably
+            // survive the exec transport; the worker decodes before parsing.
+            this.exec(`git -C ${at} status --porcelain=v1 -z | base64`),
             this.exec(`git -C ${at} diff HEAD --no-color`),
             this.exec(`git -C ${at} branch --remotes --list 'origin/*'`)
           ])
@@ -1425,7 +1428,7 @@ export class Sandbox extends BaseSandbox<Env> {
         ...(headOut.success && headOut.stdout.trim()
           ? { head: parseHeadLine(headOut.stdout) }
           : {}),
-        files: parseGitStatus(statusOut.stdout),
+        files: parseGitStatus(decodeGitStatusOutput(statusOut.stdout)),
         // A diff that fails on a repository whose status read worked is an empty
         // diff as far as the user is concerned; the file list is the part that
         // must be right.

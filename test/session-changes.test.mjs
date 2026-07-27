@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   MAX_DIFF_LENGTH,
+  decodeGitStatusOutput,
   isSafeBranchName,
   limitDiff,
   normalizeCommitMessage,
@@ -109,6 +110,27 @@ test('porcelain status parses NUL records, including renames', () => {
     { path: 'src/after.ts', status: 'renamed', renamedFrom: 'src/before.ts' },
     { path: 'src/conflict.ts', status: 'conflicted' }
   ])
+})
+
+test('base64-wrapped status decodes with its NUL separators intact', () => {
+  const raw = ' M web/src/components/MessageList.tsx\0 M web/src/styles.css\0';
+  // `base64` wraps long output in newline-terminated lines; the decoder must
+  // not care where those line breaks fall.
+  const encoded = Buffer.from(raw, 'utf8')
+    .toString('base64')
+    .replace(/(.{20})/g, '$1\n');
+  assert.equal(decodeGitStatusOutput(encoded), raw)
+  assert.deepEqual(parseGitStatus(decodeGitStatusOutput(encoded)), [
+    { path: 'web/src/components/MessageList.tsx', status: 'modified' },
+    { path: 'web/src/styles.css', status: 'modified' }
+  ])
+  // Non-ASCII paths arrive as UTF-8 bytes and must come back as the same text.
+  const utf8 = Buffer.from(' M docs/说明.md\0', 'utf8').toString('base64')
+  assert.deepEqual(parseGitStatus(decodeGitStatusOutput(utf8)), [
+    { path: 'docs/说明.md', status: 'modified' }
+  ])
+  assert.equal(decodeGitStatusOutput(''), '')
+  assert.equal(decodeGitStatusOutput('\n'), '')
 })
 
 test('a path with a space or a quote survives parsing intact', () => {

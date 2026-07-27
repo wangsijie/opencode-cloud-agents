@@ -173,6 +173,26 @@ export function normalizeCommitMessage(value: unknown): string | undefined {
 }
 
 /**
+ * Decode `git status --porcelain=v1 -z` output that was base64-wrapped in the
+ * container.
+ *
+ * The status is NUL-separated, but exec output rides a text transport that is
+ * not guaranteed to deliver NUL bytes — when they were dropped, every record
+ * fused into one long path (`a.tsx M b.css`). Piping through `base64` in the
+ * container turns the bytes into plain ASCII that survives any transport, and
+ * this undoes it. Whitespace is stripped first because `base64` wraps its
+ * output in lines.
+ */
+export function decodeGitStatusOutput(output: string): string {
+  const packed = output.replace(/\s/g, '');
+  if (!packed) {
+    return '';
+  }
+  const bytes = Uint8Array.from(atob(packed), (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/**
  * Parse `git status --porcelain=v1 -z`.
  *
  * The NUL-separated form is used rather than the readable one because git
