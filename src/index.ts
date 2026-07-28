@@ -31,6 +31,7 @@ import {
   resolveDefaultModelSelection
 } from './model-catalog';
 import { Sandbox } from './sandbox';
+import { listSessionProviders } from './sandbox-providers';
 import { SessionAgent } from './session-agent';
 
 export { ContainerProxy, Hub, LifecycleCoordinator, Sandbox, SessionAgent };
@@ -114,14 +115,19 @@ export default {
         // `?refresh=1` after the page has rendered. A failure with nothing
         // stored raises, and the dashboard renders that rather than an empty
         // picker that would read as "you have no repositories".
-        const [catalog, models, recentModelSelection] = await Promise.all([
-          listRepoCatalog(env, url.searchParams.get('refresh') === '1'),
-          loadModelCatalog(env),
-          lastModelSelection(env)
-        ]);
+        const [catalog, models, recentModelSelection, providers] =
+          await Promise.all([
+            listRepoCatalog(env, url.searchParams.get('refresh') === '1'),
+            loadModelCatalog(env),
+            lastModelSelection(env),
+            listSessionProviders(env)
+          ]);
         return json({
           repos: catalog.repos,
           models: models.options,
+          // Where a new session may run. One entry means there is nothing to
+          // choose and the composer shows no picker at all.
+          providers,
           defaultSelection: resolveDefaultModelSelection(
             models,
             recentModelSelection

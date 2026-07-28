@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1 已完成(`protocol/` 已定稿,前置验证结论见 `protocol/PROTOCOL.md` 的 "Design grounding");其余任务待做。
+> 进度:任务 1、2、3 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8);其余任务待做。
 
 ## 目标架构(已确认)
 

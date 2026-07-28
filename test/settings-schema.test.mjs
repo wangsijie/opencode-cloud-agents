@@ -254,6 +254,63 @@ test('the ssh key descriptor wants an OpenSSH pair', () => {
   assert.ok(ssh.validate('string').length > 0)
 })
 
+test('the docker agent URL is an https origin with nothing appended', () => {
+  const url = findDescriptor('docker.agent-url')
+  assert.deepEqual(url.validate('https://sandbox.example.com'), [])
+  assert.deepEqual(url.validate('https://sandbox.example.com/'), [])
+  assert.deepEqual(url.validate('https://sandbox.example.com:8443'), [])
+  // The bearer token rides on every call, so plaintext is out.
+  assert.ok(
+    url.validate('http://sandbox.example.com').some((error) => error.includes('https'))
+  )
+  // A path would be dropped once the client appends its own routes.
+  assert.ok(
+    url.validate('https://sandbox.example.com/agent').some((error) => error.includes('origin'))
+  )
+  assert.ok(url.validate('https://sandbox.example.com?a=1').length > 0)
+  assert.ok(url.validate('https://user:pw@sandbox.example.com').length > 0)
+  assert.ok(url.validate('not a url').length > 0)
+  assert.ok(url.validate('').length > 0)
+  assert.ok(url.validate(null).length > 0)
+})
+
+test('the docker agent token is a non-empty untrimmed-free string', () => {
+  const token = findDescriptor('docker.agent-token')
+  assert.deepEqual(token.validate('s3cret-token'), [])
+  assert.ok(token.validate(' s3cret ').length > 0)
+  assert.ok(token.validate('').length > 0)
+  assert.ok(token.validate(42).length > 0)
+})
+
+test('the docker image is a Docker reference', () => {
+  const image = findDescriptor('docker.image')
+  assert.deepEqual(image.validate('opencode-session:latest'), [])
+  assert.deepEqual(image.validate('ghcr.io/acme/opencode-session:v1.2.3'), [])
+  assert.deepEqual(
+    image.validate(
+      'ghcr.io/acme/opencode-session@sha256:' + 'a'.repeat(64)
+    ),
+    []
+  )
+  // Nothing that would read as a flag or a shell word.
+  assert.ok(image.validate('-rm').length > 0)
+  assert.ok(image.validate('image latest').length > 0)
+  assert.ok(image.validate('image;rm -rf /').length > 0)
+  assert.ok(image.validate('').length > 0)
+})
+
+test('the docker provider settings are all optional', () => {
+  for (const key of ['docker.agent-url', 'docker.agent-token', 'docker.image']) {
+    const descriptor = findDescriptor(key)
+    assert.equal(descriptor.group, 'docker')
+    assert.equal(descriptor.required, false)
+  }
+  // The token never reads back; the other two do, so they can be edited.
+  assert.equal(findDescriptor('docker.agent-token').exposure, 'secret')
+  assert.equal(findDescriptor('docker.agent-url').exposure, 'plain')
+  assert.equal(findDescriptor('docker.image').exposure, 'plain')
+})
+
 test('required settings are exactly the ones the gate blocks on', () => {
   assert.deepEqual(
     SETTING_DESCRIPTORS.filter((descriptor) => descriptor.required).map(

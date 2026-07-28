@@ -9,7 +9,7 @@
  */
 import type { Config } from '@opencode-ai/sdk/v2';
 import { isSafeRepoKey } from './repos.ts';
-import { SETTING_KEYS } from './settings.ts';
+import { DEFAULT_DOCKER_IMAGE, SETTING_KEYS } from './settings.ts';
 import type {
   AgentsMdSetting,
   EnvVarSetting,
@@ -43,7 +43,7 @@ const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface SettingDescriptor {
   key: string;
-  group: 'auth' | 'github' | 'opencode' | 'container' | 'git';
+  group: 'auth' | 'github' | 'opencode' | 'container' | 'git' | 'docker';
   label: string;
   /**
    * How the value travels through the API:
@@ -358,6 +358,63 @@ function validateGitIdentity(value: unknown): string[] {
 }
 
 /**
+ * A Docker image reference as `docker run` accepts it: `[registry/]name[:tag]`
+ * or `…@sha256:…`. The value becomes one argv element (never a shell word), so
+ * this only has to keep out the shapes Docker itself would reject — plus a
+ * leading hyphen, which would read as a flag.
+ */
+const DOCKER_IMAGE_PATTERN =
+  /^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[a-f0-9]{64})?$/;
+
+/**
+ * The agent lives on someone's Mac mini behind a reverse proxy, and the bearer
+ * token travels on every call — so the endpoint is an https origin, nothing
+ * else. A path here would silently drop once the client appends its own.
+ */
+function validateDockerAgentUrl(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return ['The agent URL must be a non-empty string'];
+  }
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return [`"${value}" is not a URL`];
+  }
+  const errors: string[] = [];
+  if (url.protocol !== 'https:') {
+    errors.push('The agent URL must use https — the bearer token rides on every request');
+  }
+  if (url.username !== '' || url.password !== '') {
+    errors.push('The agent URL must not carry credentials');
+  }
+  if ((url.pathname !== '' && url.pathname !== '/') || url.search !== '' || url.hash !== '') {
+    errors.push('The agent URL must be an origin only, with no path or query');
+  }
+  return errors;
+}
+
+function validateDockerAgentToken(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return ['The agent token must be a non-empty string'];
+  }
+  if (value !== value.trim()) {
+    return ['The agent token must not have leading or trailing whitespace'];
+  }
+  return [];
+}
+
+function validateDockerImage(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return ['The image must be a non-empty string'];
+  }
+  if (!DOCKER_IMAGE_PATTERN.test(value)) {
+    return [`"${value}" is not a Docker image reference (for example "${DEFAULT_DOCKER_IMAGE}")`];
+  }
+  return [];
+}
+
+/**
  * Everything the settings API serves and accepts, except the admin password —
  * that one never travels through the generic read/write routes; it has its own
  * endpoints in [access.ts](access.ts) and [api-settings.ts](api-settings.ts).
@@ -418,6 +475,32 @@ export const SETTING_DESCRIPTORS: readonly SettingDescriptor[] = [
     exposure: 'plain',
     required: false,
     validate: validateGitIdentity
+  },
+  // The Docker sandbox provider is opt-in: with these unset the site only
+  // offers Cloudflare containers, which is the default deployment.
+  {
+    key: SETTING_KEYS.dockerAgentUrl,
+    group: 'docker',
+    label: 'Docker agent URL',
+    exposure: 'plain',
+    required: false,
+    validate: validateDockerAgentUrl
+  },
+  {
+    key: SETTING_KEYS.dockerAgentToken,
+    group: 'docker',
+    label: 'Docker agent token',
+    exposure: 'secret',
+    required: false,
+    validate: validateDockerAgentToken
+  },
+  {
+    key: SETTING_KEYS.dockerImage,
+    group: 'docker',
+    label: 'Docker session image',
+    exposure: 'plain',
+    required: false,
+    validate: validateDockerImage
   }
 ];
 

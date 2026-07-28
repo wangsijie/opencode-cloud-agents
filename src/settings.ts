@@ -16,7 +16,10 @@ export const SETTING_KEYS = {
   containerEnv: 'container.env',
   skills: 'opencode.skills',
   agentsMd: 'opencode.agents-md',
-  gitIdentity: 'git.identity'
+  gitIdentity: 'git.identity',
+  dockerAgentUrl: 'docker.agent-url',
+  dockerAgentToken: 'docker.agent-token',
+  dockerImage: 'docker.image'
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -82,6 +85,12 @@ export interface GitIdentitySetting {
   /** Per-organization identities that beat the base one, matched on owner. */
   overrides?: GitIdentityOverride[];
 }
+
+/**
+ * The image the Docker agent runs a session container from when
+ * `docker.image` is unset. Built by `agent/session-image/Dockerfile`.
+ */
+export const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
 
 export async function readSetting<T>(
   env: Env,
