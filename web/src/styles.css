@@ -2237,10 +2237,22 @@ a.part-task:focus-visible {
 
 .file-path {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   font-size: 13px;
+}
+
+.file-breadcrumbs,
+.file-breadcrumb {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.file-breadcrumbs {
+  flex-wrap: wrap;
 }
 
 .file-path .refresh {

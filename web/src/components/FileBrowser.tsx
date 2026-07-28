@@ -6,6 +6,7 @@ import {
   type WorkspaceListing
 } from '../api';
 import { formatBytes } from '../format';
+import { RefreshIcon } from './icons';
 
 /**
  * The checkout, one directory at a time.
@@ -59,25 +60,46 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
     void openDirectory('');
   }, [openDirectory]);
 
+  const pathParts = path.split('/').filter(Boolean);
+
   return (
     <div className="file-browser">
-      <div className="file-path">
+      <div className="file-path" aria-label="Workspace path">
+        <div className="file-breadcrumbs">
+          <button
+            className="link-button"
+            type="button"
+            disabled={loading}
+            onClick={() => void openDirectory('')}
+          >
+            Repo root
+          </button>
+          {pathParts.map((part, index) => {
+            const target = pathParts.slice(0, index + 1).join('/');
+            return (
+              <span className="file-breadcrumb" key={target}>
+                <span aria-hidden="true">/</span>
+                <button
+                  className="link-button mono"
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void openDirectory(target)}
+                >
+                  {part}
+                </button>
+              </span>
+            );
+          })}
+        </div>
         <button
-          className="link-button"
+          className="icon-button refresh"
           type="button"
           disabled={loading}
-          onClick={() => void openDirectory('')}
-        >
-          Repo root
-        </button>
-        {path ? <span className="mono">/{path}</span> : null}
-        <button
-          className="link-button refresh"
-          type="button"
-          disabled={loading}
+          aria-label="Refresh workspace"
+          title="Refresh workspace"
           onClick={() => void (file ? openFile(file.path) : openDirectory(path))}
         >
-          Refresh
+          <RefreshIcon />
         </button>
       </div>
 
