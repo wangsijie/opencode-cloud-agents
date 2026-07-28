@@ -12,6 +12,9 @@ table and is edited on the Hub's `/settings` page.
   request time.
 - `Dockerfile` is the OpenCode version for Sandbox images. It carries no
   credentials; `src/container-credentials.ts` injects them at wake.
+- The `opencode.agents-md` setting holds standing agent instructions (a
+  global block plus per-repository additions); the wake merges them and
+  writes `/root/.config/opencode/AGENTS.md` in the container.
 
 ## Configuration changes
 

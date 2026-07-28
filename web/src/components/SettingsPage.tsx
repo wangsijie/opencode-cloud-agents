@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   changePassword,
+  fetchCatalog,
   fetchSettings,
   generateSshKey,
   saveSetting,
+  type RepoOption,
   type SettingView
 } from '../api';
 import { MenuIcon } from './icons';
@@ -44,6 +46,7 @@ const SECTIONS: Section[] = [
   { id: 'ssh-key', label: 'SSH key', key: 'container.ssh-key' },
   { id: 'env', label: 'Environment variables', key: 'container.env' },
   { id: 'skills', label: 'Skills', key: 'opencode.skills' },
+  { id: 'agents-md', label: 'AGENTS.md', key: 'opencode.agents-md' },
   { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
   { id: 'password', label: 'Admin password' }
 ];
@@ -215,6 +218,11 @@ export function SettingsPage({
                 ) : active === 'skills' ? (
                   <SkillsSection
                     setting={byKey.get('opencode.skills')}
+                    onSaved={saved}
+                  />
+                ) : active === 'agents-md' ? (
+                  <AgentsMdSection
+                    setting={byKey.get('opencode.agents-md')}
                     onSaved={saved}
                   />
                 ) : active === 'git-identity' ? (
@@ -785,6 +793,187 @@ function SkillsSection({
           }
         >
           Save skills
+        </button>
+      </div>
+      <SectionStatus error={error} notice={notice} />
+    </section>
+  );
+}
+
+interface AgentsMdRepoRow {
+  repoKey: string;
+  content: string;
+}
+
+function AgentsMdSection({
+  setting,
+  onSaved
+}: {
+  setting?: SettingView;
+  onSaved: () => void;
+}) {
+  const stored = setting?.value as
+    | { global?: string; repos?: AgentsMdRepoRow[] }
+    | undefined;
+  const [global, setGlobal] = useState<string>();
+  const [rows, setRows] = useState<AgentsMdRepoRow[]>();
+  const [catalogRepos, setCatalogRepos] = useState<RepoOption[]>();
+  const { busy, error, notice, run } = useSave();
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCatalog()
+      .then((catalog) => {
+        if (!cancelled) {
+          setCatalogRepos(catalog.repos);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currentGlobal = global ?? stored?.global ?? '';
+  const currentRows = rows ?? stored?.repos ?? [];
+
+  const edit = (index: number, patch: Partial<AgentsMdRepoRow>) => {
+    setRows(
+      currentRows.map((row, at) => (at === index ? { ...row, ...patch } : row))
+    );
+  };
+
+  // A stored key the catalog no longer lists must stay selectable, or opening
+  // the section would silently rewrite the entry.
+  const repoOptions = useMemo(() => {
+    const options = (catalogRepos ?? []).map((repo) => ({
+      value: repo.repoKey,
+      label: repo.displayName
+    }));
+    const known = new Set(options.map((option) => option.value));
+    for (const row of currentRows) {
+      if (row.repoKey && !known.has(row.repoKey)) {
+        options.push({ value: row.repoKey, label: row.repoKey });
+      }
+    }
+    return options;
+  }, [catalogRepos, currentRows]);
+
+  // A freshly added row that was never touched does not block the save.
+  const meaningfulRows = currentRows.filter(
+    (row) => row.repoKey.length > 0 || row.content.trim().length > 0
+  );
+  const rowsComplete = meaningfulRows.every(
+    (row) => row.repoKey.length > 0 && row.content.trim().length > 0
+  );
+  const empty =
+    currentGlobal.trim().length === 0 && meaningfulRows.length === 0;
+
+  return (
+    <section className="settings-section">
+      <h2>AGENTS.md</h2>
+      <p className="muted">
+        Standing instructions for the agent, without committing an{' '}
+        <code>AGENTS.md</code> to the repository. The global content applies to
+        every session; a per-repository addition is appended for sessions on
+        that repository. The merged file lands in the container's global
+        OpenCode config, alongside anything the repository itself carries.
+      </p>
+      <textarea
+        className="code-editor"
+        rows={10}
+        spellCheck={false}
+        placeholder="Instructions for every session…"
+        aria-label="Global AGENTS.md content"
+        value={currentGlobal}
+        disabled={busy}
+        onChange={(event) => setGlobal(event.target.value)}
+      />
+      <h3>Per-repository additions</h3>
+      <p className="muted">
+        Appended after the global content for sessions on the chosen
+        repository.
+      </p>
+      {currentRows.map((row, index) => (
+        <div key={index} className="settings-skill">
+          <div className="settings-row">
+            <select
+              aria-label="Repository"
+              value={row.repoKey}
+              disabled={busy}
+              onChange={(event) => edit(index, { repoKey: event.target.value })}
+            >
+              <option value="">Select a repository…</option>
+              {repoOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={`Remove the entry for ${row.repoKey || 'this repository'}`}
+              disabled={busy}
+              onClick={() => setRows(currentRows.filter((_, at) => at !== index))}
+            >
+              ×
+            </button>
+          </div>
+          <textarea
+            className="code-editor"
+            rows={8}
+            spellCheck={false}
+            placeholder="Instructions for this repository…"
+            aria-label={`AGENTS.md addition for ${row.repoKey || 'repository'}`}
+            value={row.content}
+            disabled={busy}
+            onChange={(event) => edit(index, { content: event.target.value })}
+          />
+        </div>
+      ))}
+      <div className="actions">
+        <button
+          className="button"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            setRows([...currentRows, { repoKey: '', content: '' }])
+          }
+        >
+          Add repository
+        </button>
+        <button
+          className="button primary"
+          disabled={
+            busy ||
+            (global === undefined && rows === undefined) ||
+            (!empty && !rowsComplete)
+          }
+          onClick={() =>
+            void run(async () => {
+              if (empty) {
+                await saveSetting('opencode.agents-md', null);
+              } else {
+                const list = meaningfulRows.map((row) => ({
+                  repoKey: row.repoKey,
+                  content: row.content
+                }));
+                await saveSetting('opencode.agents-md', {
+                  ...(currentGlobal.trim().length > 0
+                    ? { global: currentGlobal }
+                    : {}),
+                  ...(list.length > 0 ? { repos: list } : {})
+                });
+              }
+              setGlobal(undefined);
+              setRows(undefined);
+              onSaved();
+              return undefined;
+            })
+          }
+        >
+          Save AGENTS.md
         </button>
       </div>
       <SectionStatus error={error} notice={notice} />

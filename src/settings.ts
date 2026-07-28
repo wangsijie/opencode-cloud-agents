@@ -15,6 +15,7 @@ export const SETTING_KEYS = {
   sshKey: 'container.ssh-key',
   containerEnv: 'container.env',
   skills: 'opencode.skills',
+  agentsMd: 'opencode.agents-md',
   gitIdentity: 'git.identity'
 } as const;
 
@@ -46,6 +47,18 @@ export interface EnvVarSetting {
 export interface SkillSetting {
   name: string;
   content: string;
+}
+
+/** One entry in `opencode.agents-md.repos`: extra instructions for one repo. */
+export interface AgentsMdRepoEntry {
+  repoKey: string;
+  content: string;
+}
+
+/** Stored shape of `opencode.agents-md`: global AGENTS.md plus per-repo additions. */
+export interface AgentsMdSetting {
+  global?: string;
+  repos?: AgentsMdRepoEntry[];
 }
 
 /** One entry in `git.identity.overrides`: the identity for one GitHub owner. */

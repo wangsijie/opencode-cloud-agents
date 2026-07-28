@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  CONTAINER_AGENTS_MD_PATH,
   CONTAINER_SKILLS_ROOT,
   containerEnv,
   credentialFiles,
-  gitConfigCommands
+  gitConfigCommands,
+  resolveAgentsMd
 } from '../src/container-credentials.ts'
 
 const full = () => ({
@@ -45,6 +47,50 @@ test('every configured credential lands at its container path with its mode', ()
   )
   assert.ok(byPath.has(`${CONTAINER_SKILLS_ROOT}/review/SKILL.md`))
   assert.equal(files.length, 5)
+})
+
+test('the merged AGENTS.md lands at the global config path', () => {
+  const settings = {
+    env: [],
+    skills: [],
+    agentsMd: {
+      global: '# House rules',
+      repos: [{ repoKey: 'opencode-cloud', content: 'Use pnpm.' }]
+    }
+  }
+
+  const files = credentialFiles(settings, 'opencode-cloud')
+  assert.equal(files.length, 1)
+  assert.equal(files[0].path, CONTAINER_AGENTS_MD_PATH)
+  assert.equal(files[0].mode, '644')
+  // Global first, the repo addition after, one blank line between.
+  assert.equal(files[0].content, '# House rules\n\nUse pnpm.\n')
+
+  // A session on another repo — or none — gets only the global block.
+  for (const repoKey of ['other-repo', undefined]) {
+    const globalOnly = credentialFiles(settings, repoKey)
+    assert.equal(globalOnly[0].content, '# House rules\n')
+  }
+})
+
+test('resolveAgentsMd merges what exists and yields nothing for nothing', () => {
+  // Repo keys compare case-insensitively, like the catalog's lowercasing.
+  assert.equal(
+    resolveAgentsMd(
+      { repos: [{ repoKey: 'Opencode-Cloud', content: 'Use pnpm.' }] },
+      'opencode-cloud'
+    ),
+    'Use pnpm.'
+  )
+  assert.equal(resolveAgentsMd(undefined, 'opencode-cloud'), undefined)
+  assert.equal(resolveAgentsMd({}, 'opencode-cloud'), undefined)
+  assert.equal(
+    resolveAgentsMd(
+      { global: '  ', repos: [{ repoKey: 'other', content: 'x' }] },
+      'opencode-cloud'
+    ),
+    undefined
+  )
 })
 
 test('nothing configured writes nothing', () => {

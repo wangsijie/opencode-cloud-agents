@@ -41,6 +41,7 @@ import {
   type PromptOpencodeSessionInput
 } from './instance-runtime';
 import {
+  CONTAINER_AGENTS_MD_PATH,
   CONTAINER_SKILLS_ROOT,
   containerEnv,
   credentialFiles,
@@ -662,10 +663,12 @@ export class Sandbox extends BaseSandbox<Env> {
   private async injectContainerCredentials(): Promise<Record<string, string>> {
     const settings = await loadContainerCredentials(this.persistenceEnv);
 
-    // A skill removed from settings must disappear from the container too.
+    // A skill or AGENTS.md removed from settings must disappear from the
+    // container too.
     await this.mustExec(`rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)}`);
+    await this.mustExec(`rm -f ${shellQuote(CONTAINER_AGENTS_MD_PATH)}`);
 
-    const files = credentialFiles(settings);
+    const files = credentialFiles(settings, this.instanceIdentity?.repoKey);
     const directories = [
       ...new Set(files.map((file) => file.path.slice(0, file.path.lastIndexOf('/'))))
     ];

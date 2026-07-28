@@ -1,5 +1,5 @@
 /**
- * SettingView fixtures — all six descriptors from the Worker's
+ * SettingView fixtures — all seven descriptors from the Worker's
  * `src/settings-schema.ts`, mixing configured and unset states. Exposure rules
  * are mirrored: secrets carry no value, partial settings carry the public half.
  */
@@ -79,6 +79,23 @@ export function buildSettings(): SettingView[] {
       label: 'Skills',
       required: false,
       configured: false
+    },
+    {
+      key: 'opencode.agents-md',
+      group: 'opencode',
+      label: 'AGENTS.md',
+      required: false,
+      configured: true,
+      updatedAt: daysAgo(1),
+      value: {
+        global: '# House rules\n\nAlways run the linter before committing.',
+        repos: [
+          {
+            repoKey: 'wangsijie/logto',
+            content: 'Use pnpm, and never touch the generated SDK folders.'
+          }
+        ]
+      }
     },
     {
       key: 'git.identity',

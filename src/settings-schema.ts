@@ -8,8 +8,10 @@
  * (models still pinned by sessions).
  */
 import type { Config } from '@opencode-ai/sdk/v2';
+import { isSafeRepoKey } from './repos.ts';
 import { SETTING_KEYS } from './settings.ts';
 import type {
+  AgentsMdSetting,
   EnvVarSetting,
   GitIdentitySetting,
   SkillSetting,
@@ -227,6 +229,56 @@ function validateSkills(value: unknown): string[] {
   return errors;
 }
 
+function validateAgentsMd(value: unknown): string[] {
+  const record = value as Partial<AgentsMdSetting> | null;
+  if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+    return ['The AGENTS.md setting must be an object with global and repos'];
+  }
+  const errors: string[] = [];
+  if (record.global !== undefined && typeof record.global !== 'string') {
+    errors.push('The global AGENTS.md content must be a string');
+  }
+  let hasRepoContent = false;
+  if (record.repos !== undefined) {
+    if (!Array.isArray(record.repos)) {
+      errors.push('Per-repo entries must be a list of { repoKey, content }');
+      return errors;
+    }
+    const seen = new Set<string>();
+    for (const entry of record.repos) {
+      if (!isSafeRepoKey(entry?.repoKey)) {
+        errors.push(
+          `"${String(entry?.repoKey)}" is not a valid repository key — use lowercase letters, digits and hyphens`
+        );
+        continue;
+      }
+      const key = entry.repoKey.toLowerCase();
+      if (seen.has(key)) {
+        errors.push(`Repository "${entry.repoKey}" has two entries`);
+      }
+      seen.add(key);
+      if (
+        typeof entry.content !== 'string' ||
+        entry.content.trim().length === 0
+      ) {
+        errors.push(`The entry for "${entry.repoKey}" has no content`);
+      } else {
+        hasRepoContent = true;
+      }
+    }
+  }
+  if (
+    errors.length === 0 &&
+    (record.global ?? '').trim().length === 0 &&
+    !hasRepoContent
+  ) {
+    errors.push(
+      'Set global content or at least one per-repo entry — clear the setting instead of storing an empty one'
+    );
+  }
+  return errors;
+}
+
 /** GitHub organization/user names: alphanumerics and hyphens, at most 39. */
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
@@ -319,6 +371,14 @@ export const SETTING_DESCRIPTORS: readonly SettingDescriptor[] = [
     exposure: 'plain',
     required: false,
     validate: validateSkills
+  },
+  {
+    key: SETTING_KEYS.agentsMd,
+    group: 'opencode',
+    label: 'AGENTS.md',
+    exposure: 'plain',
+    required: false,
+    validate: validateAgentsMd
   },
   {
     key: SETTING_KEYS.gitIdentity,

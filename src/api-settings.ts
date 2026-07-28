@@ -121,6 +121,7 @@ function exposedValue(key: string, value: unknown): unknown {
   switch (key) {
     case SETTING_KEYS.opencodeConfig:
     case SETTING_KEYS.skills:
+    case SETTING_KEYS.agentsMd:
     case SETTING_KEYS.gitIdentity:
       return value;
     case SETTING_KEYS.sshKey: {

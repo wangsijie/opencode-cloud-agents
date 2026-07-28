@@ -76,9 +76,9 @@ a bundle patch, and `/gateway/` no longer exists as a public route.
 There is one container image. It installs OpenCode, `gh` and Wrangler, and
 leaves `/workspace` empty; repositories are never baked into the image, and
 neither are credentials — the SSH key, the `gh` login, git identity and
-signing, extra environment variables and OpenCode skills are read from the
-settings table and injected by the Worker on every wake
-(`src/container-credentials.ts`).
+signing, extra environment variables, OpenCode skills and the merged
+`AGENTS.md` instructions are read from the settings table and injected by the
+Worker on every wake (`src/container-credentials.ts`).
 
 GitHub is the only source for the catalog a session can be started from: the Hub
 lists every repository the token can push to, sorted by recent activity, and
@@ -523,6 +523,14 @@ default model does not resolve is refused, and removing a model that existing
 sessions are pinned to demands an explicit force, since those sessions fail on
 their next dispatch. The Hub derives its session model picker from the same
 stored document at request time.
+
+Standing agent instructions live in the `opencode.agents-md` setting: one
+global block, plus optional per-repository additions. On every wake the
+Worker merges the global block with the addition for the instance's
+repository — each sandbox holds exactly one checkout — and writes the result
+to `/root/.config/opencode/AGENTS.md`, where OpenCode reads it alongside
+whatever `AGENTS.md` the repository itself carries. Clearing the setting
+removes the file on the next wake.
 
 ## Verify and deploy
 

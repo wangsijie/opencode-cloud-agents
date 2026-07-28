@@ -13,6 +13,7 @@
 import {
   SETTING_KEYS,
   readSetting,
+  type AgentsMdSetting,
   type EnvVarSetting,
   type GitIdentitySetting,
   type SkillSetting,
@@ -22,6 +23,9 @@ import {
 /** Where OpenCode discovers global skills inside the container. */
 export const CONTAINER_SKILLS_ROOT = '/root/.config/opencode/skills';
 
+/** Where OpenCode discovers global instructions inside the container. */
+export const CONTAINER_AGENTS_MD_PATH = '/root/.config/opencode/AGENTS.md';
+
 export interface ContainerCredentialSettings {
   sshKey?: SshKeySetting;
   /** Shared with the Worker-side repo catalog; the container's gh CLI logs in with it. */
@@ -29,6 +33,7 @@ export interface ContainerCredentialSettings {
   gitIdentity?: GitIdentitySetting;
   env: EnvVarSetting[];
   skills: SkillSetting[];
+  agentsMd?: AgentsMdSetting;
 }
 
 export interface ContainerFile {
@@ -41,19 +46,22 @@ export interface ContainerFile {
 export async function loadContainerCredentials(
   env: Env
 ): Promise<ContainerCredentialSettings> {
-  const [sshKey, githubToken, gitIdentity, envVars, skills] = await Promise.all([
-    readSetting<SshKeySetting>(env, SETTING_KEYS.sshKey),
-    readSetting<string>(env, SETTING_KEYS.githubToken),
-    readSetting<GitIdentitySetting>(env, SETTING_KEYS.gitIdentity),
-    readSetting<EnvVarSetting[]>(env, SETTING_KEYS.containerEnv),
-    readSetting<SkillSetting[]>(env, SETTING_KEYS.skills)
-  ]);
+  const [sshKey, githubToken, gitIdentity, envVars, skills, agentsMd] =
+    await Promise.all([
+      readSetting<SshKeySetting>(env, SETTING_KEYS.sshKey),
+      readSetting<string>(env, SETTING_KEYS.githubToken),
+      readSetting<GitIdentitySetting>(env, SETTING_KEYS.gitIdentity),
+      readSetting<EnvVarSetting[]>(env, SETTING_KEYS.containerEnv),
+      readSetting<SkillSetting[]>(env, SETTING_KEYS.skills),
+      readSetting<AgentsMdSetting>(env, SETTING_KEYS.agentsMd)
+    ]);
   return {
     ...(sshKey ? { sshKey } : {}),
     ...(githubToken ? { githubToken } : {}),
     ...(gitIdentity ? { gitIdentity } : {}),
     env: envVars ?? [],
-    skills: skills ?? []
+    skills: skills ?? [],
+    ...(agentsMd ? { agentsMd } : {})
   };
 }
 
@@ -62,11 +70,16 @@ export async function loadContainerCredentials(
  *
  * The gh login is derived from the GitHub token rather than stored on its
  * own: one token serves the Worker's repo listing and the container's `gh`.
- * Skills land under the global config root, which the R2 snapshot never
- * covers, so what is written here is always exactly the settings list.
+ * Skills and AGENTS.md land under the global config root, which the R2
+ * snapshot never covers, so what is written here is always exactly the
+ * settings list.
+ *
+ * `repoKey` is the instance's repository; it selects the per-repo AGENTS.md
+ * addition when the settings hold one.
  */
 export function credentialFiles(
-  settings: ContainerCredentialSettings
+  settings: ContainerCredentialSettings,
+  repoKey?: string
 ): ContainerFile[] {
   const files: ContainerFile[] = [];
   if (settings.sshKey) {
@@ -100,7 +113,39 @@ export function credentialFiles(
       mode: '644'
     });
   }
+  const agentsMd = resolveAgentsMd(settings.agentsMd, repoKey);
+  if (agentsMd) {
+    files.push({
+      path: CONTAINER_AGENTS_MD_PATH,
+      content: ensureTrailingNewline(agentsMd),
+      mode: '644'
+    });
+  }
   return files;
+}
+
+/**
+ * The AGENTS.md content this container should see: the global block followed
+ * by the addition for its repository when one exists. The sandbox holds a
+ * single checkout, so a merged file at the global config path covers both.
+ * Repo keys compare case-insensitively, matching the catalog's lowercasing.
+ */
+export function resolveAgentsMd(
+  agentsMd: AgentsMdSetting | undefined,
+  repoKey?: string
+): string | undefined {
+  if (!agentsMd) {
+    return undefined;
+  }
+  const repoEntry = repoKey
+    ? agentsMd.repos?.find(
+        (entry) => entry.repoKey.toLowerCase() === repoKey.toLowerCase()
+      )
+    : undefined;
+  const parts = [agentsMd.global, repoEntry?.content]
+    .map((part) => part?.trim() ?? '')
+    .filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
 }
 
 /**

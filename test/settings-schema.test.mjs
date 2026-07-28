@@ -164,6 +164,48 @@ test('git identity overrides need a valid owner, no duplicates, and full identit
   )
 })
 
+test('the AGENTS.md setting wants safe repo keys, no duplicates, and real content', () => {
+  const agentsMd = findDescriptor('opencode.agents-md')
+  assert.deepEqual(agentsMd.validate({ global: '# Rules' }), [])
+  assert.deepEqual(
+    agentsMd.validate({ repos: [{ repoKey: 'opencode-cloud', content: 'Use pnpm.' }] }),
+    []
+  )
+  assert.deepEqual(
+    agentsMd.validate({
+      global: '# Rules',
+      repos: [{ repoKey: 'opencode-cloud', content: 'Use pnpm.' }]
+    }),
+    []
+  )
+  // Repo keys become container paths, so the same constraint applies here.
+  assert.ok(
+    agentsMd
+      .validate({ repos: [{ repoKey: '../escape', content: 'x' }] })
+      .some((error) => error.includes('repository key'))
+  )
+  assert.ok(
+    agentsMd
+      .validate({
+        repos: [
+          { repoKey: 'twice', content: 'a' },
+          { repoKey: 'twice', content: 'b' }
+        ]
+      })
+      .some((error) => error.includes('two entries'))
+  )
+  assert.ok(
+    agentsMd
+      .validate({ repos: [{ repoKey: 'opencode-cloud', content: '  ' }] })
+      .some((error) => error.includes('no content'))
+  )
+  // Nothing to store: the UI clears the setting instead.
+  assert.ok(agentsMd.validate({}).length > 0)
+  assert.ok(agentsMd.validate({ global: '   ' }).length > 0)
+  assert.ok(agentsMd.validate('nope').length > 0)
+  assert.ok(agentsMd.validate({ repos: 'nope' }).length > 0)
+})
+
 test('the ssh key descriptor wants an OpenSSH pair', () => {
   const ssh = findDescriptor('container.ssh-key')
   assert.deepEqual(
