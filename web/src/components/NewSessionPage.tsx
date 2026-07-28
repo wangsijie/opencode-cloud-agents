@@ -48,7 +48,10 @@ export function NewSessionPage({
   const [model, setModel] = useState('');
   const [variant, setVariant] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [provider, setProvider] = useState<SessionProvider>('cloudflare');
+  // Resolved from the catalog's preference order once it lands — docker first
+  // when configured, otherwise cloudflare. undefined until then so a hard-coded
+  // cloudflare does not stick past a catalog that prefers docker.
+  const [provider, setProvider] = useState<SessionProvider>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const attachmentsApi = useComposerAttachments(setError);
@@ -78,14 +81,17 @@ export function NewSessionPage({
 
   // A provider can leave the catalog under an open tab — clearing the Docker
   // settings is all it takes — and starting a session on one the Hub would
-  // refuse is a 400 in place of a session.
+  // refuse is a 400 in place of a session. First paint takes providers[0]
+  // (preference order); a deliberate pick sticks until it leaves the list.
   const providers = catalog?.providers;
   useEffect(() => {
     if (!providers || providers.length === 0) {
       return;
     }
     setProvider((current) =>
-      providers.includes(current) ? current : (providers[0] ?? 'cloudflare')
+      current && providers.includes(current)
+        ? current
+        : (providers[0] ?? 'cloudflare')
     );
   }, [providers]);
 
@@ -136,7 +142,7 @@ export function NewSessionPage({
         model,
         ...(variant ? { variant } : {}),
         prompt: text,
-        provider,
+        provider: provider ?? providers?.[0] ?? 'cloudflare',
         ...(attachments.length > 0
           ? { attachments: toAttachmentPayload(attachments) }
           : {})
@@ -243,7 +249,7 @@ export function NewSessionPage({
                     onChange={setVariant}
                   />
                 ) : null}
-                {providers && providers.length > 1 ? (
+                {providers && providers.length > 1 && provider ? (
                   <ProviderSelect
                     providers={providers}
                     value={provider}

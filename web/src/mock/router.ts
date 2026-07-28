@@ -275,7 +275,7 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       store.settings.find((entry) => entry.key === key)?.configured === true;
     store.catalog.providers =
       configured('docker.agent-url') && configured('docker.agent-token')
-        ? ['cloudflare', 'docker']
+        ? ['docker', 'cloudflare']
         : ['cloudflare'];
     return json(store.catalog);
   }
@@ -293,7 +293,9 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     // The Hub validates the provider against the same list it put in the
     // catalog, so a session on an unconfigured host is a 400 rather than a
     // session that can never wake.
-    const provider = (body.provider ?? 'cloudflare') as SessionProvider;
+    const provider = (body.provider ??
+      store.catalog.providers[0] ??
+      'cloudflare') as SessionProvider;
     if (!store.catalog.providers.includes(provider)) {
       return json({ error: 'Unknown provider' }, 400);
     }

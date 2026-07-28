@@ -272,7 +272,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
 interface CreateSessionInput {
   /** Absent when the session is to work in `/workspace` with no checkout. */
   repoKey?: string;
-  /** Which sandbox host should run the container; absent means Cloudflare. */
+  /** Which sandbox host should run the container; absent means preferred (providers[0]). */
   provider?: SessionProvider;
   model: string;
   variant?: string;
@@ -367,18 +367,20 @@ async function readCreateSessionInput(
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
-  // Omitting the field means Cloudflare, which is always available. Docker is
-  // only a legal answer once an operator has stored the agent's address —
-  // otherwise the session would be created and then fail every wake, so it is
-  // refused here where the failure is still the request's.
+  // Omitting the field takes the preferred host — providers[0], which is
+  // docker when configured and otherwise cloudflare. An explicit value that
+  // is not on offer is refused here so the session is never created on a host
+  // that cannot wake.
   const wantsProvider =
-    provider === undefined || provider === null ? undefined : provider;
-  if (wantsProvider !== undefined && !providers.includes(wantsProvider as SessionProvider)) {
+    provider === undefined || provider === null
+      ? providers[0]
+      : (provider as SessionProvider);
+  if (wantsProvider === undefined || !providers.includes(wantsProvider)) {
     throw new HttpError(400, 'Unknown provider');
   }
   return {
     ...(wantsRepo ? { repoKey: repoKey as string } : {}),
-    ...(wantsProvider ? { provider: wantsProvider as SessionProvider } : {}),
+    provider: wantsProvider,
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
     prompt: text,

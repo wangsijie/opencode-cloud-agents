@@ -1227,10 +1227,11 @@ function DockerSection({
     <section className="settings-section">
       <h2>Docker host</h2>
       <p className="muted">
-        A machine of your own running the sandbox agent, offered beside
-        Cloudflare when a session is created. Its workspaces live on named
-        volumes instead of snapshots, so a container can be replaced without
-        losing the checkout.
+        A machine of your own running the sandbox agent. Once the URL and token
+        are stored it becomes the default host for new sessions (Cloudflare
+        stays available in the picker). Workspaces live on named volumes
+        instead of snapshots, so a container can be replaced without losing the
+        checkout.
       </p>
       <input
         type="text"

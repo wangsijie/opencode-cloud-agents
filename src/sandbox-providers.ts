@@ -57,11 +57,16 @@ export async function isDockerProviderConfigured(env: Env): Promise<boolean> {
   return (await readDockerProviderConfig(env)) !== undefined;
 }
 
-/** The providers a new session may be created on, in preference order. */
+/**
+ * The providers a new session may be created on, in preference order.
+ *
+ * Docker leads when configured: the operator stood up a host of their own, so
+ * new sessions default there. Cloudflare stays available as the fallback.
+ */
 export async function listSessionProviders(
   env: Env
 ): Promise<SessionProvider[]> {
   return (await isDockerProviderConfigured(env))
-    ? ['cloudflare', 'docker']
+    ? ['docker', 'cloudflare']
     : ['cloudflare'];
 }

@@ -124,9 +124,9 @@ export interface Catalog {
   /**
    * The sandbox hosts a new session may run on, in preference order.
    *
-   * Always contains `cloudflare`; `docker` appears only once an operator has
-   * stored the agent's URL and token, so the composer's picker is hidden until
-   * there is a second thing to pick.
+   * Always contains `cloudflare`. `docker` leads the list once an operator has
+   * stored the agent's URL and token (and is the composer's default); until
+   * then the picker is hidden because there is only one host to pick.
    */
   providers: SessionProvider[];
   /** When the Hub last read the repository list from GitHub. */
@@ -547,7 +547,7 @@ export const createSession = (input: {
   variant?: string;
   prompt: string;
   attachments?: MessageAttachment[];
-  /** Omitted takes the Hub's default, which is `cloudflare`. */
+  /** Omitted takes the Hub's preferred host (`catalog.providers[0]`). */
   provider?: SessionProvider;
 }) => call<SessionView>('/api/sessions', { method: 'POST', body: JSON.stringify(input) });
 

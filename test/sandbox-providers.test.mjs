@@ -48,7 +48,7 @@ test('a configured agent adds docker, defaulting the image', async () => {
     token: 'tok',
     image: 'opencode-session:latest'
   })
-  assert.deepEqual(await listSessionProviders(env), ['cloudflare', 'docker'])
+  assert.deepEqual(await listSessionProviders(env), ['docker', 'cloudflare'])
 })
 
 test('the base URL loses its trailing slashes, the image is taken as stored', async () => {
