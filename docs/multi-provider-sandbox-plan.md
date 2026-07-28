@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`,已部署并对真实容器冒烟通过;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬,存量 copy 不需要——生产 D1 当时 0 条 session。任务 5 已落地:站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B;两处偏离计划见任务 5 正文的"实际落地"。**尚未部署验证**——回归清单在任务 5 验收里,合并前请按它走一遍)。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint 全部通过,**唤醒-从-快照恢复 与 purge 尚未验证**)。其余任务待做。
 
 ## 目标架构(已确认)
 
@@ -79,9 +79,22 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 顺手修掉的既有 bug:`ensureRepoProvisioned` 声明成 `async` 又返回 promise,`await` 会把内层 fetch 一起等掉——注释里说的"与 server start 重叠"从来没生效过。现在 `provisionRepository` 返回 `{fetching?}` 包一层。
 
-**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs` 13 例、`test/runtime-ops.test.mjs` 15 例)✅。**部署后仍需存量回归**:唤醒(台账句柄经 B 恢复)→ 对话 → 空闲睡眠 → mirror 读 → 再唤醒 → checkpoint → publish → 删除。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox\|containerFetch" src/` ✅ 全空。
+**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs` 13 例、`test/runtime-ops.test.mjs` 15 例)✅。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox\|containerFetch" src/` ✅ 全空。部署时线上 0 session,所以"移除 container application 会让在跑容器退役"这个风险没有实际发生。
 
-**部署注意**:这次部署会让在跑的站点容器退役(站点的 container application 被移除),没 checkpoint 的活跃会话会 `lost`。要么先把实例 drain 掉(checkpoint 再 stop),要么挑没人用的时间窗。
+### 线上验证(2026-07-28,站点版本 `3f53a21a`)
+
+证据来自两个 Worker 的 `wrangler tail` 与直接读生产 R2,不依赖站点登录。
+
+**已验证 ✅**
+- **冷启动全链路**:`ensure` → `files/exists`(marker)→ `files/write-batch`(凭证一次批量)→ `exec`(`rm -rf skills && rm -f AGENTS.md` 合成一条)→ `git clone --depth 1`(852ms)→ `opencode/start`(host 日志 "OpenCode server started successfully")。协议每个端点都被真实打到,两个 Worker 零 error。
+- **proxy 路由**:`session/status`、`api/session/active`、`session/:id/message`、`prompt_async` 往返正常。
+- **SSE 多跳直通**:R2 里的 mirror 写着 `reason: "live"`,而 `live` 只有事件订阅从 `/event` 消费到帧后才会写 —— 容器 → Worker B → 站点 DO → 浏览器这条流没被缓冲。站点 tail 里也能看到新的 `Sandbox.streamOpencodeEvents`。(`proxy/event` 不出现在 tail 里是正常的:长连接只在结束时落一行。)
+- **idle-stop + checkpoint,且顺序正确**:mirror `reason: idle-stop` 写于 09:45:53 → marker `write-batch` 09:45:54 → `exec sync` 09:45:55 → `snapshot` Ok 09:45:55 → `stop` Ok 09:45:59。即"OpenCode 还活着时先导完整 transcript,再 checkpoint,最后停"——AGENTS.md 那条不变量成立。
+
+**未验证 ⚠**
+- **唤醒-从-快照恢复**:台账句柄经 `snapshot/restore` 取回。这是本次改动里剩下风险最高的一环(睡眠后的第一次唤醒),需要对已睡眠的 session 发一条消息才能触发。
+- **purge**:`DELETE /sessions/:id` 清容器,以及站点侧删 `backups/` 与 `transcripts/` 前缀的 R2 对象。
+- **publish**:`runtime-ops` 的 git 路径只有单测覆盖,线上没跑过。
 
 ## 任务 6:docker provider 接通(站点侧)
 
