@@ -399,8 +399,7 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
           files: [],
           diff: '',
           diffTruncated: false,
-          unpushedCommits: 0,
-          publishBranch: 'main'
+          unpushedCommits: 0
         }
       );
     }

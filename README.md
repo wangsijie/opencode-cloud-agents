@@ -116,8 +116,8 @@ repository* entry, or omitting `repoKey` from `POST /api/sessions`. Then nothing
 is resolved against the catalog, nothing is cloned or fetched, and the session
 works in `/workspace` itself. It is an ordinary session in every other way
 (same wake, snapshot and idle-stop path), except that there is no checkout to
-diff or push: `GET /api/sessions/:id/changes` and `POST /api/sessions/:id/publish`
-answer 409, and the session panel shows the workspace tab alone.
+diff: `GET /api/sessions/:id/changes` answers 409, and the session panel shows
+the workspace tab alone.
 
 Every entry clones over SSH regardless of where the catalog came from, so the
 SSH key configured on the settings page must be authorized for it on GitHub —
@@ -344,12 +344,8 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/messages \
 # rather than waking it.
 curl http://localhost:8787/api/sessions/<session-id>/changes
 
-# Commit, push, and optionally open a pull request. Never commits onto the
-# repository's default branch: work lands on `opencode/<session-id>`, created on
-# the first publish and reused afterwards, unless `branch` names another one.
-curl -X POST http://localhost:8787/api/sessions/<session-id>/publish \
-  -H 'Content-Type: application/json' \
-  --data '{"message":"Fix the lint errors","pullRequest":{"title":"Fix the lint errors"}}'
+# There is no publish route: pushing is the agent's own job. Ask it in a prompt
+# — it has git, `gh` and the credentials inside the container.
 
 # Rename a session. Does not touch the container.
 curl -X PATCH http://localhost:8787/api/sessions/<session-id> \

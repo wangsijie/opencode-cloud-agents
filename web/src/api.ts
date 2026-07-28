@@ -361,8 +361,6 @@ export interface SessionChanges {
   diff: string;
   diffTruncated: boolean;
   unpushedCommits: number;
-  publishBranch: string;
-  remoteBranch?: string;
 }
 
 /** Mirrors `WorkspaceListing` in the Worker's `src/workspace-files.ts`. */

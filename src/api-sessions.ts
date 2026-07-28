@@ -26,13 +26,6 @@ import { loadModelCatalog, type ModelCatalog } from './model-catalog';
 import { isSafeRepoKey, workspaceDirectory } from './repos';
 import type { QueuePromptInput } from './session-agent';
 import {
-  isSafeBranchName,
-  MAX_COMMIT_MESSAGE_LENGTH,
-  MAX_PULL_REQUEST_BODY_LENGTH,
-  normalizeCommitMessage,
-  type PublishSessionChangesInput
-} from './session-changes';
-import {
   closedSessionEventStream,
   forwardSessionEventStream,
   type SessionStateEvent
@@ -185,9 +178,6 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   }
   if (action === 'abort') {
     return await abortSession(env, record);
-  }
-  if (action === 'publish') {
-    return await publishSession(request, env, record);
   }
   if (action !== 'retry') {
     throw new HttpError(404, 'Session action not found');
@@ -682,93 +672,6 @@ async function patchSession(
   }
   await hubStore.renameSession(env, record.id, trimmed);
   return json(await getSessionView(env, await requireSession(env, record.id)));
-}
-
-/**
- * Commit, push and optionally open a pull request for what the agent changed.
- *
- * Like aborting, this needs a container that is already running: the working
- * tree only exists inside one, and waking a session to publish would mean a cold
- * start between the button and the commit. The session page reads the changes
- * first, so by the time this is reachable the container is up.
- */
-async function publishSession(
-  request: Request,
-  env: Env,
-  record: SessionRecord
-): Promise<Response> {
-  requireRepository(record, 'publish');
-  const input = await readPublishInput(request);
-  const { instance, runtimeEpoch } = await requireAwakeRuntime(
-    env,
-    record,
-    'publish changes from'
-  );
-  const result = await resolveSandbox(env, instance).publishSessionChanges(
-    runtimeEpoch,
-    input
-  );
-  return json(result);
-}
-
-async function readPublishInput(
-  request: Request
-): Promise<PublishSessionChangesInput> {
-  let value: unknown;
-  try {
-    value = await request.json();
-  } catch {
-    throw new HttpError(400, 'Request body must be valid JSON');
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new HttpError(400, 'Request body must be a JSON object');
-  }
-  const { message, branch, pullRequest } = value as {
-    message?: unknown;
-    branch?: unknown;
-    pullRequest?: unknown;
-  };
-  const commitMessage = normalizeCommitMessage(message);
-  if (!commitMessage) {
-    throw new HttpError(
-      400,
-      `A commit message of up to ${MAX_COMMIT_MESSAGE_LENGTH} characters is required`
-    );
-  }
-  if (branch !== undefined && !isSafeBranchName(branch)) {
-    throw new HttpError(400, 'Invalid branch name');
-  }
-  return {
-    message: commitMessage,
-    ...(branch === undefined ? {} : { branch }),
-    ...(pullRequest === undefined
-      ? {}
-      : { pullRequest: readPullRequestInput(pullRequest) })
-  };
-}
-
-function readPullRequestInput(value: unknown): {
-  title: string;
-  body?: string;
-} {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new HttpError(400, 'pullRequest must be a JSON object');
-  }
-  const { title, body } = value as { title?: unknown; body?: unknown };
-  const trimmed = typeof title === 'string' ? title.trim() : '';
-  if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH * 4) {
-    throw new HttpError(400, 'A pull request title is required');
-  }
-  if (
-    body !== undefined &&
-    (typeof body !== 'string' || body.length > MAX_PULL_REQUEST_BODY_LENGTH)
-  ) {
-    throw new HttpError(400, 'Invalid pull request body');
-  }
-  return {
-    title: trimmed,
-    ...(body === undefined ? {} : { body })
-  };
 }
 
 /**

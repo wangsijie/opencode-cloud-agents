@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5、6、7、8 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。任务 8 的 UI 已实现并在 `pnpm dev:mock` 走查通过,顺带补上了设置页此前完全缺失的 Docker 分组——生产的 docker 配置是手写进 D1 的。只剩任务 9 的后半段:让站点真正驱动一次 docker session。
+> 进度:任务 1、2、3、4、4.5、5、6、7、8 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 尚未线上验证;publish 已于 2026-07-28 整个删除,见任务 9**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。任务 8 的 UI 已实现并在 `pnpm dev:mock` 走查通过,顺带补上了设置页此前完全缺失的 Docker 分组——生产的 docker 配置是手写进 D1 的。任务 9 的完整 docker 生命周期已在生产跑通(创建 → 睡眠 → 唤醒,见该节),publish 功能已删除,只剩删除、CF 回归与运维文档。
 
 ## 目标架构(已确认)
 
@@ -69,7 +69,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 **内容**:
 - `src/host-client.ts`:唯一协议客户端,传输可插(service binding stub / fetch+baseUrl+bearer),含 `opencodeServerEnv(config)`、proxy URL 重写(剥 epoch header)。
-- `sandbox.ts` 去 `extends BaseSandbox` 改普通 `DurableObject`(类名/storage 不变):约 20 处 `persistenceState.container?.running` → 本地真值 `host:runtime` + 探针经 `GET /sessions/:id` 校准;5 处 `getTcpPort(4096)` → `host.proxyFetch`;`containerFetch` override 删除,SSE 改新编排方法 `streamOpencodeEvents`(`api-sessions.ts` 改调);凭证注入/provision/changes/publish 方法体抽 `src/runtime-ops.ts`(接 HostClient + 窄接口,批量化:一次 write-batch + 一次脚本 exec);wake/quiesce/purge 改走协议(snapshot 句柄进出台账);gate/epoch/drain 一行不动。
+- `sandbox.ts` 去 `extends BaseSandbox` 改普通 `DurableObject`(类名/storage 不变):约 20 处 `persistenceState.container?.running` → 本地真值 `host:runtime` + 探针经 `GET /sessions/:id` 校准;5 处 `getTcpPort(4096)` → `host.proxyFetch`;`containerFetch` override 删除,SSE 改新编排方法 `streamOpencodeEvents`(`api-sessions.ts` 改调);凭证注入/provision/changes/publish(publish 后来删了)方法体抽 `src/runtime-ops.ts`(接 HostClient + 窄接口,批量化:一次 write-batch + 一次脚本 exec);wake/quiesce/purge 改走协议(snapshot 句柄进出台账);gate/epoch/drain 一行不动。
 - 解析点(`instance-access.ts`、`instance-runtime.ts`、`hub-store.ts`、`hub.ts`、`lifecycle.ts`)改 `env.Sandbox.getByName(id)`——`getSandbox` 内部就是 `idFromName(id.toLowerCase())`,实例 id 本来就全小写,DO 身份不变。
 - 站点 wrangler.jsonc:删 containers,加 `services: [{binding:"SANDBOX_HOST", service:"opencode-sandbox-host"}]`;删 `BACKUP_BUCKET_NAME` / `PERSISTENCE_LOCAL_BUCKET`;`pnpm run types`。
 
@@ -96,7 +96,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 **未验证 ⚠**
 - **purge**:`DELETE /sessions/:id` 清容器,以及站点侧删 `backups/` 与 `transcripts/` 前缀的 R2 对象。
-- **publish**:`runtime-ops` 的 git 路径只有单测覆盖,线上没跑过。
+- ~~**publish**~~:功能已删除(2026-07-28),这条不再需要验证。
 
 ## 任务 6:docker provider 接通(站点侧)✅ 已实现,未部署
 
@@ -133,7 +133,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 **交付/验收**:`test/agent-docker.test.mjs` 17 例(参数构造、容器脚本、截断、文本/二进制判定、listing 解析、inspect 映射、端口解析,外加一条把 `agent/server.mjs` 的路由表和 `protocol/routes.ts` 逐条对齐的防漂移用例)✅;`pnpm test` 243 例 + `tsc` 三个 project 全绿 ✅。`node agent/e2e.mjs` 对本地 Docker(29.5.2)跑通全序列 42/42 ✅:ensure(冷启/幂等/volume 复用)→ exec(退出码、stdout/stderr 分离、超时 408)→ write-batch(utf-8/base64/mode 600)→ read/exists/list(含 404 两种)→ snapshot 501 → opencode/start(首启 + 复用)→ proxy → **SSE 流边开边到** → stop → 停止后 primitive 503 → 重新 ensure(**workspace 从 volume 活下来**)→ delete(容器 + volume 都没了,幂等)。脚本在 `agent/`,不进 `pnpm test`(CI 没有 Docker)。
 **依赖**:任务 1(仅协议)。
 
-**未验证 ⚠**:agent 只被 `agent/e2e.mjs` 驱动过,还没有被站点的 `HostClient` 驱动过——真实的凭证注入、clone、publish、transcript 镜像都留在任务 9。
+**未验证 ⚠**:agent 只被 `agent/e2e.mjs` 驱动过,还没有被站点的 `HostClient` 驱动过——真实的凭证注入、clone、transcript 镜像都留在任务 9。
 
 ## 任务 8:Web UI ✅ 已实现,未部署
 
@@ -151,12 +151,18 @@ mock 侧:catalog 的 `providers` 由 mock settings 派生(和 Hub 一样),所以
 
 ## 任务 9:端到端联调
 
-**内容**:mini 上装 agent(launchd + Caddy + token,步骤见 `agent/README.md`),构建 session 镜像;先在 mini 上跑一遍 `node agent/e2e.mjs` 确认那台机器的 Docker/镜像没问题,再让站点接手;站点配置 docker settings;跑双 provider 完整生命周期(docker:创建 → 发消息 → 空闲睡眠 → mirror 读 transcript → 唤醒 → publish → 删除,mini 上确认容器+volume 已清;CF:回归确认);按 `WakeTimings` 调超时;文档化运维(token 轮换 60s 缓存生效、镜像升级流程)。
+**内容**:mini 上装 agent(launchd + Caddy + token,步骤见 `agent/README.md`),构建 session 镜像;先在 mini 上跑一遍 `node agent/e2e.mjs` 确认那台机器的 Docker/镜像没问题,再让站点接手;站点配置 docker settings;跑双 provider 完整生命周期(docker:创建 → 发消息 → 空闲睡眠 → mirror 读 transcript → 唤醒 → 删除,mini 上确认容器+volume 已清;CF:回归确认);按 `WakeTimings` 调超时;文档化运维(token 轮换 60s 缓存生效、镜像升级流程)。
 **依赖**:全部。
 
 **已完成的前半段(2026-07-28,mini 上)**:agent 装在 `~/srv/opencode-cloud`,launchd user agent 监听 `127.0.0.1:8787`,token 在 `~/.config/opencode-agent/token`,镜像已构建;`node agent/e2e.mjs` 对那台机器的真 Docker(29.5.2)42/42 通过;TLS 前端 `docker-agent-1.cloud-agents.dev` 已就位,从公网驱动完整会话(ensure → opencode/start → proxy → SSE → delete)通过,**SSE 首帧 109ms、连续读 180 秒不断流**(OpenCode 每 10 秒一个 `server.heartbeat`,所以这条流实际上永远不空闲,反代的空闲回收构不成风险);站点的 `docker.agent-url` / `docker.agent-token` 已写入生产 D1。部署改为 CI 驱动,见 `.github/workflows/deploy.yml` 的 `docker-agent` job。
 
-**剩下的**:让站点真正驱动一次 docker session(凭证注入、clone、发消息、睡眠、mirror、唤醒、publish、删除),以及 CF 侧回归。
+**已完成的后半段(2026-07-28,session `inst-298ca973-…`,仓库 logto)**:站点真正驱动了一次完整 docker session。逐条证据:D1 里 `provider = docker`;`opencode-sandbox-host` 全程零日志(docker 不经 Worker B);mirror 写下 `reason: "live"`(SSE 容器 → agent → DO → 浏览器无缓冲);冷启动 create → 首个 prompt 派发 **15 秒**(含 clone);`readSessionChanges` 成功(容器内 git 可用);空闲 10 分钟后 `quiesceAndStopIfIdle`,mirror 在停机前 2 秒写下 `reason: idle-stop`(导出先于停机,不变量成立);唤醒后 mirror 从 6 条长到 9 条、`reason` 回 `live`、**OpenCode session id 不变**(volume 上的 workspace 原样回来),唤醒耗时约 **6 秒**(无快照可恢复)。
+
+**观察到的一处粗糙**:停容器那一刻,浏览器那条 `/api/sessions/:id/events` 以 `Exception Thrown — ReadableStream received over RPC disconnected prematurely` 收尾(随后正常重连)。功能无影响,但还没确认 CF 侧是否同样如此——CF 回归时一并看。
+
+**publish 已删除**:操作员从来不用这条路径(都是让容器里的 opencode 自己 push),它也从来没有 UI。整条路径连同 `resolvePublishBranch` / `isSafeBranchName` / `normalizeCommitMessage` / `parsePullRequestUrl` / `openPullRequest` 一起删掉,`SessionChanges` 去掉 `publishBranch` / `remoteBranch`,`shellQuote` 保留。理由写进 AGENTS.md 的"The Hub does not publish; the agent does"。
+
+**剩下的**:删除(容器 + volume 清干净)、CF 侧回归、按 `WakeTimings` 调超时、运维文档。
 
 两个非显然的坑,都会静默失败:
 - **非交互 ssh 下 `docker build` 拉基础镜像会失败**。Docker Desktop 在 `~/.docker/config.json` 写了 `credsStore: desktop`,而 `docker-credential-desktop` 只在 `/Applications/Docker.app/Contents/Resources/bin`——登录 shell 找得到,`ssh host 'docker build …'` 找不到,报的是一句看不出所以然的 `error getting credentials`。CI 的 build 步骤显式把这个目录加进了 PATH。

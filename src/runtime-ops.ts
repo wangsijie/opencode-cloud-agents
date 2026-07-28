@@ -1,9 +1,9 @@
 /**
  * What the Hub does *inside* a container, expressed against the host protocol.
  *
- * Credential injection, repository provisioning, the working-tree diff and
- * publishing all used to be methods on the Sandbox Durable Object, calling the
- * sandbox SDK's `exec`/`writeFile` on itself. They are functions here instead,
+ * Credential injection, repository provisioning and the working-tree diff all
+ * used to be methods on the Sandbox Durable Object, calling the sandbox SDK's
+ * `exec`/`writeFile` on itself. They are functions here instead,
  * taking the narrow {@link RuntimeHost} slice of
  * [host-client.ts](host-client.ts) — so they work against any host, and so a
  * unit test can hand them a stub instead of a container.
@@ -13,8 +13,8 @@
  * `files/write-batch` and runs every git config in one `sh -lc` script, instead
  * of one call per file and one per command.
  *
- * [session-changes.ts](session-changes.ts) stays the pure half — quoting,
- * parsing, branch rules — and is imported rather than duplicated here.
+ * [session-changes.ts](session-changes.ts) stays the pure half — quoting and
+ * parsing — and is imported rather than duplicated here.
  */
 import type { ExecRequest, ExecResponse, HostFileWrite } from '../protocol/types.ts';
 import {
@@ -29,15 +29,9 @@ import { truncateOutput } from './http.ts';
 import { repoOwnerFromCloneUrl, type RepoDefinition } from './repos.ts';
 import {
   decodeGitStatusOutput,
-  isSafeBranchName,
   limitDiff,
-  normalizeCommitMessage,
   parseGitStatus,
-  parsePullRequestUrl,
-  resolvePublishBranch,
   shellQuote,
-  type PublishSessionChangesInput,
-  type PublishSessionChangesResult,
   type SessionChanges,
   type SessionChangesHead
 } from './session-changes.ts';
@@ -46,7 +40,6 @@ import {
 export const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 export const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 export const GIT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
-export const GH_COMMAND_TIMEOUT_MS = 60 * 1000;
 
 /** The part of a host these operations use: run a command, write files, look. */
 export interface RuntimeHost {
@@ -204,7 +197,7 @@ export async function readSessionChanges(
   host: RuntimeHost,
   checkout: RuntimeCheckout & { repoKey: string }
 ): Promise<SessionChanges> {
-  const { repo, repoKey, directory, sessionId } = checkout;
+  const { repo, repoKey, directory } = checkout;
   const defaultBranch = await resolveDefaultBranch(host, directory, repo);
   const at = shellQuote(directory);
   const [branchOut, headOut, statusOut, diffOut, remoteOut] = await Promise.all([
@@ -232,11 +225,6 @@ export async function readSessionChanges(
           .filter(Boolean)
       : []
   );
-  const publishBranch = resolvePublishBranch({
-    sessionId,
-    currentBranch: branch,
-    defaultBranch
-  });
   return {
     observedAt: new Date().toISOString(),
     repoKey,
@@ -257,150 +245,8 @@ export async function readSessionChanges(
       branch,
       defaultBranch,
       remoteBranches.has(branch)
-    ),
-    publishBranch,
-    ...(remoteBranches.has(publishBranch) ? { remoteBranch: publishBranch } : {})
-  };
-}
-
-/**
- * Commit the working tree onto the session branch, push it, and optionally open
- * a pull request.
- *
- * Every step is sequential and stops at the first failure, so a push that
- * cannot reach the remote leaves a real commit behind rather than an unclear
- * half-state — the commit is in the workspace snapshot and the next publish
- * pushes it. That is also why this is not batched into one script: which step
- * failed is the whole of the error message.
- */
-export async function publishSessionChanges(
-  host: RuntimeHost,
-  checkout: RuntimeCheckout & { repoKey: string },
-  input: PublishSessionChangesInput
-): Promise<PublishSessionChangesResult> {
-  const message = normalizeCommitMessage(input.message);
-  if (!message) {
-    throw new Error('A commit message of up to 4000 characters is required');
-  }
-  if (input.branch !== undefined && !isSafeBranchName(input.branch)) {
-    throw new Error('Invalid branch name');
-  }
-
-  const { repo, directory, sessionId } = checkout;
-  const defaultBranch = await resolveDefaultBranch(host, directory, repo);
-  const at = shellQuote(directory);
-  const current = await runGit(
-    host,
-    directory,
-    'rev-parse --abbrev-ref HEAD',
-    'read the current branch'
-  );
-  const branch = resolvePublishBranch({
-    sessionId,
-    currentBranch: current.trim(),
-    defaultBranch,
-    ...(input.branch === undefined ? {} : { requested: input.branch })
-  });
-  if (branch === defaultBranch) {
-    throw new Error(
-      `Publishing to the default branch (${defaultBranch}) is not supported; use a branch of its own`
-    );
-  }
-
-  if (current.trim() !== branch) {
-    // `switch -c` refuses an existing branch, which is the safe order: a second
-    // publish reuses the branch instead of resetting it to HEAD.
-    const created = await host.exec(
-      `git -C ${at} switch -c ${shellQuote(branch)}`
-    );
-    if (!created.success) {
-      await runGit(
-        host,
-        directory,
-        `switch ${shellQuote(branch)}`,
-        `switch to branch ${branch}`
-      );
-    }
-  }
-
-  await runGit(host, directory, 'add -A', 'stage the working tree');
-  const staged = await host.exec(`git -C ${at} diff --cached --quiet`);
-  // `--quiet` exits non-zero when there *is* a difference, so a successful run
-  // means the tree was already clean.
-  const nothingToCommit = staged.success;
-  if (!nothingToCommit) {
-    await runGit(
-      host,
-      directory,
-      `commit -m ${shellQuote(message)}`,
-      'commit the working tree'
-    );
-  }
-
-  const head = parseHeadLine(
-    await runGit(
-      host,
-      directory,
-      `log -1 --format='%H%x09%s'`,
-      'read the new commit'
     )
-  );
-  await runGit(
-    host,
-    directory,
-    `push --set-upstream origin ${shellQuote(branch)}`,
-    `push ${branch}`
-  );
-
-  return {
-    branch,
-    ...(nothingToCommit ? {} : { commit: head }),
-    pushed: true,
-    nothingToCommit,
-    ...(input.pullRequest
-      ? await openPullRequest(host, directory, {
-          branch,
-          base: defaultBranch,
-          title: input.pullRequest.title,
-          ...(input.pullRequest.body === undefined
-            ? {}
-            : { body: input.pullRequest.body })
-        })
-      : {})
   };
-}
-
-/**
- * Open a pull request for a branch that was just pushed.
- *
- * An existing pull request is not an error: `gh` refuses to create a second one
- * and names the existing URL in the refusal, which is the answer the caller
- * wanted anyway.
- */
-async function openPullRequest(
-  host: RuntimeHost,
-  directory: string,
-  input: { branch: string; base: string; title: string; body?: string }
-): Promise<{ pullRequestUrl?: string }> {
-  const result = await host.exec(
-    [
-      `cd ${shellQuote(directory)} &&`,
-      'gh pr create',
-      `--base ${shellQuote(input.base)}`,
-      `--head ${shellQuote(input.branch)}`,
-      `--title ${shellQuote(input.title)}`,
-      `--body ${shellQuote(input.body ?? '')}`
-    ].join(' '),
-    { timeoutMs: GH_COMMAND_TIMEOUT_MS }
-  );
-  const url =
-    parsePullRequestUrl(result.stdout) ?? parsePullRequestUrl(result.stderr);
-  if (!result.success && !url) {
-    throw new Error(
-      `gh pr create failed: ${truncateOutput(result.stderr || result.stdout)}`
-    );
-  }
-  return url ? { pullRequestUrl: url } : {};
 }
 
 /**

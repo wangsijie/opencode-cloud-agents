@@ -36,7 +36,6 @@ import {
 import {
   injectContainerCredentials,
   provisionRepository,
-  publishSessionChanges as publishChangesOnHost,
   readSessionChanges as readChangesOnHost
 } from './runtime-ops';
 import {
@@ -79,11 +78,7 @@ import {
   WORKSPACE_ROOT,
   type RepoDefinition
 } from './repos';
-import type {
-  PublishSessionChangesInput,
-  PublishSessionChangesResult,
-  SessionChanges
-} from './session-changes';
+import type { SessionChanges } from './session-changes';
 import { frameBelongsToSession, SseFrameBuffer } from './session-events';
 import {
   walkSessionLineage,
@@ -1521,29 +1516,6 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /**
-   * Commit the working tree onto the session branch, push it, and optionally
-   * open a pull request.
-   *
-   * The sequence — and why it stops at the first failure rather than being
-   * batched into one script — is in [runtime-ops.ts](runtime-ops.ts).
-   */
-  async publishSessionChanges(
-    runtimeEpoch: string,
-    input: PublishSessionChangesInput
-  ): Promise<PublishSessionChangesResult> {
-    await this.lifecycleReady;
-    this.assertCurrentRuntime(runtimeEpoch, 'Publishing session changes');
-    this.beginActiveOperation();
-    try {
-      return await this.onHost(async () =>
-        publishChangesOnHost(await this.host(), this.requireRepoCheckout(), input)
-      );
-    } finally {
-      this.finishActiveOperation();
-    }
-  }
-
-  /**
    * The directory this instance works in.
    *
    * It comes from the key alone, so it is always known — and it is the
@@ -1572,9 +1544,9 @@ export class Sandbox extends DurableObject<Env> {
 
   /**
    * The same, for the git operations that only exist because there is a
-   * checkout. A session created without a repository has no branch, no diff and
-   * nothing to publish, and saying so is better than running git in a directory
-   * that is not a repository and relaying its message.
+   * checkout. A session created without a repository has no branch and no
+   * diff, and saying so is better than running git in a directory that is not a
+   * repository and relaying its message.
    */
   private requireRepoCheckout(): {
     repo?: RepoDefinition;

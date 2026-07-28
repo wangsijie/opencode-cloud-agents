@@ -18,7 +18,7 @@ import { defaultVariant, VariantSelect } from './VariantSelect';
  *
  * The repository is optional. Picking "No repository" starts a session that
  * clones nothing and works in `/workspace` itself — a scratch container, with
- * no diff and nothing to publish.
+ * no diff and nothing to push.
  *
  * Creating returns as soon as the Hub has accepted the work — the container
  * wake, the repository clone and the first dispatch all happen afterwards — so

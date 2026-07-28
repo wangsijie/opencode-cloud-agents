@@ -73,8 +73,8 @@ A session may be created with no repository at all (`repoKey` omitted). Nothing
 is resolved, cloned or fetched and the session works in `/workspace` itself.
 `repoKey` is therefore optional on the session, instance and Sandbox records;
 the D1 column is `NOT NULL`, so the row carries `''` and `src/hub-rows.ts` turns
-that back into an absent field. Everything git-shaped — the diff, publishing —
-refuses such a session rather than running git outside a repository.
+that back into an absent field. Everything git-shaped — the diff — refuses such
+a session rather than running git outside a repository.
 
 The catalog is needed only to *start* a session. The chosen entry is copied onto
 the session, instance and Sandbox records, and everything afterwards reads the
@@ -82,12 +82,21 @@ checkout instead — directory from `repoKey`, default branch from `origin/HEAD`
 Do not reintroduce catalog lookups on paths that serve existing sessions: they
 would make a rename, a revoked grant or a GitHub outage break running work.
 
-## Publishing a session's work
+## The Hub does not publish; the agent does
 
-`POST /api/sessions/:id/publish` commits and pushes onto `opencode/<session-id>`
-and never onto the repository's default branch. Anything interpolated into a
-container shell command goes through `shellQuote`/`isSafeBranchName` in
-`src/session-changes.ts`; commit messages and pull request bodies are user text.
+There was a `POST /api/sessions/:id/publish` that committed the working tree
+onto `opencode/<session-id>`, pushed it, and could open a pull request. It is
+gone. The agent in the container has git, `gh` and the credentials, so asking it
+to push is how work actually left a session; the route duplicated that, never
+had a button in the SPA, and nobody ever called it. `GET .../changes` stays —
+reading the diff is the part the UI needs.
+
+The lesson is the one the terminal already taught: a capability with no way to
+reach it does not survive contact with a real workflow. Before rebuilding this,
+build the button first.
+
+Anything interpolated into a container shell command still goes through
+`shellQuote` in `src/session-changes.ts`.
 
 ## Never exclude anything from the workspace snapshot
 

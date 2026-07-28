@@ -139,9 +139,7 @@ export function idleChanges(): SessionChanges {
       CONFLICT_BLOCK
     ].join('\n'),
     diffTruncated: false,
-    unpushedCommits: 2,
-    publishBranch: 'opencode/refactor-auth',
-    remoteBranch: 'origin/opencode/refactor-auth'
+    unpushedCommits: 2
   };
 }
 
@@ -191,7 +189,6 @@ export function workingChanges(): SessionChanges {
       ])
     ].join('\n'),
     diffTruncated: true,
-    unpushedCommits: 0,
-    publishBranch: 'opencode/dark-mode-toggle'
+    unpushedCommits: 0
   };
 }

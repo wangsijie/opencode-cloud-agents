@@ -4,7 +4,6 @@ import test from 'node:test'
 import {
   injectContainerCredentials,
   provisionRepository,
-  publishSessionChanges,
   readSessionChanges,
   resolveDefaultBranch
 } from '../src/runtime-ops.ts'
@@ -180,8 +179,6 @@ test('the working-tree read reports the branch, files and diff', async () => {
   assert.equal(changes.onDefaultBranch, false)
   assert.deepEqual(changes.head, { sha: 'abc123', subject: 'Fix the thing' })
   assert.equal(changes.unpushedCommits, 3)
-  assert.equal(changes.publishBranch, 'opencode/lively-otter')
-  assert.equal(changes.remoteBranch, 'opencode/lively-otter')
   assert.ok(changes.diff.includes('diff --git'))
 })
 
@@ -204,90 +201,4 @@ test('a failed status read is an error, a failed diff is an empty diff', async (
     CHECKOUT
   )
   assert.equal(changes.diff, '')
-})
-
-test('publishing commits, pushes and refuses the default branch', async () => {
-  const host = stubHost({
-    'symbolic-ref': { stdout: 'origin/main\n' },
-    'rev-parse --abbrev-ref HEAD': { stdout: 'main\n' },
-    'diff --cached --quiet': { success: false },
-    'log -1': { stdout: 'def456\tPublish me\n' }
-  })
-  const result = await publishSessionChanges(host, CHECKOUT, {
-    message: 'Publish me'
-  })
-  const commands = host.calls.exec.map((call) => call.command)
-  assert.equal(result.branch, 'opencode/lively-otter')
-  assert.equal(result.nothingToCommit, false)
-  assert.deepEqual(result.commit, { sha: 'def456', subject: 'Publish me' })
-  assert.ok(commands.some((command) => command.includes("switch -c 'opencode/lively-otter'")))
-  assert.ok(commands.some((command) => command.includes("commit -m 'Publish me'")))
-  assert.ok(
-    commands.some((command) =>
-      command.includes("push --set-upstream origin 'opencode/lively-otter'")
-    )
-  )
-})
-
-test('a clean tree pushes without a commit', async () => {
-  const host = stubHost({
-    'symbolic-ref': { stdout: 'origin/main\n' },
-    'rev-parse --abbrev-ref HEAD': { stdout: 'opencode/lively-otter\n' },
-    'diff --cached --quiet': { success: true },
-    'log -1': { stdout: 'aaa\tEarlier\n' }
-  })
-  const result = await publishSessionChanges(host, CHECKOUT, { message: 'Nothing' })
-  assert.equal(result.nothingToCommit, true)
-  assert.equal(result.commit, undefined)
-  assert.equal(
-    host.calls.exec.some((call) => call.command.includes('commit -m')),
-    false
-  )
-})
-
-test('publishing onto the default branch is refused', async () => {
-  const host = stubHost({
-    'symbolic-ref': { stdout: 'origin/main\n' },
-    'rev-parse --abbrev-ref HEAD': { stdout: 'main\n' }
-  })
-  await assert.rejects(
-    publishSessionChanges(host, CHECKOUT, {
-      message: 'no',
-      branch: 'main'
-    }),
-    /default branch/
-  )
-})
-
-test('a push that fails names the step that failed', async () => {
-  const host = stubHost({
-    'symbolic-ref': { stdout: 'origin/main\n' },
-    'rev-parse --abbrev-ref HEAD': { stdout: 'opencode/lively-otter\n' },
-    'diff --cached --quiet': { success: false },
-    'log -1': { stdout: 'aaa\tSubject\n' },
-    push: { success: false, stderr: 'permission denied' }
-  })
-  await assert.rejects(
-    publishSessionChanges(host, CHECKOUT, { message: 'Try' }),
-    /Failed to push opencode\/lively-otter: permission denied/
-  )
-})
-
-test('an existing pull request is reported rather than raised', async () => {
-  const host = stubHost({
-    'symbolic-ref': { stdout: 'origin/main\n' },
-    'rev-parse --abbrev-ref HEAD': { stdout: 'opencode/lively-otter\n' },
-    'diff --cached --quiet': { success: false },
-    'log -1': { stdout: 'aaa\tSubject\n' },
-    'gh pr create': {
-      success: false,
-      stderr:
-        'a pull request for branch already exists: https://github.com/owner/repo/pull/7'
-    }
-  })
-  const result = await publishSessionChanges(host, CHECKOUT, {
-    message: 'Try',
-    pullRequest: { title: 'Try' }
-  })
-  assert.equal(result.pullRequestUrl, 'https://github.com/owner/repo/pull/7')
 })
