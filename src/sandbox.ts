@@ -61,7 +61,7 @@ import {
 import {
   isSafeRepoDefinition,
   repoOwnerFromCloneUrl,
-  repoWorkspaceDirectory,
+  workspaceDirectory,
   WORKSPACE_ROOT,
   type RepoDefinition
 } from './repos';
@@ -214,12 +214,16 @@ interface PersistenceStatus {
 
 interface InstanceIdentity {
   id: string;
-  /** Catalog repository provisioned during wake. */
-  repoKey: string;
+  /**
+   * Catalog repository provisioned during wake. Absent on an instance created
+   * without one: nothing is cloned and the session works in `/workspace`.
+   */
+  repoKey?: string;
   /**
    * The catalog entry, pinned when the instance was created. Absent on
    * instances created before the catalog became dynamic, which resolve their
-   * key against the static list instead.
+   * key against the static list instead — and on ones created with no
+   * repository at all.
    */
   repo?: RepoDefinition;
   state: 'active' | 'deleting';
@@ -393,7 +397,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
   async initializeInstance(
     id: string,
-    repoKey: string,
+    repoKey?: string,
     repo?: RepoDefinition
   ): Promise<void> {
     await this.lifecycleReady;
@@ -419,14 +423,15 @@ export class Sandbox extends BaseSandbox<Env> {
     }
 
     // A new instance must arrive with its whole catalog entry: the clone URL is
-    // needed at wake time, and nothing here can look one up.
-    if (!isSafeRepoDefinition(repo) || repo.repoKey !== repoKey) {
+    // needed at wake time, and nothing here can look one up. No key at all is
+    // the other legal shape — a session with no repository, which clones
+    // nothing and works in the workspace root.
+    if (repoKey !== undefined && (!isSafeRepoDefinition(repo) || repo.repoKey !== repoKey)) {
       throw new Error(`Unknown repository: ${String(repoKey)}`);
     }
     const identity: InstanceIdentity = {
       id,
-      repoKey,
-      repo,
+      ...(repoKey && repo ? { repoKey, repo } : {}),
       state: 'active',
       initializedAt: new Date().toISOString()
     };
@@ -580,6 +585,9 @@ export class Sandbox extends BaseSandbox<Env> {
    * The first wake clones; later wakes see the snapshot-restored checkout and
    * only run a best-effort fetch, never touching the working tree.
    *
+   * An instance created without a repository has nothing to provision: the
+   * workspace root is where its session works, and it is already there.
+   *
    * Returns the fetch when there was already a checkout: it is deliberately not
    * awaited here so the caller can overlap it with starting the server.
    */
@@ -589,6 +597,9 @@ export class Sandbox extends BaseSandbox<Env> {
       return undefined;
     }
     const { repo, repoKey, directory } = this.requireCheckout();
+    if (!repoKey) {
+      return undefined;
+    }
     const checkout = await this.exists(`${directory}/.git`);
     if (checkout.exists) {
       // A restored checkout knows its own remote, so resuming one needs nothing
@@ -1379,7 +1390,7 @@ export class Sandbox extends BaseSandbox<Env> {
     this.assertCurrentRuntime(runtimeEpoch, 'Reading session changes');
     this.beginActiveOperation();
     try {
-      const { repo, repoKey, directory, sessionId } = this.requireCheckout();
+      const { repo, repoKey, directory, sessionId } = this.requireRepoCheckout();
       const defaultBranch = await this.resolveDefaultBranch(directory, repo);
       const at = shellQuote(directory);
       const [branchOut, headOut, statusOut, diffOut, remoteOut] =
@@ -1499,7 +1510,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
     this.beginActiveOperation();
     try {
-      const { repo, directory, sessionId } = this.requireCheckout();
+      const { repo, directory, sessionId } = this.requireRepoCheckout();
       const defaultBranch = await this.resolveDefaultBranch(directory, repo);
       const at = shellQuote(directory);
       const current = await this.runGit(
@@ -1637,29 +1648,49 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   /**
-   * The checkout this instance owns.
+   * The directory this instance works in.
    *
-   * The directory comes from the key alone, so it is always known. The catalog
-   * entry is only pinned on instances created since the catalog became dynamic,
-   * and is only needed for the initial clone — everything afterwards asks the
-   * checkout itself, which is both more available and more truthful.
+   * It comes from the key alone, so it is always known — and it is the
+   * workspace root itself for an instance created without a repository. The
+   * catalog entry is only pinned on instances created since the catalog became
+   * dynamic, and is only needed for the initial clone — everything afterwards
+   * asks the checkout itself, which is both more available and more truthful.
    */
   private requireCheckout(): {
     repo?: RepoDefinition;
-    repoKey: string;
+    repoKey?: string;
     directory: string;
     sessionId: string;
   } {
     const identity = this.instanceIdentity;
     if (!identity) {
-      throw new Error('This instance has no repository checkout');
+      throw new Error('This instance has no workspace');
     }
     return {
       ...(identity.repo ? { repo: identity.repo } : {}),
-      repoKey: identity.repoKey,
-      directory: repoWorkspaceDirectory(identity.repoKey),
+      ...(identity.repoKey ? { repoKey: identity.repoKey } : {}),
+      directory: workspaceDirectory(identity.repoKey),
       sessionId: identity.id
     };
+  }
+
+  /**
+   * The same, for the git operations that only exist because there is a
+   * checkout. A session created without a repository has no branch, no diff and
+   * nothing to publish, and saying so is better than running git in a directory
+   * that is not a repository and relaying its message.
+   */
+  private requireRepoCheckout(): {
+    repo?: RepoDefinition;
+    repoKey: string;
+    directory: string;
+    sessionId: string;
+  } {
+    const checkout = this.requireCheckout();
+    if (!checkout.repoKey) {
+      throw new Error('This session was created without a repository');
+    }
+    return { ...checkout, repoKey: checkout.repoKey };
   }
 
   /**

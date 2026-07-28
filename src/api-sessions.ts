@@ -25,7 +25,7 @@ import {
 } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
 import { loadModelCatalog, type ModelCatalog } from './model-catalog';
-import { isSafeRepoKey, repoWorkspaceDirectory } from './repos';
+import { isSafeRepoKey, workspaceDirectory } from './repos';
 import type { QueuePromptInput } from './session-agent';
 import {
   isSafeBranchName,
@@ -148,6 +148,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     if (request.method !== 'GET') {
       return methodNotAllowed('GET');
     }
+    requireRepository(record, 'changes');
     const { instance, runtimeEpoch } = await requireAwakeRuntime(
       env,
       record,
@@ -205,16 +206,20 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   const catalog = await loadModelCatalog(env);
   const input = await readCreateSessionInput(request, catalog);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
-  // records — so nothing this session does later needs the catalog again.
-  const repo = await hubStore.findCatalogRepo(env, input.repoKey);
-  if (!repo) {
+  // records — so nothing this session does later needs the catalog again. A
+  // request without a repository skips the catalog entirely: there is nothing
+  // to clone and the session works in /workspace.
+  const repo = input.repoKey
+    ? await hubStore.findCatalogRepo(env, input.repoKey)
+    : undefined;
+  if (input.repoKey && !repo) {
     throw new HttpError(400, 'Unknown repository');
   }
 
   const record = await hubStore.createSession(
     env,
     {
-      repo,
+      ...(repo ? { repo } : {}),
       model: input.model,
       ...(input.variant ? { variant: input.variant } : {}),
       title: deriveSessionTitle(input.prompt)
@@ -234,8 +239,8 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     await resolveSessionAgent(env, record.id).startSession({
       sessionId: record.id,
       instanceId: record.instanceId,
-      repoKey: record.repoKey,
-      directory: repoWorkspaceDirectory(repo.repoKey),
+      ...(record.repoKey ? { repoKey: record.repoKey } : {}),
+      directory: workspaceDirectory(repo?.repoKey),
       model: record.model,
       ...(record.variant ? { variant: record.variant } : {}),
       title: record.title,
@@ -268,7 +273,8 @@ async function createSession(request: Request, env: Env): Promise<Response> {
 }
 
 interface CreateSessionInput {
-  repoKey: string;
+  /** Absent when the session is to work in `/workspace` with no checkout. */
+  repoKey?: string;
   model: string;
   variant?: string;
   prompt: string;
@@ -344,8 +350,11 @@ async function readCreateSessionInput(
     prompt?: unknown;
   };
   // Only the shape is checked here; whether the key names a real repository is
-  // the catalog's answer, and the catalog is asynchronous now.
-  if (!isSafeRepoKey(repoKey)) {
+  // the catalog's answer, and the catalog is asynchronous now. Omitting the
+  // field — or sending an empty one, which is what the composer's "No
+  // repository" choice submits — asks for a session with no checkout.
+  const wantsRepo = repoKey !== undefined && repoKey !== null && repoKey !== '';
+  if (wantsRepo && !isSafeRepoKey(repoKey)) {
     throw new HttpError(400, 'Unknown repository');
   }
   const modelRef = model === undefined ? catalog.defaultModelRef : model;
@@ -358,7 +367,7 @@ async function readCreateSessionInput(
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
   return {
-    repoKey,
+    ...(wantsRepo ? { repoKey: repoKey as string } : {}),
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
     prompt: text,
@@ -367,14 +376,16 @@ async function readCreateSessionInput(
 }
 
 /**
- * Where this session's checkout lives inside its container.
+ * Where this session works inside its container.
  *
  * Pinned on the record since the catalog became dynamic, and derivable from the
  * key alone before that — which is what lets a session outlive the catalog
- * entry it was created from, and the catalog being unreachable entirely.
+ * entry it was created from, and the catalog being unreachable entirely. A
+ * session created without a repository has no checkout: it is the workspace
+ * root.
  */
 function sessionDirectory(record: SessionRecord): string {
-  return record.directory ?? repoWorkspaceDirectory(record.repoKey);
+  return record.directory ?? workspaceDirectory(record.repoKey);
 }
 
 /**
@@ -435,6 +446,22 @@ async function readAgentSession(
   return json(lineage);
 }
 
+/**
+ * Refuse the git-shaped reads and writes on a session that has no checkout.
+ *
+ * The container would refuse them too, but it would do it by running git in a
+ * directory that is not a repository — so the answer arrives as git's message
+ * and costs a wake. This is the same answer, before either.
+ */
+function requireRepository(record: SessionRecord, intent: string): void {
+  if (!record.repoKey) {
+    throw new HttpError(
+      409,
+      `This session was created without a repository, so it has no ${intent}`
+    );
+  }
+}
+
 async function requireSession(env: Env, id: string): Promise<SessionRecord> {
   if (!isSafeInstanceId(id)) {
     throw new HttpError(400, 'Invalid session id');
@@ -459,7 +486,7 @@ async function getSessionView(
     : {
         id: record.instanceId,
         name: record.instanceId,
-        repoKey: record.repoKey,
+        ...(record.repoKey ? { repoKey: record.repoKey } : {}),
         lifecycle: 'deleting',
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
@@ -648,6 +675,7 @@ async function publishSession(
   env: Env,
   record: SessionRecord
 ): Promise<Response> {
+  requireRepository(record, 'publish');
   const input = await readPublishInput(request);
   const { instance, runtimeEpoch } = await requireAwakeRuntime(
     env,

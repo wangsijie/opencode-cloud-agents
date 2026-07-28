@@ -9,11 +9,15 @@ import {
 } from './ComposerAttachments';
 import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
 import { ModelSelect } from './ModelSelect';
-import { RepoSelect } from './RepoSelect';
+import { NO_REPO, RepoSelect } from './RepoSelect';
 import { defaultVariant, VariantSelect } from './VariantSelect';
 
 /**
  * Where a session starts: a repository, a model and a prompt.
+ *
+ * The repository is optional. Picking "No repository" starts a session that
+ * clones nothing and works in `/workspace` itself — a scratch container, with
+ * no diff and nothing to publish.
  *
  * Creating returns as soon as the Hub has accepted the work — the container
  * wake, the repository clone and the first dispatch all happen afterwards — so
@@ -37,7 +41,9 @@ export function NewSessionPage({
   onCreated: () => void;
   onMenu: () => void;
 }) {
-  const [repoKey, setRepoKey] = useState('');
+  // `undefined` is "not chosen yet", which the catalog effect below resolves to
+  // the last-used repository; `NO_REPO` is a deliberate choice and sticks.
+  const [repoKey, setRepoKey] = useState<string>();
   const [model, setModel] = useState('');
   const [variant, setVariant] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -55,14 +61,16 @@ export function NewSessionPage({
   // The catalog lands after the first paint, and a refresh can drop the
   // selected repository, so the defaults are applied here rather than in
   // useState. The Hub sorts by last use, so the first entry is the repository
-  // the last session ran in.
+  // the last session ran in. Having chosen no repository is a selection like
+  // any other, so it survives both.
   useEffect(() => {
-    if (!repos || repos.length === 0) {
-      setRepoKey('');
+    if (!repos) {
       return;
     }
     setRepoKey((current) =>
-      repos.some((repo) => repo.repoKey === current) ? current : repos[0].repoKey
+      current === NO_REPO || repos.some((repo) => repo.repoKey === current)
+        ? current
+        : (repos[0]?.repoKey ?? NO_REPO)
     );
   }, [repos]);
 
@@ -109,7 +117,7 @@ export function NewSessionPage({
     const attachments = attachmentsApi.attachments;
     try {
       const created = await createSession({
-        repoKey,
+        ...(repoKey ? { repoKey } : {}),
         model,
         ...(variant ? { variant } : {}),
         prompt: text,
@@ -198,7 +206,7 @@ export function NewSessionPage({
                 <AttachButton api={attachmentsApi} disabled={busy} />
                 <RepoSelect
                   repos={catalog?.repos}
-                  value={repoKey}
+                  value={repoKey ?? NO_REPO}
                   loading={loading}
                   disabled={busy}
                   onChange={setRepoKey}

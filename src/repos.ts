@@ -14,6 +14,10 @@
  * The chosen entry is copied onto the session, instance and Sandbox records when
  * a session is created, so nothing an existing container does depends on the
  * catalog still listing it — or on the catalog being reachable at all.
+ *
+ * A session may also be created without a repository at all. Then there is no
+ * entry to pin, nothing is cloned or fetched, and the session works directly in
+ * `/workspace` — see `workspaceDirectory` below.
  */
 export interface RepoDefinition {
   /** Directory name below /workspace and the stable API identifier. */
@@ -28,13 +32,14 @@ export interface RepoDefinition {
 export const WORKSPACE_ROOT = '/workspace';
 
 /**
- * Absolute container path a repository is provisioned into.
+ * Absolute container path a session works in.
  *
  * Derived from the key alone, so an existing session can always locate its own
- * checkout without asking GitHub anything.
+ * checkout without asking GitHub anything. A session created without a
+ * repository has no checkout to locate: it works in the workspace root itself.
  */
-export function repoWorkspaceDirectory(repoKey: string): string {
-  return `${WORKSPACE_ROOT}/${repoKey}`;
+export function workspaceDirectory(repoKey?: string): string {
+  return repoKey ? `${WORKSPACE_ROOT}/${repoKey}` : WORKSPACE_ROOT;
 }
 
 /**

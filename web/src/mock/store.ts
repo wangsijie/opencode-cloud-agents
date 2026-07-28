@@ -626,7 +626,8 @@ export function startAmbientScripts(): void {
 
 /** Fresh `SessionView` for a just-created session. */
 export function createSessionState(input: {
-  repoKey: string;
+  /** Absent for a session started without one; it works in /workspace. */
+  repoKey?: string;
   model: string;
   variant?: string;
   prompt: string;
@@ -636,7 +637,7 @@ export function createSessionState(input: {
   return {
     view: {
       id,
-      repoKey: input.repoKey,
+      ...(input.repoKey ? { repoKey: input.repoKey } : {}),
       model: input.model,
       ...(input.variant ? { variant: input.variant } : {}),
       title,

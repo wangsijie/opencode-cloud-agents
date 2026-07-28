@@ -15,6 +15,7 @@
  * | ses_deleting  | deleting row styling, sending disabled                        |
  * | ses_cjk       | CJK title and transcript                                      |
  * | ses_long      | long-title truncation + variant pill                          |
+ * | ses_no_repo   | session started with no repository: /workspace, no Changes tab |
  */
 import type { SessionUsage, SessionView } from '../../api';
 import type { MockSessionState } from '../types';
@@ -434,6 +435,42 @@ export function buildFixtureSessions(): MockSessionState[] {
     workspace: repoWorkspace()
   };
 
+  // Started from the composer's "No repository": nothing was cloned, so there
+  // is no repoKey, no diff and no Changes tab — only the workspace.
+  const noRepo: MockSessionState = {
+    ...bareState({
+      id: 'ses_no_repo',
+      directory: '/workspace',
+      model: 'anthropic/claude-opus-4-5',
+      title: 'Sketch a migration plan before touching any repository.',
+      displayTitle: 'Sketch a migration plan',
+      phase: 'working',
+      status: 'idle',
+      lastActivityAt: minutesAgo(6),
+      instance: {
+        id: 'ses_no_repo',
+        lifecycle: 'ready',
+        runtime: {
+          container: 'running',
+          lifecycle: 'idle',
+          idleDeadlineAt: inMinutes(9)
+        }
+      },
+      transcript: {
+        mirroredAt: minutesAgo(6),
+        messageCount: 2,
+        lastMessageAt: minutesAgo(6)
+      }
+    }),
+    transcript: shortTranscript({
+      prompt: 'Draft a plan for splitting the monolith, no code yet.',
+      reply:
+        'Wrote `plan.md` in the workspace: four phases, each behind its own flag.',
+      baseMinutesAgo: 6
+    }),
+    workspace: repoWorkspace()
+  };
+
   return [
     working,
     idle,
@@ -446,6 +483,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     error,
     deleting,
     cjk,
-    long
+    long,
+    noRepo
   ];
 }

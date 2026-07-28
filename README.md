@@ -104,6 +104,14 @@ server starts; later wakes restore the workspace snapshot and run a best-effort
 `git fetch origin` without touching the working tree. A clone failure fails the
 wake; a fetch failure only logs a warning.
 
+A session can also be started with **no repository** — the composer's *No
+repository* entry, or omitting `repoKey` from `POST /api/sessions`. Then nothing
+is resolved against the catalog, nothing is cloned or fetched, and the session
+works in `/workspace` itself. It is an ordinary session in every other way
+(same wake, snapshot and idle-stop path), except that there is no checkout to
+diff or push: `GET /api/sessions/:id/changes` and `POST /api/sessions/:id/publish`
+answer 409, and the session panel shows the workspace tab alone.
+
 Every entry clones over SSH regardless of where the catalog came from, so the
 SSH key configured on the settings page must be authorized for it on GitHub —
 public repositories included. The token decides what is *offered*; the key

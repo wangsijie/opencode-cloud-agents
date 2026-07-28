@@ -15,7 +15,14 @@ import type {
   SessionStatePatch
 } from './sessions.ts';
 
-/** One `sessions` row, as D1 returns it. */
+/**
+ * One `sessions` row, as D1 returns it.
+ *
+ * `repo_key` is `NOT NULL` and empty for a session created without a
+ * repository; the record shapes leave `repoKey` out entirely in that case, so
+ * "no repository" is one absent field everywhere above this projection rather
+ * than an empty string nobody remembers to check.
+ */
 export interface SessionRow {
   id: string;
   name: string;
@@ -43,7 +50,7 @@ export function rowToInstance(row: SessionRow): InstanceRecord {
   return {
     id: row.id,
     name: row.name,
-    repoKey: row.repo_key,
+    ...(row.repo_key ? { repoKey: row.repo_key } : {}),
     ...(repo ? { repo } : {}),
     lifecycle: row.lifecycle as InstanceLifecycle,
     createdAt: row.created_at,
@@ -59,7 +66,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
   return {
     id: row.id,
     instanceId: row.id,
-    repoKey: row.repo_key,
+    ...(row.repo_key ? { repoKey: row.repo_key } : {}),
     ...(row.directory === null ? {} : { directory: row.directory }),
     model: row.model,
     ...(row.variant === null ? {} : { variant: row.variant }),

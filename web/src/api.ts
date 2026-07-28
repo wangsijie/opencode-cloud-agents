@@ -64,7 +64,8 @@ export interface SessionUsage {
 
 export interface SessionView {
   id: string;
-  repoKey: string;
+  /** Absent when the session was created without a repository. */
+  repoKey?: string;
   /** The checkout inside the container; pinned on the record since M6. */
   directory?: string;
   model: string;
@@ -499,7 +500,8 @@ export const fetchCatalog = (refresh = false) =>
   call<Catalog>(refresh ? '/api/catalog?refresh=1' : '/api/catalog');
 
 export const createSession = (input: {
-  repoKey: string;
+  /** Omitted for a session with no repository, which works in /workspace. */
+  repoKey?: string;
   model: string;
   variant?: string;
   prompt: string;

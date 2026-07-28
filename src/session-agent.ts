@@ -109,7 +109,8 @@ interface StoredSessionAgentState {
   schemaVersion: number;
   sessionId: string;
   instanceId: string;
-  repoKey: string;
+  /** Absent when the session was created without a repository. */
+  repoKey?: string;
   /** Absolute container path the OpenCode session is bound to. */
   directory: string;
   model: string;
@@ -134,7 +135,8 @@ interface StoredSessionAgentState {
 export interface StartSessionInput {
   sessionId: string;
   instanceId: string;
-  repoKey: string;
+  /** Absent when the session was created without a repository. */
+  repoKey?: string;
   directory: string;
   model: string;
   variant?: string;
@@ -222,7 +224,10 @@ export class SessionAgent extends DurableObject<Env> {
     }
     // The catalog is dynamic and the caller has already resolved it, so what
     // matters here is that the checkout path is one this Hub could have made.
-    if (!input.directory.startsWith(`${WORKSPACE_ROOT}/`)) {
+    if (
+      input.directory !== WORKSPACE_ROOT &&
+      !input.directory.startsWith(`${WORKSPACE_ROOT}/`)
+    ) {
       throw new Error(`Invalid session directory: ${input.directory}`);
     }
     const catalog = await loadModelCatalog(this.env);
@@ -236,7 +241,7 @@ export class SessionAgent extends DurableObject<Env> {
       schemaVersion: SCHEMA_VERSION,
       sessionId: input.sessionId,
       instanceId: input.instanceId,
-      repoKey: input.repoKey,
+      ...(input.repoKey ? { repoKey: input.repoKey } : {}),
       directory: input.directory,
       model: input.model,
       ...(variant ? { variant } : {}),

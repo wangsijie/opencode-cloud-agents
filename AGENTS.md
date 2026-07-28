@@ -58,6 +58,13 @@ rest. That is why the composer defaults to the repository the last session ran
 in. It is derived, not stored — do not add a parallel "recently used" list, in
 the browser or beside the catalog.
 
+A session may be created with no repository at all (`repoKey` omitted). Nothing
+is resolved, cloned or fetched and the session works in `/workspace` itself.
+`repoKey` is therefore optional on the session, instance and Sandbox records;
+the D1 column is `NOT NULL`, so the row carries `''` and `src/hub-rows.ts` turns
+that back into an absent field. Everything git-shaped — the diff, publishing —
+refuses such a session rather than running git outside a repository.
+
 The catalog is needed only to *start* a session. The chosen entry is copied onto
 the session, instance and Sandbox records, and everything afterwards reads the
 checkout instead — directory from `repoKey`, default branch from `origin/HEAD`.

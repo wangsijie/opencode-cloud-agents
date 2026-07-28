@@ -1,8 +1,8 @@
 /**
  * Session registry types.
  *
- * A session is the product-level unit of work: one repository, one model, one
- * prompt thread. It maps 1:1 onto a logical instance (and therefore onto one
+ * A session is the product-level unit of work: at most one repository, one
+ * model, one prompt thread. It maps 1:1 onto a logical instance (and therefore onto one
  * container that sleeps independently), so the session id *is* the instance id.
  *
  * `phase` describes the dispatch state machine owned by the SessionAgent
@@ -45,7 +45,11 @@ export interface SessionRecord {
   /** Equal to `instanceId`; sessions and instances are created together. */
   id: string;
   instanceId: string;
-  repoKey: string;
+  /**
+   * The repository this session works in. Absent when the session was created
+   * without one: nothing is cloned and the work happens in `/workspace` itself.
+   */
+  repoKey?: string;
   /**
    * Absolute container path of this session's checkout, pinned at creation.
    * Absent on sessions created before the catalog became dynamic.
