@@ -6,7 +6,7 @@ import {
   isSafeRepoDefinition,
   isSafeRepoKey,
   repoOwnerFromCloneUrl,
-  repoWorkspaceDirectory
+  workspaceDirectory
 } from '../src/repos.ts'
 
 function definition(overrides = {}) {
@@ -21,7 +21,12 @@ function definition(overrides = {}) {
 
 test('a checkout path is derivable from the key alone', () => {
   // This is what lets a session outlive the catalog entry it was created from.
-  assert.equal(repoWorkspaceDirectory('logto'), `${WORKSPACE_ROOT}/logto`)
+  assert.equal(workspaceDirectory('logto'), `${WORKSPACE_ROOT}/logto`)
+})
+
+test('a session with no repository works in the workspace root', () => {
+  assert.equal(workspaceDirectory(), WORKSPACE_ROOT)
+  assert.equal(workspaceDirectory(undefined), WORKSPACE_ROOT)
 })
 
 test('repository keys stay usable as a path segment', () => {

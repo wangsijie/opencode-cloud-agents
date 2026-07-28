@@ -3,6 +3,9 @@ import type { RepoOption } from '../api';
 import { RefreshIcon } from './icons';
 import { PillSelect } from './PillSelect';
 
+/** The value that means "start this session without a checkout". */
+export const NO_REPO = '';
+
 /**
  * The repository picker: a searchable menu, with the list's own refresh inside
  * it.
@@ -10,6 +13,10 @@ import { PillSelect } from './PillSelect';
  * Refreshing sits in the panel rather than beside the pill because it is an
  * action on this list, and it is only worth reaching for while looking at the
  * list and failing to find something.
+ *
+ * "No repository" is the first entry rather than a checkbox beside the pill: it
+ * is a choice of what to work on, which is exactly what this menu is for, and
+ * the pill then reads back the answer whichever way it went.
  */
 export function RepoSelect({
   repos,
@@ -31,13 +38,20 @@ export function RepoSelect({
 
   const options = useMemo(
     () =>
-      repos?.map((repo) => ({
-        value: repo.repoKey,
-        label: repo.displayName,
-        // The pill shows the display name, but people type the owner to narrow
-        // to a fork.
-        keywords: repo.repoKey
-      })),
+      repos && [
+        {
+          value: NO_REPO,
+          label: 'No repository',
+          keywords: 'none empty workspace scratch'
+        },
+        ...repos.map((repo) => ({
+          value: repo.repoKey,
+          label: repo.displayName,
+          // The pill shows the display name, but people type the owner to
+          // narrow to a fork.
+          keywords: repo.repoKey
+        }))
+      ],
     [repos]
   );
 

@@ -106,6 +106,17 @@ test('NULL columns become absent optional fields, not undefined values', () => {
   }
 })
 
+test('an empty repo_key is a session with no repository, not an empty key', () => {
+  const row = { ...minimalRow(), repo_key: '', directory: '/workspace' }
+  const instance = rowToInstance(row)
+  assert.ok(!('repoKey' in instance))
+  assert.ok(!('repo' in instance))
+
+  const session = rowToSession(row)
+  assert.ok(!('repoKey' in session))
+  assert.equal(session.directory, '/workspace')
+})
+
 test('repo_json that is broken or unsafe is dropped rather than trusted', () => {
   assert.equal(parseRepoJson(null), undefined)
   assert.equal(parseRepoJson('{not json'), undefined)

@@ -262,7 +262,11 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       return json({ error: 'A prompt is required' }, 400);
     }
     const session = createSessionState({
-      repoKey: typeof body.repoKey === 'string' ? body.repoKey : 'wangsijie/opencode-cloud',
+      // Absent means the composer's "No repository": the session works in
+      // /workspace and has no changes to show.
+      ...(typeof body.repoKey === 'string' && body.repoKey
+        ? { repoKey: body.repoKey }
+        : {}),
       model: typeof body.model === 'string' ? body.model : 'anthropic/claude-opus-4-5',
       ...(typeof body.variant === 'string' ? { variant: body.variant } : {}),
       prompt
@@ -336,6 +340,15 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       return json(view);
     }
     if (sub === 'changes' && method === 'GET') {
+      if (!view.repoKey) {
+        return json(
+          {
+            error:
+              'This session was created without a repository, so it has no changes'
+          },
+          409
+        );
+      }
       if (!attached(view)) {
         return asleep('read the changes of');
       }

@@ -24,6 +24,9 @@ type Tab = 'changes' | 'workspace';
  * Only the chosen tab is mounted: each one talks to the container, and a
  * background tab re-reading a diff on every poll is exactly the cost the
  * collapse is there to avoid.
+ *
+ * A session created without a repository has no diff at all, so it gets the
+ * workspace alone rather than a Changes tab that can only report the absence.
  */
 export function SessionDetails({
   session,
@@ -34,7 +37,8 @@ export function SessionDetails({
   attached: boolean;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>('changes');
+  const hasChanges = Boolean(session.repoKey);
+  const [tab, setTab] = useState<Tab>(hasChanges ? 'changes' : 'workspace');
   const { width, handleProps } = useResizable({
     storageKey: 'hub.asideWidth',
     fallback: 380,
@@ -58,15 +62,17 @@ export function SessionDetails({
       />
       <header className="aside-header">
         <div className="aside-tabs" role="tablist">
-          <button
-            className={`link-button${tab === 'changes' ? ' active' : ''}`}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'changes'}
-            onClick={() => setTab('changes')}
-          >
-            Changes
-          </button>
+          {hasChanges ? (
+            <button
+              className={`link-button${tab === 'changes' ? ' active' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === 'changes'}
+              onClick={() => setTab('changes')}
+            >
+              Changes
+            </button>
+          ) : null}
           <button
             className={`link-button${tab === 'workspace' ? ' active' : ''}`}
             type="button"
@@ -96,7 +102,7 @@ export function SessionDetails({
       */}
 
       <div className="aside-body">
-        {tab === 'changes' ? (
+        {hasChanges && tab === 'changes' ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
             <ChangesPanel sessionId={session.id} attached={attached} />
           </Suspense>

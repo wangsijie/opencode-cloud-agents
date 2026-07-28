@@ -33,7 +33,7 @@ import type { LifecycleCoordinator } from './lifecycle';
 import type { ModelCatalog, ModelSelection } from './model-catalog';
 import {
   isSafeRepoDefinition,
-  repoWorkspaceDirectory,
+  workspaceDirectory,
   type RepoDefinition
 } from './repos';
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
@@ -123,7 +123,8 @@ async function getRow(env: Env, id: string): Promise<SessionRow | null> {
 export async function createSession(
   env: Env,
   input: {
-    repo: RepoDefinition;
+    /** Absent for a session that works in `/workspace` without a checkout. */
+    repo?: RepoDefinition;
     model: string;
     variant?: string;
     title: string;
@@ -132,7 +133,7 @@ export async function createSession(
   // same catalog answers both checks.
   catalog: ModelCatalog
 ): Promise<SessionRecord> {
-  if (!isSafeRepoDefinition(input.repo)) {
+  if (input.repo !== undefined && !isSafeRepoDefinition(input.repo)) {
     throw new Error('Unknown repository');
   }
   if (!catalog.isModelRef(input.model)) {
@@ -144,10 +145,10 @@ export async function createSession(
   const record: SessionRecord = {
     id,
     instanceId: id,
-    repoKey: input.repo.repoKey,
+    ...(input.repo ? { repoKey: input.repo.repoKey } : {}),
     // Pinned with the instance, so nothing this session does later depends on
     // the catalog still containing the repository it started from.
-    directory: repoWorkspaceDirectory(input.repo.repoKey),
+    directory: workspaceDirectory(input.repo?.repoKey),
     model: input.model,
     ...(input.variant ? { variant: input.variant } : {}),
     title: input.title,
@@ -159,7 +160,7 @@ export async function createSession(
 
   const sandbox = resolveSandbox(env, id);
   const lifecycle = resolveLifecycle(env, id);
-  await sandbox.initializeInstance(id, input.repo.repoKey, input.repo);
+  await sandbox.initializeInstance(id, input.repo?.repoKey, input.repo);
   try {
     await lifecycle.initializeInstance({ instanceId: id });
     await env.DB.prepare(
@@ -172,8 +173,10 @@ export async function createSession(
       .bind(
         id,
         randomInstanceName(),
-        input.repo.repoKey,
-        JSON.stringify(input.repo),
+        // The column is NOT NULL, so "no repository" is the empty key; the row
+        // projection turns it back into an absent field.
+        input.repo?.repoKey ?? '',
+        input.repo ? JSON.stringify(input.repo) : null,
         record.directory,
         input.model,
         input.variant ?? null,
@@ -487,6 +490,7 @@ async function repoLastUse(env: Env): Promise<Map<string, string>> {
             MAX(CASE WHEN last_prompt_at > created_at
                      THEN last_prompt_at ELSE created_at END) AS last_used
      FROM sessions
+     WHERE repo_key <> ''
      GROUP BY repo_key`
   ).all<{ repo_key: string; last_used: string }>();
   return new Map(result.results.map((row) => [row.repo_key, row.last_used]));

@@ -21,12 +21,16 @@ export type RuntimeLifecycle =
 export interface InstanceRecord {
   id: string;
   name: string;
-  /** Catalog repository cloned into `/workspace/<repoKey>` on first wake. */
-  repoKey: string;
+  /**
+   * Catalog repository cloned into `/workspace/<repoKey>` on first wake. Absent
+   * on an instance created without a repository, which clones nothing.
+   */
+  repoKey?: string;
   /**
    * The catalog entry this instance was created from, pinned at creation.
    * Absent on instances created before the catalog became dynamic; those fall
-   * back to looking `repoKey` up in the static list.
+   * back to looking `repoKey` up in the static list — and on instances created
+   * without a repository at all.
    */
   repo?: RepoDefinition;
   lifecycle: InstanceLifecycle;

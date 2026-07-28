@@ -330,8 +330,13 @@ export function SessionPage({
               title. They belong to the session rather than to the conversation,
               so they sit in the header and leave the column below to messages.
             */}
-            <span className="tag mono" title={`/workspace/${session.repoKey}`}>
-              {session.repoKey}
+            {/* A session without a repository still works somewhere, and the
+                directory is the honest answer to "on what?". */}
+            <span
+              className="tag mono"
+              title={session.repoKey ? `/workspace/${session.repoKey}` : '/workspace'}
+            >
+              {session.repoKey ?? 'No repository'}
             </span>
             {modelLabel ? (
               <span className="tag mono" title={session.model}>
@@ -354,7 +359,7 @@ export function SessionPage({
           onClick={() => setDetailsOpen((value) => !value)}
           aria-label={detailsOpen ? 'Hide details' : 'Show details'}
           aria-expanded={detailsOpen}
-          title="Changes and workspace"
+          title={session && !session.repoKey ? 'Workspace' : 'Changes and workspace'}
         >
           <PanelIcon />
         </button>
