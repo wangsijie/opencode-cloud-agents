@@ -11,6 +11,7 @@
  * SessionAgent Durable Object also needs, declared structurally so that object
  * never imports the Sandbox class.
  */
+import type { SessionProvider } from '../protocol/types.ts';
 import { HttpError, isSafeInstanceId, json } from './http';
 import { getInstance } from './hub-store';
 import {
@@ -145,9 +146,20 @@ export async function requireReadyInstance(
 
 
 
-export function unknownRuntimeStatus(deleting: boolean): InstanceRuntimeStatus {
+/**
+ * The runtime status for an instance whose Sandbox could not be asked.
+ *
+ * The provider comes from the Hub record rather than being defaulted: it is the
+ * one field here that is still known when the Durable Object is unreachable,
+ * and the UI uses it to decide what a session's storage even means.
+ */
+export function unknownRuntimeStatus(
+  deleting: boolean,
+  provider: SessionProvider = 'cloudflare'
+): InstanceRuntimeStatus {
   return {
     container: 'unknown',
+    provider,
     deleting,
     lifecycle: deleting ? 'stopping' : 'error',
     persistence: {
@@ -165,7 +177,7 @@ export async function getInstanceView(
   if (record.lifecycle !== 'ready') {
     return {
       ...record,
-      runtime: unknownRuntimeStatus(true)
+      runtime: unknownRuntimeStatus(true, record.provider)
     };
   }
   try {
@@ -184,7 +196,7 @@ export async function getInstanceView(
     console.warn(`Failed to read instance ${record.id} status`, error);
     return {
       ...record,
-      runtime: unknownRuntimeStatus(false)
+      runtime: unknownRuntimeStatus(false, record.provider)
     };
   }
 }

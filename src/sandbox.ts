@@ -142,6 +142,17 @@ const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
 const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
 
 /**
+ * How long a resolved sandbox host is reused before its settings are read
+ * again.
+ *
+ * Only the remote host has settings to re-read, and the thing that changes
+ * under a live session is its bearer token. A minute is the bound on how long a
+ * rotated token keeps failing: short enough to be a rollout step rather than an
+ * incident, long enough that a wake's dozen host calls share one D1 read.
+ */
+const HOST_CLIENT_TTL_MS = 60_000;
+
+/**
  * Grace before a stop escalates to SIGKILL.
  *
  * Zero, deliberately. Lifecycle callers have already checkpointed and purge
@@ -358,7 +369,7 @@ export class Sandbox extends DurableObject<Env> {
     running: false,
     observedAt: new Date(0).toISOString()
   };
-  private hostClient: HostClient | undefined;
+  private hostClient: { client: HostClient; expiresAt: number } | undefined;
   private restoreInProgress: Promise<void> | undefined;
   private checkpointInProgress: Promise<StoredBackup> | undefined;
   private purgeInProgress: Promise<PurgeInstanceResult> | undefined;
@@ -441,21 +452,40 @@ export class Sandbox extends DurableObject<Env> {
   /**
    * The host that runs this instance's container.
    *
-   * Resolved from the identity's provider and cached for this object's
-   * lifetime: an instance's provider is chosen when its session is created and
-   * never changes, so re-deriving it per call would only cost settings reads.
+   * An instance's provider is chosen when its session is created and never
+   * changes, but *how* to reach that provider can: the Docker agent's origin,
+   * token and image are operator settings. So the resolved client is cached for
+   * {@link HOST_CLIENT_TTL_MS} rather than for this object's lifetime — long
+   * enough that a wake does not re-read D1 a dozen times, short enough that a
+   * rotated token takes effect without evicting the object.
    */
-  private get host(): HostClient {
+  private async host(): Promise<HostClient> {
     const identity = this.instanceIdentity;
     if (!identity) {
       throw new Error('This instance has no sandbox host');
     }
-    this.hostClient ??= resolveHostClient(
+    const now = Date.now();
+    if (this.hostClient && this.hostClient.expiresAt > now) {
+      return this.hostClient.client;
+    }
+    const client = await resolveHostClient(
       this.persistenceEnv,
       identity.id,
       identity.provider ?? 'cloudflare'
     );
-    return this.hostClient;
+    this.hostClient = { client, expiresAt: now + HOST_CLIENT_TTL_MS };
+    return client;
+  }
+
+  /**
+   * Whether this instance's host can archive the workspace to durable storage.
+   *
+   * The capability is what the checkpoint and restore paths branch on: a host
+   * without snapshots keeps the workspace on storage that outlives the
+   * container, so there is nothing to archive and nothing to put back.
+   */
+  private async hostSupportsSnapshots(): Promise<boolean> {
+    return (await this.host()).supportsSnapshots;
   }
 
   /** Record what this object now believes about the container. */
@@ -488,7 +518,7 @@ export class Sandbox extends DurableObject<Env> {
       return this.hostRuntime;
     }
     try {
-      const state = await this.host.state();
+      const state = await (await this.host()).state();
       await this.setHostRuntime({
         running: state.running,
         ...(state.changedAt ? { changedAt: state.changedAt } : {}),
@@ -644,6 +674,7 @@ export class Sandbox extends DurableObject<Env> {
       // The config lives in D1 now, so read it before touching the container:
       // an unconfigured deployment must fail the wake here, not after a boot.
       const opencodeConfig = await loadOpencodeConfig(this.persistenceEnv);
+      const host = await this.host();
 
       const restoreStartedAt = Date.now();
       await this.ensureWorkspaceRestored();
@@ -657,7 +688,7 @@ export class Sandbox extends DurableObject<Env> {
       // reaches the repository over SSH.
       const credentialsStartedAt = Date.now();
       const operatorEnv = await injectContainerCredentials(
-        this.host,
+        host,
         await loadContainerCredentials(this.persistenceEnv),
         this.requireCheckout()
       );
@@ -665,7 +696,7 @@ export class Sandbox extends DurableObject<Env> {
 
       const provisionStartedAt = Date.now();
       const { fetching } = await provisionRepository(
-        this.host,
+        host,
         this.requireCheckout()
       );
       timings.repoMs = since(provisionStartedAt);
@@ -676,7 +707,7 @@ export class Sandbox extends DurableObject<Env> {
       // fetch — seconds against an SSH remote — off the serial path.
       await Promise.all([
         this.onHost(() =>
-          this.host.opencodeStart({
+          host.opencodeStart({
             port: OPENCODE_PORT,
             directory: WORKSPACE_DIRECTORY,
             // The host never sees the stored config: the site derives the
@@ -825,7 +856,7 @@ export class Sandbox extends DurableObject<Env> {
         // read in one call. After the checkpoint it is unreachable until the
         // next wake, which is exactly what the mirror exists to avoid.
         await this.mirrorTranscript('idle-stop');
-        await this.createCheckpoint('idle-stop');
+        await this.persistWorkspaceBeforeStop('idle-stop');
         await this.setRuntimeGate({
           phase: 'stopping',
           revision,
@@ -918,7 +949,7 @@ export class Sandbox extends DurableObject<Env> {
       }
       if (this.runtimeGate?.phase === 'checkpointing') {
         await this.mirrorTranscript('force-stop');
-        await this.createCheckpoint('idle-stop');
+        await this.persistWorkspaceBeforeStop('idle-stop');
         await this.setRuntimeGate({
           phase: 'stopping',
           revision,
@@ -961,6 +992,14 @@ export class Sandbox extends DurableObject<Env> {
         !this.hostRunning
       ) {
         throw new Error('Manual checkpoint requires the current running epoch');
+      }
+      if (!(await this.hostSupportsSnapshots())) {
+        // Not a failure to report on the persistence record: there is nothing
+        // to check point because nothing is at risk. The workspace is on a
+        // volume that outlives every container this session runs.
+        throw new Error(
+          'This session runs on a sandbox host that keeps the workspace on a persistent volume, so there is nothing to check point'
+        );
       }
       await this.createCheckpoint('manual');
       return this.getPersistenceStatus();
@@ -1018,6 +1057,7 @@ export class Sandbox extends DurableObject<Env> {
       container: containerStatusFromHost(state),
       ...(state.changedAt ? { containerLastChangedAt: state.changedAt } : {}),
       ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode }),
+      provider: this.instanceIdentity?.provider ?? 'cloudflare',
       deleting: this.purgeRequested,
       platformRunning: state.running,
       lifecycle: this.purgeRequested
@@ -1065,7 +1105,7 @@ export class Sandbox extends DurableObject<Env> {
     }
     this.beginActiveOperation();
     try {
-      const response = await this.host.proxyFetch(request);
+      const response = await (await this.host()).proxyFetch(request);
       if (response.status === 503) {
         // The host is telling us the container went away under the gate. Adopt
         // that before answering, so the next caller is not admitted into a
@@ -1391,7 +1431,9 @@ export class Sandbox extends DurableObject<Env> {
       const { directory } = this.requireCheckout();
       const relative = normalizeWorkspaceRelativePath(path);
       const target = resolveWorkspacePath(directory, relative);
-      const listing = await this.onHost(() => this.host.listFiles(target));
+      const listing = await this.onHost(async () =>
+        (await this.host()).listFiles(target)
+      );
       return buildWorkspaceListing(relative, listing.files);
     } finally {
       this.finishActiveOperation();
@@ -1412,8 +1454,8 @@ export class Sandbox extends DurableObject<Env> {
       if (!relative) {
         throw new Error('A file path is required');
       }
-      const result = await this.onHost(() =>
-        this.host.readFile(resolveWorkspacePath(directory, relative))
+      const result = await this.onHost(async () =>
+        (await this.host()).readFile(resolveWorkspacePath(directory, relative))
       );
       return buildWorkspaceFile({
         path: relative,
@@ -1445,8 +1487,8 @@ export class Sandbox extends DurableObject<Env> {
       if (!relative) {
         throw new Error('A file path is required');
       }
-      const result = await this.onHost(() =>
-        this.host.readFile(resolveWorkspacePath(directory, relative))
+      const result = await this.onHost(async () =>
+        (await this.host()).readFile(resolveWorkspacePath(directory, relative))
       );
       return {
         path: relative,
@@ -1470,8 +1512,8 @@ export class Sandbox extends DurableObject<Env> {
     this.assertCurrentRuntime(runtimeEpoch, 'Reading session changes');
     this.beginActiveOperation();
     try {
-      return await this.onHost(() =>
-        readChangesOnHost(this.host, this.requireRepoCheckout())
+      return await this.onHost(async () =>
+        readChangesOnHost(await this.host(), this.requireRepoCheckout())
       );
     } finally {
       this.finishActiveOperation();
@@ -1493,8 +1535,8 @@ export class Sandbox extends DurableObject<Env> {
     this.assertCurrentRuntime(runtimeEpoch, 'Publishing session changes');
     this.beginActiveOperation();
     try {
-      return await this.onHost(() =>
-        publishChangesOnHost(this.host, this.requireRepoCheckout(), input)
+      return await this.onHost(async () =>
+        publishChangesOnHost(await this.host(), this.requireRepoCheckout(), input)
       );
     } finally {
       this.finishActiveOperation();
@@ -1651,7 +1693,7 @@ export class Sandbox extends DurableObject<Env> {
     // through the gate: this read outlives the gate's `running` phase by
     // design, ending when the stream ends rather than when the gate closes to
     // outside requests.
-    const response = await this.host.proxyFetch(
+    const response = await (await this.host()).proxyFetch(
       new Request(url.toString(), {
         headers: { accept: 'text/event-stream' }
       }),
@@ -1891,11 +1933,11 @@ export class Sandbox extends DurableObject<Env> {
   private createTranscriptClient(): OpencodeClient {
     return createOpencodeClient({
       baseUrl: `http://localhost:${OPENCODE_PORT}`,
-      fetch: (input, init) => {
+      fetch: async (input, init) => {
         if (!this.hostRunning) {
           throw new Error('Mirroring requires a running container');
         }
-        return this.host.proxyFetch(new Request(input, init));
+        return (await this.host()).proxyFetch(new Request(input, init));
       }
     });
   }
@@ -2053,7 +2095,7 @@ export class Sandbox extends DurableObject<Env> {
     // been raised, and it must destroy the workspace storage as well as the
     // container — which is `DELETE`, not `stop`. It stays retryable: a host
     // that is still terminating answers `removed: false` rather than blocking.
-    const removed = await this.onHost(() => this.host.remove());
+    const removed = await this.onHost(async () => (await this.host()).remove());
     if (!removed.removed) {
       return { outcome: 'termination_pending' };
     }
@@ -2084,7 +2126,7 @@ export class Sandbox extends DurableObject<Env> {
    */
   private async terminateContainerBounded(): Promise<boolean> {
     try {
-      const result = await this.host.stop(STOP_GRACE_SECONDS);
+      const result = await (await this.host()).stop(STOP_GRACE_SECONDS);
       if (result.stopped) {
         await this.setHostRuntime({ running: false });
       }
@@ -2183,19 +2225,26 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private async restoreWorkspace(): Promise<void> {
+    const host = await this.host();
     // `ensure` is what boots a stopped container, so it comes first: every call
-    // below needs one running, and on this host a container that had to be
-    // started is by definition on an empty workspace.
-    await this.host.ensure();
+    // below needs one running, and on an ephemeral host a container that had to
+    // be started is by definition on an empty workspace.
+    await host.ensure();
     await this.setHostRuntime({ running: true });
 
-    const marker = await this.onHost(() => this.host.exists(PERSISTENCE_MARKER));
+    const marker = await this.onHost(() => host.exists(PERSISTENCE_MARKER));
     if (marker.exists) {
       return;
     }
 
-    const storedBackup =
-      await this.persistenceState.storage.get<StoredBackup>(BACKUP_STORAGE_KEY);
+    // A host without snapshots keeps the workspace on storage that outlives the
+    // container, so there is never anything to put back — and by the same
+    // token, a missing marker is not "the snapshot has not been restored yet"
+    // but "the storage itself was recreated". Reading the ledger would only
+    // find handles that host never wrote.
+    const storedBackup = host.supportsSnapshots
+      ? await this.persistenceState.storage.get<StoredBackup>(BACKUP_STORAGE_KEY)
+      : undefined;
 
     // A fresh writable filesystem with no snapshot to put back means the
     // previous container died without checkpointing. OpenCode keeps its whole
@@ -2209,9 +2258,7 @@ export class Sandbox extends DurableObject<Env> {
 
     try {
       if (storedBackup) {
-        await this.onHost(() =>
-          this.host.snapshotRestore(storedBackup.backup)
-        );
+        await this.onHost(() => host.snapshotRestore(storedBackup.backup));
         await this.persistenceState.storage.put(
           RESTORE_STORAGE_KEY,
           new Date().toISOString()
@@ -2219,9 +2266,11 @@ export class Sandbox extends DurableObject<Env> {
       }
 
       // The marker lives inside /workspace and therefore distinguishes a fresh
-      // image from the currently restored writable filesystem.
+      // image from the currently restored writable filesystem — or, on a
+      // volume-persistent host, a recreated volume from the one this session
+      // has been working in.
       await this.onHost(() =>
-        this.host.writeBatch([
+        host.writeBatch([
           {
             path: PERSISTENCE_MARKER,
             content: JSON.stringify({ readyAt: new Date().toISOString() })
@@ -2267,6 +2316,31 @@ export class Sandbox extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Make the workspace survive the container that is about to stop.
+   *
+   * On a host with snapshots that is a checkpoint: the workspace only exists
+   * inside the container, so it has to be archived or it is gone. On one
+   * without, the workspace is on storage that outlives the container and the
+   * only thing left to do is flush dirty pages onto it — the same `sync` a
+   * checkpoint runs before archiving, without the archive.
+   *
+   * Both paths run after the transcript export, which is the part that must
+   * happen while OpenCode is still answering; this is what makes stopping a
+   * volume-persistent session a degradation of the same sequence rather than a
+   * second one.
+   */
+  private async persistWorkspaceBeforeStop(
+    reason: CheckpointReason
+  ): Promise<void> {
+    if (await this.hostSupportsSnapshots()) {
+      await this.createCheckpoint(reason);
+      return;
+    }
+    const host = await this.host();
+    await this.onHost(() => host.exec('sync'));
+  }
+
   private async createCheckpoint(
     reason: CheckpointReason
   ): Promise<StoredBackup> {
@@ -2287,17 +2361,18 @@ export class Sandbox extends DurableObject<Env> {
   ): Promise<StoredBackup> {
     await this.ensureWorkspaceRestored();
 
+    const host = await this.host();
     const [previous, tracked] = await Promise.all([
       this.persistenceState.storage.get<StoredBackup>(BACKUP_STORAGE_KEY),
       this.getTrackedBackupHandles()
     ]);
 
-    if (!this.host.supportsSnapshots) {
+    if (!host.supportsSnapshots) {
       throw new Error('This sandbox host does not support snapshots');
     }
     try {
       await this.onHost(() =>
-        this.host.writeBatch([
+        host.writeBatch([
           {
             path: PERSISTENCE_MARKER,
             content: JSON.stringify({
@@ -2306,13 +2381,13 @@ export class Sandbox extends DurableObject<Env> {
           }
         ])
       );
-      await this.onHost(() => this.host.exec('sync'));
+      await this.onHost(() => host.exec('sync'));
 
       // The protocol has no excludes and never will: the host is the one that
       // runs mksquashfs, and the rule — with the eight hours of lost
       // conversations behind it — is written down beside it in host/host.ts.
       const { handle } = await this.onHost(() =>
-        this.host.snapshot({
+        host.snapshot({
           dir: WORKSPACE_ROOT,
           name: `opencode:${this.instanceIdentity!.id}:${reason}`,
           ttlSeconds: BACKUP_TTL_SECONDS
@@ -2451,6 +2526,12 @@ export class Sandbox extends DurableObject<Env> {
     if (!owner) {
       return [];
     }
+    // This walks the whole `backups/` prefix looking for objects the ledger
+    // lost track of. A host without snapshots never put one there, so the scan
+    // could only ever return other instances' objects.
+    if (!(await this.hostSupportsSnapshots())) {
+      return [];
+    }
 
     const discovered: StoredSnapshotHandle[] = [];
     let cursor: string | undefined;
@@ -2563,7 +2644,7 @@ export class Sandbox extends DurableObject<Env> {
       );
       url.searchParams.set('roots', 'true');
       url.searchParams.set('limit', '1000');
-      const response = await this.host.proxyFetch(
+      const response = await (await this.host()).proxyFetch(
         new Request(url, { headers: { Accept: 'application/json' } }),
         AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS)
       );
@@ -2619,7 +2700,7 @@ export class Sandbox extends DurableObject<Env> {
         if (!this.hostRunning) {
           throw new Error('Container stopped during activity probe');
         }
-        return this.onHost(() => this.host.proxyFetch(request));
+        return this.onHost(async () => (await this.host()).proxyFetch(request));
       }
     });
     return {

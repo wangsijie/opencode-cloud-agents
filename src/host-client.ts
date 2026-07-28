@@ -41,6 +41,7 @@ import {
   type WriteBatchResponse
 } from '../protocol/types.ts';
 import { RUNTIME_EPOCH_HEADER } from './instance-runtime.ts';
+import { readDockerProviderConfig } from './sandbox-providers.ts';
 
 /**
  * The origin every protocol request is addressed to.
@@ -121,15 +122,23 @@ export class HostClient {
   readonly sessionId: string;
   private readonly transport: HostTransport;
   private readonly capabilities: HostCapabilities;
+  private readonly image: string | undefined;
 
   constructor(
     transport: HostTransport,
     sessionId: string,
-    capabilities: HostCapabilities
+    capabilities: HostCapabilities,
+    /**
+     * The image a boot should use. Only hosts that run an operator-chosen image
+     * have one; the Cloudflare host's is baked into its own deployment and it
+     * ignores the field.
+     */
+    image?: string
   ) {
     this.transport = transport;
     this.sessionId = assertSessionId(sessionId);
     this.capabilities = capabilities;
+    this.image = image;
   }
 
   /** Whether this host can archive the workspace to durable storage. */
@@ -145,7 +154,7 @@ export class HostClient {
     return this.json<EnsureResponse>(
       'POST',
       sessionRoutes.ensure(this.sessionId),
-      body
+      { ...(this.image ? { image: this.image } : {}), ...body }
     );
   }
 
@@ -303,28 +312,62 @@ export class HostClient {
 }
 
 /**
+ * Raised when a session's provider exists but this deployment cannot reach it.
+ *
+ * Distinct from an unknown provider: the sessions are already on record, so an
+ * operator who clears the Docker settings gets a legible failure on every wake
+ * rather than a type error.
+ */
+export class HostUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HostUnavailableError';
+  }
+}
+
+/**
  * The host that runs one session's container.
  *
  * `cloudflare` is the service binding to the sandbox host worker, whose
  * capabilities are fixed by its implementation rather than read at request
  * time: it is deployed from this repository in lockstep with this file, and a
- * `/healthz` round trip on every wake would buy nothing. A remote host is the
- * opposite case and will be resolved from settings when the Docker provider is
- * wired up.
+ * `/healthz` round trip on every wake would buy nothing. `docker` is the
+ * opposite case — an operator-supplied origin, token and image, all of which
+ * can change under a live session — so it is read from settings here, and the
+ * caller is the one that decides how long to hold the result.
+ *
+ * Its capabilities are declared, not probed, for the same reason: `snapshots:
+ * false` is a property of the Docker design (the workspace lives on a named
+ * volume that outlives the container), not something an agent could answer
+ * differently.
  */
-export function resolveHostClient(
+export async function resolveHostClient(
   env: Env,
   sessionId: string,
   provider: SessionProvider = 'cloudflare'
-): HostClient {
-  if (provider !== 'cloudflare') {
-    throw new Error(`Unsupported sandbox provider: ${provider}`);
+): Promise<HostClient> {
+  if (provider === 'cloudflare') {
+    return new HostClient(
+      serviceBindingTransport(env.SANDBOX_HOST),
+      sessionId,
+      { snapshots: true }
+    );
   }
-  return new HostClient(
-    serviceBindingTransport(env.SANDBOX_HOST),
-    sessionId,
-    { snapshots: true }
-  );
+  if (provider === 'docker') {
+    const config = await readDockerProviderConfig(env);
+    if (!config) {
+      throw new HostUnavailableError(
+        'This session runs on the Docker sandbox host, which is not configured. Set the agent URL and token in settings.'
+      );
+    }
+    return new HostClient(
+      remoteTransport(config.baseUrl, config.token),
+      sessionId,
+      { snapshots: false },
+      config.image
+    );
+  }
+  throw new Error(`Unsupported sandbox provider: ${String(provider)}`);
 }
 
 /**

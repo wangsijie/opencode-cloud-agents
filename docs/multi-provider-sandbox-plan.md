@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5、6 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 7 的 agent 才能端到端验证。其余任务待做。
 
 ## 目标架构(已确认)
 
@@ -98,11 +98,21 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 - **purge**:`DELETE /sessions/:id` 清容器,以及站点侧删 `backups/` 与 `transcripts/` 前缀的 R2 对象。
 - **publish**:`runtime-ops` 的 git 路径只有单测覆盖,线上没跑过。
 
-## 任务 6:docker provider 接通(站点侧)
+## 任务 6:docker provider 接通(站点侧)✅ 已实现,未部署
 
 **内容**:`HostClient` 的 docker 传输(settings 读配置,DO 内存缓存 ~60s;agent 503 `CONTAINER_NOT_RUNNING` → 本地真值置 false);编排层能力开关:无 snapshots → wake 跳过 restore(workspace-loss = "volume 被重建")、睡眠跳过 snapshot、checkpoint 降级 `sync` + mirror、purge 走 `DELETE`(容器+volume);`getInstanceRuntimeStatus` 加 `provider`;`api-sessions.ts` 放开 `provider: 'docker'`(未配置 → 400)。
-**交付/验收**:host-client docker 传输测试(stub fetch);能力开关分支测试;typecheck 绿。此时功能可用但无 UI 入口(API 可建 docker session)。
+
+**实际落地**:
+- `resolveHostClient` 改成 **async**(docker 要读 settings),返回 `Promise<HostClient>`;`HostClient` 构造多一个可选 `image`,`ensure()` 自动带上(显式传参优先)。未配置 docker 抛 `HostUnavailableError`——与"未知 provider"分开,因为 session 已在库里,清掉配置后每次唤醒都应该报一条人能看懂的错。
+- `sandbox.ts` 的 `private get host()` 变成 `private async host()`,带 `HOST_CLIENT_TTL_MS = 60_000` 的内存缓存(过期只重读 settings,DO 身份不变);18 处调用点改 `await`。能力判断统一走 `hostSupportsSnapshots()`,**不看 provider 名字**。
+- 三个能力分支:`restoreWorkspace`(无 snapshots 就不读台账,marker 不在 = volume 被重建 → 仍记 `workspaceLost`)、新增 `persistWorkspaceBeforeStop`(有快照就 checkpoint,没有就只 `sync`;两条路径都排在 transcript 导出之后)、`discoverOwnedBackups`(无快照直接返回空,省掉一次全 `backups/` 前缀扫描)。手动 checkpoint 端点对 docker 明确报错而不是静默成功。
+- `unknownRuntimeStatus(deleting, provider)` 多带一个 provider:DO 连不上时,Hub 行里的 provider 是唯一还知道的那个字段。
+- `readCreateSessionInput` 接 `listSessionProviders(env)` 的结果做校验,而不是硬编码 `'cloudflare'`——配置完 docker 不用重新部署就能建 session。
+
+**交付/验收**:`pnpm test` 226 例绿(host-client 新增 5 例:两种 provider 的传输/能力/image、未配置、未知 provider);`pnpm run typecheck` 三个 project 全绿。此时功能可用但无 UI 入口(API 可建 docker session)。**站点侧完成,但在任务 7 的 agent 存在之前无法端到端验证**。
 **依赖**:任务 3、5。
+
+**已知遗留**(不属于本任务,记在这里):删除一个 docker session 要经 `DELETE /sessions/:id`,所以操作员清掉 docker 配置后,存量 docker session 会卡在 `deleting`。任务 9 运维文档里写清"先删 session 再清配置"。
 
 ## 任务 7:Mac mini agent 实现(可与 5、6 并行)
 

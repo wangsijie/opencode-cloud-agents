@@ -6,6 +6,7 @@
  * SessionAgent Durable Object performs the wake and the dispatch.
  */
 import type { SessionProvider } from '../protocol/types.ts';
+import { listSessionProviders } from './sandbox-providers';
 import {
   HttpError,
   decodeRouteSegment,
@@ -205,7 +206,11 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   // The model catalog is stored config now, so it is read once per request
   // that validates against it, not on every poll.
   const catalog = await loadModelCatalog(env);
-  const input = await readCreateSessionInput(request, catalog);
+  // Which hosts this deployment can actually place a session on. Read per
+  // create — the answer is two settings rows and creates are rare — so that
+  // configuring the Docker agent takes effect without a redeploy.
+  const providers = await listSessionProviders(env);
+  const input = await readCreateSessionInput(request, catalog, providers);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
   // records — so nothing this session does later needs the catalog again. A
   // request without a repository skips the catalog entirely: there is nothing
@@ -335,7 +340,8 @@ async function stageAttachments(
 
 async function readCreateSessionInput(
   request: Request,
-  catalog: ModelCatalog
+  catalog: ModelCatalog,
+  providers: SessionProvider[]
 ): Promise<CreateSessionInput> {
   let value: unknown;
   try {
@@ -371,14 +377,18 @@ async function readCreateSessionInput(
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
-  // Only Cloudflare exists as a host today; 'docker' is accepted here once the
-  // Docker transport lands. Omitting the field means Cloudflare.
-  if (provider !== undefined && provider !== null && provider !== 'cloudflare') {
+  // Omitting the field means Cloudflare, which is always available. Docker is
+  // only a legal answer once an operator has stored the agent's address —
+  // otherwise the session would be created and then fail every wake, so it is
+  // refused here where the failure is still the request's.
+  const wantsProvider =
+    provider === undefined || provider === null ? undefined : provider;
+  if (wantsProvider !== undefined && !providers.includes(wantsProvider as SessionProvider)) {
     throw new HttpError(400, 'Unknown provider');
   }
   return {
     ...(wantsRepo ? { repoKey: repoKey as string } : {}),
-    ...(provider === 'cloudflare' ? { provider } : {}),
+    ...(wantsProvider ? { provider: wantsProvider as SessionProvider } : {}),
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
     prompt: text,
@@ -502,7 +512,7 @@ async function getSessionView(
         lifecycle: 'deleting',
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
-        runtime: unknownRuntimeStatus(true)
+        runtime: unknownRuntimeStatus(true, record.provider)
       };
   // A loss the container has already reported outranks whatever the record
   // still says. Reading the list is often the first thing that happens after a

@@ -87,6 +87,13 @@ export interface InstanceRuntimeStatus {
   container: 'running' | 'stopping' | 'stopped' | 'healthy' | 'stopped_with_code' | 'unknown';
   containerLastChangedAt?: string;
   exitCode?: number;
+  /**
+   * Which sandbox host runs this container — the Sandbox's own copy, not the
+   * Hub row's. It is what tells the UI whether the workspace is checkpointed to
+   * R2 or kept on a volume, so it rides out with the persistence record rather
+   * than being joined on later.
+   */
+  provider: SessionProvider;
   platformRunning: boolean;
   deleting: boolean;
   lifecycle: RuntimeLifecycle;

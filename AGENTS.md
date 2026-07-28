@@ -206,6 +206,37 @@ every call that starts or stops a container and calibrated against
 read, and the entry to every stop path. Do not reintroduce a synchronous
 container check; there is nothing local left to ask.
 
+## Snapshots are a host capability, not an assumption
+
+A session's provider is chosen when it is created and stored on both the Hub row
+and the `Sandbox` identity; `resolveHostClient` turns it into a transport — the
+service binding for `cloudflare`, the operator's origin plus bearer for
+`docker`. The client is cached in the object for a minute rather than forever,
+because the Docker agent's URL, token and image are settings that can change
+under a live session.
+
+What the orchestration branches on is `supportsSnapshots`, never the provider
+name. Cloudflare containers are ephemeral, so the workspace only survives as an
+R2 snapshot; the Docker agent keeps it on a named volume that outlives every
+container. That single bit decides three things, and nothing else should have to
+know:
+
+- **Restore.** With snapshots, a missing marker means "put the snapshot back".
+  Without, it means the volume itself was recreated — the same loss, reached a
+  different way, so it still becomes a `workspaceLost` record.
+- **Stop.** `persistWorkspaceBeforeStop` checkpoints where it can and otherwise
+  runs the `sync` alone. Either way the transcript export comes first, while
+  OpenCode is still answering. That ordering is the invariant; the archive is
+  the optional part.
+- **Purge.** `DELETE /sessions/:id` destroys the workspace storage as well as
+  the container, so a volume-persistent session needs no R2 sweep — and the
+  orphan scan, which walks the whole `backups/` prefix, is skipped rather than
+  run against objects that host never wrote.
+
+The Docker host declares `snapshots: false` in `resolveHostClient` rather than
+having it probed from `/healthz`. It is a property of the design, not something
+an agent could answer differently, and a round trip per wake would buy nothing.
+
 ## Two buckets, split by who writes them
 
 `opencode-cloud-sessions` (`SESSION_BUCKET`) is the site's: transcript mirrors

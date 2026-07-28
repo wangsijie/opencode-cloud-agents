@@ -4,9 +4,11 @@ import test from 'node:test'
 import {
   HostClient,
   HostError,
+  HostUnavailableError,
   isContainerNotRunning,
   opencodeServerEnv,
   remoteTransport,
+  resolveHostClient,
   serviceBindingTransport
 } from '../src/host-client.ts'
 
@@ -174,6 +176,103 @@ test('the remote transport bearers every request and never doubles the slash', a
   }
   assert.equal(seen[0].url, 'https://mini.example.com/healthz')
   assert.equal(seen[0].init.headers.get('authorization'), 'Bearer tok-123')
+})
+
+/** Just enough D1 to answer `SELECT value FROM settings WHERE key = ?1`. */
+const envWith = (settings, extra = {}) => ({
+  DB: {
+    prepare: () => ({
+      bind: (key) => ({
+        first: async () =>
+          key in settings ? { value: JSON.stringify(settings[key]) } : null
+      })
+    })
+  },
+  ...extra
+})
+
+const dockerSettings = {
+  'docker.agent-url': 'https://mini.example.com',
+  'docker.agent-token': 'tok-123'
+}
+
+test('a cloudflare session resolves onto the binding, with snapshots', async () => {
+  const seen = []
+  const env = envWith(
+    {},
+    {
+      SANDBOX_HOST: {
+        fetch(url, init) {
+          seen.push({ url, init })
+          return Promise.resolve(jsonOk({ running: true }))
+        }
+      }
+    }
+  )
+  const host = await resolveHostClient(env, 'sess-1', 'cloudflare')
+  assert.equal(host.supportsSnapshots, true)
+  await host.ensure()
+  assert.equal(seen[0].url, 'http://sandbox-host/sessions/sess-1/ensure')
+  // Nothing to name: that host's image ships with its own deployment.
+  assert.deepEqual(JSON.parse(seen[0].init.body), {})
+})
+
+test('a docker session resolves onto the agent, without snapshots', async () => {
+  const seen = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (url, init) => {
+    seen.push({ url, init })
+    return Promise.resolve(jsonOk({ running: true }))
+  }
+  try {
+    const host = await resolveHostClient(
+      envWith({ ...dockerSettings, 'docker.image': 'acme/session:v2' }),
+      'sess-1',
+      'docker'
+    )
+    assert.equal(host.supportsSnapshots, false)
+    await host.ensure()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(seen[0].url, 'https://mini.example.com/sessions/sess-1/ensure')
+  assert.equal(seen[0].init.headers.get('authorization'), 'Bearer tok-123')
+  // The image is the operator's, so every boot has to name it.
+  assert.deepEqual(JSON.parse(seen[0].init.body), { image: 'acme/session:v2' })
+})
+
+test('an explicit image beats the configured default', async () => {
+  const seen = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (url, init) => {
+    seen.push({ url, init })
+    return Promise.resolve(jsonOk({ running: true }))
+  }
+  try {
+    const host = await resolveHostClient(envWith(dockerSettings), 'sess-1', 'docker')
+    await host.ensure({ image: 'acme/session:pinned' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.deepEqual(JSON.parse(seen[0].init.body), {
+    image: 'acme/session:pinned'
+  })
+})
+
+test('a docker session on an unconfigured deployment fails legibly', async () => {
+  const error = await resolveHostClient(envWith({}), 'sess-1', 'docker').then(
+    () => undefined,
+    (thrown) => thrown
+  )
+  assert.ok(error instanceof HostUnavailableError)
+  assert.match(error.message, /not configured/)
+})
+
+test('an unknown provider is not a host at all', async () => {
+  await assert.rejects(
+    () => resolveHostClient(envWith({}), 'sess-1', 'podman'),
+    /Unsupported sandbox provider: podman/
+  )
 })
 
 test('the server environment carries the config and one key per provider', () => {
