@@ -3,6 +3,7 @@ FROM docker.io/cloudflare/sandbox:0.12.3@sha256:23f67e16131b780865a5fa5aa3c86074
 ARG OPENCODE_VERSION=1.18.4
 ARG GH_VERSION=2.93.0
 ARG WRANGLER_VERSION=4.112.0
+ARG PNPM_VERSION=11.17.0
 
 # The base image includes Git but not an SSH client. Ubuntu 22.04's gh package
 # is several years old, so install the current CLI from GitHub's official release.
@@ -29,8 +30,10 @@ RUN case "$(dpkg --print-architecture)" in \
 # upgraded independently of the Sandbox SDK release cadence.
 RUN npm install --global \
         "opencode-ai@${OPENCODE_VERSION}" \
+        "pnpm@${PNPM_VERSION}" \
         "wrangler@${WRANGLER_VERSION}" \
     && test "$(opencode --version)" = "${OPENCODE_VERSION}" \
+    && test "$(pnpm --version)" = "${PNPM_VERSION}" \
     && test "$(wrangler --version)" = "${WRANGLER_VERSION}"
 
 # The host key pin and client config are not secrets; every credential — the
