@@ -7,6 +7,7 @@
  * because they are pure: the store pulls in Durable Object stubs the moment it
  * is imported, and these are what the unit tests need to reach.
  */
+import type { SessionProvider } from '../protocol/types.ts';
 import type { InstanceLifecycle, InstanceRecord } from './instances.ts';
 import { isSafeRepoDefinition, type RepoDefinition } from './repos.ts';
 import type {
@@ -28,6 +29,7 @@ export interface SessionRow {
   name: string;
   repo_key: string;
   repo_json: string | null;
+  provider: string;
   lifecycle: string;
   lifecycle_error: string | null;
   delete_operation_id: string | null;
@@ -52,6 +54,7 @@ export function rowToInstance(row: SessionRow): InstanceRecord {
     name: row.name,
     ...(row.repo_key ? { repoKey: row.repo_key } : {}),
     ...(repo ? { repo } : {}),
+    provider: row.provider as SessionProvider,
     lifecycle: row.lifecycle as InstanceLifecycle,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -68,6 +71,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     instanceId: row.id,
     ...(row.repo_key ? { repoKey: row.repo_key } : {}),
     ...(row.directory === null ? {} : { directory: row.directory }),
+    provider: row.provider as SessionProvider,
     model: row.model,
     ...(row.variant === null ? {} : { variant: row.variant }),
     title: row.title,

@@ -10,6 +10,7 @@
  * (sleeping/waking/busy/idle) stays in `InstanceView.runtime`.
  */
 import type { Message, Part } from '@opencode-ai/sdk/v2';
+import type { SessionProvider } from '../protocol/types.ts';
 import type { InstanceRuntimeStatus, InstanceView } from './instances';
 import {
   isOpencodePlaceholderTitle,
@@ -55,6 +56,11 @@ export interface SessionRecord {
    * Absent on sessions created before the catalog became dynamic.
    */
   directory?: string;
+  /**
+   * Which sandbox host runs this session's container — not to be confused
+   * with the model provider prefix inside `model`.
+   */
+  provider: SessionProvider;
   /** `providerID/modelID` reference from the OpenCode model catalog. */
   model: string;
   /**

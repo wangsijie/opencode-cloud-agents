@@ -14,6 +14,7 @@ import {
 } from '@cloudflare/sandbox';
 import { createOpencodeServer } from '@cloudflare/sandbox/opencode';
 import type { Part } from '@opencode-ai/sdk/v2';
+import type { SessionProvider } from '../protocol/types.ts';
 import {
   createOpencodeClient,
   type OpencodeClient
@@ -228,6 +229,11 @@ interface InstanceIdentity {
    * repository at all.
    */
   repo?: RepoDefinition;
+  /**
+   * Which sandbox host runs this instance's container. Absent on identities
+   * stored before providers existed, which are all Cloudflare.
+   */
+  provider?: SessionProvider;
   state: 'active' | 'deleting';
   initializedAt: string;
 }
@@ -400,7 +406,8 @@ export class Sandbox extends BaseSandbox<Env> {
   async initializeInstance(
     id: string,
     repoKey?: string,
-    repo?: RepoDefinition
+    repo?: RepoDefinition,
+    provider: SessionProvider = 'cloudflare'
   ): Promise<void> {
     await this.lifecycleReady;
     await this.setKeepAlive(true);
@@ -410,7 +417,8 @@ export class Sandbox extends BaseSandbox<Env> {
     if (this.instanceIdentity) {
       if (
         this.instanceIdentity.id !== id ||
-        this.instanceIdentity.repoKey !== repoKey
+        this.instanceIdentity.repoKey !== repoKey ||
+        (this.instanceIdentity.provider ?? 'cloudflare') !== provider
       ) {
         throw new Error('Sandbox identity does not match the Hub record');
       }
@@ -434,6 +442,7 @@ export class Sandbox extends BaseSandbox<Env> {
     const identity: InstanceIdentity = {
       id,
       ...(repoKey && repo ? { repoKey, repo } : {}),
+      provider,
       state: 'active',
       initializedAt: new Date().toISOString()
     };

@@ -15,6 +15,7 @@
  * with the writes that precede them.
  */
 import { getSandbox } from '@cloudflare/sandbox';
+import type { SessionProvider } from '../protocol/types.ts';
 import {
   REPO_CATALOG_TTL_MS,
   fetchGithubRepoCatalog,
@@ -125,6 +126,8 @@ export async function createSession(
   input: {
     /** Absent for a session that works in `/workspace` without a checkout. */
     repo?: RepoDefinition;
+    /** Which sandbox host runs the container; absent means Cloudflare. */
+    provider?: SessionProvider;
     model: string;
     variant?: string;
     title: string;
@@ -142,6 +145,7 @@ export async function createSession(
 
   const now = new Date().toISOString();
   const id = `inst-${crypto.randomUUID()}`;
+  const provider = input.provider ?? 'cloudflare';
   const record: SessionRecord = {
     id,
     instanceId: id,
@@ -149,6 +153,7 @@ export async function createSession(
     // Pinned with the instance, so nothing this session does later depends on
     // the catalog still containing the repository it started from.
     directory: workspaceDirectory(input.repo?.repoKey),
+    provider,
     model: input.model,
     ...(input.variant ? { variant: input.variant } : {}),
     title: input.title,
@@ -160,15 +165,15 @@ export async function createSession(
 
   const sandbox = resolveSandbox(env, id);
   const lifecycle = resolveLifecycle(env, id);
-  await sandbox.initializeInstance(id, input.repo?.repoKey, input.repo);
+  await sandbox.initializeInstance(id, input.repo?.repoKey, input.repo, provider);
   try {
     await lifecycle.initializeInstance({ instanceId: id });
     await env.DB.prepare(
       `INSERT INTO sessions (
-         id, name, repo_key, repo_json, lifecycle,
+         id, name, repo_key, repo_json, provider, lifecycle,
          directory, model, variant, title, phase, pending_prompt_count,
          created_at, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, 'ready', ?5, ?6, ?7, ?8, 'queued', 1, ?9, ?9)`
+       ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7, ?8, ?9, 'queued', 1, ?10, ?10)`
     )
       .bind(
         id,
@@ -177,6 +182,7 @@ export async function createSession(
         // projection turns it back into an absent field.
         input.repo?.repoKey ?? '',
         input.repo ? JSON.stringify(input.repo) : null,
+        provider,
         record.directory,
         input.model,
         input.variant ?? null,

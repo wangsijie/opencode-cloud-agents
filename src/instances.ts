@@ -1,3 +1,4 @@
+import type { SessionProvider } from '../protocol/types.ts';
 import type { RepoDefinition } from './repos';
 import type { TranscriptMirrorSummary } from './transcript-mirror';
 
@@ -33,6 +34,8 @@ export interface InstanceRecord {
    * without a repository at all.
    */
   repo?: RepoDefinition;
+  /** Which sandbox host runs this instance's container. */
+  provider: SessionProvider;
   lifecycle: InstanceLifecycle;
   createdAt: string;
   updatedAt: string;

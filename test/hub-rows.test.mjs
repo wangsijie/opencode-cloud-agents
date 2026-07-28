@@ -21,6 +21,7 @@ function fullRow() {
     name: 'silver-otter-abcd',
     repo_key: 'opencode-cloud',
     repo_json: JSON.stringify(repo),
+    provider: 'docker',
     lifecycle: 'deleting',
     lifecycle_error: 'purge timed out',
     delete_operation_id: 'op-1',
@@ -43,6 +44,7 @@ function minimalRow() {
   return {
     ...fullRow(),
     repo_json: null,
+    provider: 'cloudflare',
     lifecycle: 'ready',
     lifecycle_error: null,
     delete_operation_id: null,
@@ -62,6 +64,7 @@ test('a full row projects into both record shapes', () => {
     name: 'silver-otter-abcd',
     repoKey: 'opencode-cloud',
     repo,
+    provider: 'docker',
     lifecycle: 'deleting',
     createdAt: '2026-07-27T01:00:00.000Z',
     updatedAt: '2026-07-27T04:00:00.000Z',
@@ -73,6 +76,7 @@ test('a full row projects into both record shapes', () => {
     instanceId: 'inst-1111',
     repoKey: 'opencode-cloud',
     directory: '/workspace/opencode-cloud',
+    provider: 'docker',
     model: 'anthropic/claude-fable-5',
     variant: 'high',
     title: 'Named by hand',
@@ -104,6 +108,13 @@ test('NULL columns become absent optional fields, not undefined values', () => {
   ]) {
     assert.ok(!(key in session), `${key} should be absent`)
   }
+})
+
+test('the provider column reaches both record shapes', () => {
+  const instance = rowToInstance(minimalRow())
+  assert.equal(instance.provider, 'cloudflare')
+  const session = rowToSession(minimalRow())
+  assert.equal(session.provider, 'cloudflare')
 })
 
 test('an empty repo_key is a session with no repository, not an empty key', () => {

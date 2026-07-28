@@ -5,6 +5,7 @@
  * a container that sleeps independently. Creating one returns immediately; the
  * SessionAgent Durable Object performs the wake and the dispatch.
  */
+import type { SessionProvider } from '../protocol/types.ts';
 import {
   HttpError,
   decodeRouteSegment,
@@ -224,6 +225,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     env,
     {
       ...(repo ? { repo } : {}),
+      ...(input.provider ? { provider: input.provider } : {}),
       model: input.model,
       ...(input.variant ? { variant: input.variant } : {}),
       title: deriveSessionTitle(input.prompt)
@@ -279,6 +281,8 @@ async function createSession(request: Request, env: Env): Promise<Response> {
 interface CreateSessionInput {
   /** Absent when the session is to work in `/workspace` with no checkout. */
   repoKey?: string;
+  /** Which sandbox host should run the container; absent means Cloudflare. */
+  provider?: SessionProvider;
   model: string;
   variant?: string;
   prompt: string;
@@ -347,11 +351,12 @@ async function readCreateSessionInput(
     throw new HttpError(400, 'Request body must be a JSON object');
   }
 
-  const { repoKey, model, variant, prompt } = value as {
+  const { repoKey, model, variant, prompt, provider } = value as {
     repoKey?: unknown;
     model?: unknown;
     variant?: unknown;
     prompt?: unknown;
+    provider?: unknown;
   };
   // Only the shape is checked here; whether the key names a real repository is
   // the catalog's answer, and the catalog is asynchronous now. Omitting the
@@ -370,8 +375,14 @@ async function readCreateSessionInput(
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
+  // Only Cloudflare exists as a host today; 'docker' is accepted here once the
+  // Docker transport lands. Omitting the field means Cloudflare.
+  if (provider !== undefined && provider !== null && provider !== 'cloudflare') {
+    throw new HttpError(400, 'Unknown provider');
+  }
   return {
     ...(wantsRepo ? { repoKey: repoKey as string } : {}),
+    ...(provider === 'cloudflare' ? { provider } : {}),
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
     prompt: text,
@@ -491,6 +502,7 @@ async function getSessionView(
         id: record.instanceId,
         name: record.instanceId,
         ...(record.repoKey ? { repoKey: record.repoKey } : {}),
+        provider: record.provider,
         lifecycle: 'deleting',
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
