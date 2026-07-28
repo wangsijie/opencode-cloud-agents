@@ -104,7 +104,9 @@ pending and the caller will retry. Workspace storage is untouched.
 ### `DELETE /sessions/:id`
 
 Destroy the container **and** its workspace storage (Docker: `rm -f` the
-container, remove the volume). → `RemoveResponse { removed: true }`.
+container, remove the volume). → `RemoveResponse { removed: true }` — including
+when nothing was there. `removed: false` means termination is still pending and
+the caller retries, as with `stop`.
 
 ### `POST /sessions/:id/exec` — body `ExecRequest`
 

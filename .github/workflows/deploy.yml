@@ -43,6 +43,40 @@ jobs:
       - name: Run typecheck
         run: pnpm run typecheck
 
+      # `opencode-sandbox-host` is a second Worker: the Cloudflare
+      # implementation of the sandbox host protocol, which owns the session
+      # containers. It is deployed before the site because the site's service
+      # binding must never point at a Worker that does not exist yet, and only
+      # when something it is built from changed — its Dockerfile, its own
+      # sources, or the protocol both sides share.
+      - name: Decide whether the sandbox host is affected
+        id: host
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE}" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "Previous commit ${BEFORE} is unavailable; deploying the sandbox host too."
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          changed="$(git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- Dockerfile docker host protocol)"
+          if [ -n "${changed}" ]; then
+            echo "Sandbox host paths changed:"
+            echo "${changed}"
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No sandbox host path changed; leaving it deployed as it is."
+            echo "affected=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Deploy the sandbox host
+        if: steps.host.outputs.affected == 'true'
+        run: pnpm run deploy:host
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # A container rollout replaces every running instance, and an instance
       # that has been busy since it was created has no checkpoint to come back
       # from — its session is lost. The image is rebuilt from the Dockerfile on

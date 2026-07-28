@@ -173,6 +173,21 @@ fixtures compiling — `pnpm typecheck` covers them.
 production.** There is no separate release step and no manual `pnpm run deploy`
 to offer afterwards.
 
+## There are two Workers
+
+The site (`src/`, root `wrangler.jsonc`) and `opencode-sandbox-host`
+(`host/`, `host/wrangler.jsonc`) — the Cloudflare implementation of the
+[Sandbox Host protocol](protocol/PROTOCOL.md), which runs session containers
+and nothing else. The same `Dockerfile` builds both container applications, so
+a change to it, to `docker/` or to `protocol/` deploys the host as well; the
+workflow does that first, because the site's service binding must not point at
+a Worker that is not there yet. `host/` has its own `tsconfig.json` and its own
+generated `worker-configuration.d.ts` — a second Worker is a second `Env`.
+
+Until the site is switched over to the protocol client it still drives its own
+containers through the `Sandbox` Durable Object, and the host Worker is
+deployed but unused.
+
 ## A deploy that touches the image is a deploy that can lose sessions
 
 Deploying a changed container image rolls out: each running instance is sent

@@ -8,14 +8,16 @@
     "build:web": "vite build",
     "deploy": "pnpm run deploy:prepare && WRANGLER_WRITE_LOGS=false wrangler deploy",
     "deploy:prepare": "pnpm run build:web && WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply opencode-cloud --remote",
+    "deploy:host": "WRANGLER_WRITE_LOGS=false wrangler deploy -c host/wrangler.jsonc",
     "deploy:worker-only": "pnpm run deploy:prepare && WRANGLER_WRITE_LOGS=false wrangler deploy --containers-rollout=none",
     "dev": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "dev:mock": "VITE_MOCK=1 vite",
     "dev:web": "vite",
     "start": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev --var PERSISTENCE_LOCAL_BUCKET:true",
     "test": "node --test test/*.test.mjs",
-    "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false",
-    "typecheck": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && tsc --noEmit && tsc --noEmit -p web"
+    "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && pnpm run types:host",
+    "types:host": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false -c host/wrangler.jsonc host/worker-configuration.d.ts",
+    "typecheck": "pnpm run types && tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p host"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.4"
