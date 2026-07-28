@@ -489,6 +489,31 @@ export const readWorkspaceFile = (id: string, path: string) =>
   );
 
 /**
+ * One file's raw bytes, for the files the viewer cannot show inline.
+ *
+ * Not `call`: the answer is an attachment, not JSON. Errors still arrive as
+ * JSON and get the same shape and 401 handling as everything else.
+ */
+export async function downloadWorkspaceFile(
+  id: string,
+  path: string
+): Promise<Blob> {
+  const response = await fetchImpl(
+    `/api/sessions/${encodeURIComponent(id)}/files?download=1&path=${encodeURIComponent(path)}`
+  );
+  if (!response.ok) {
+    if (response.status === 401) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? `Request failed (${response.status})`);
+  }
+  return await response.blob();
+}
+
+/**
  * Repository and model choices.
  *
  * The repository list is GitHub's, stored by the Hub, so this normally costs

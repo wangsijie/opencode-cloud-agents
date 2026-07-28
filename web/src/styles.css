@@ -2316,6 +2316,22 @@ a.part-task:focus-visible {
   font-size: 13px;
 }
 
+/* The download row: alone for a binary file, after the note for a capped one. */
+.file-download {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.file-download .button {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
 /* Source lines are as wide as they are: the viewer scrolls, the page does not.
    It is as tall as the panel for the same reason the listing is. */
 .file-content {

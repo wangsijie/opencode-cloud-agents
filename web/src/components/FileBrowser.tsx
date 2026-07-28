@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  downloadWorkspaceFile,
   listWorkspaceFiles,
   readWorkspaceFile,
   type WorkspaceFile,
   type WorkspaceListing
 } from '../api';
 import { formatBytes } from '../format';
-import { RefreshIcon } from './icons';
+import { DownloadIcon, RefreshIcon } from './icons';
 
 /**
  * The checkout, one directory at a time.
@@ -47,6 +48,27 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
       setError(undefined);
       try {
         setFile(await readWorkspaceFile(sessionId, next));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sessionId]
+  );
+
+  const downloadFile = useCallback(
+    async (target: string) => {
+      setLoading(true);
+      setError(undefined);
+      try {
+        const blob = await downloadWorkspaceFile(sessionId, target);
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = href;
+        anchor.download = target.split('/').pop() ?? target;
+        anchor.click();
+        URL.revokeObjectURL(href);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
@@ -112,26 +134,30 @@ export function FileBrowser({ sessionId }: { sessionId: string }) {
       {file ? (
         <div className="file-view">
           <div className="file-view-header">
-            <span className="mono">{file.path}</span>
+            <span className="mono">{file.path.split('/').pop()}</span>
             <span className="muted">{formatBytes(file.size)}</span>
-            <button
-              className="link-button"
-              type="button"
-              onClick={() => setFile(undefined)}
-            >
-              Back to directory
-            </button>
           </div>
-          {file.binary ? (
-            <p className="muted">Binary file — no preview.</p>
-          ) : (
-            <>
-              <pre className="file-content mono">{file.content}</pre>
-              {file.truncated ? (
-                <p className="muted">File is large; showing the first 256 KB.</p>
-              ) : null}
-            </>
+          {file.binary ? null : (
+            <pre className="file-content mono">{file.content}</pre>
           )}
+          {file.binary || file.truncated ? (
+            <div className="file-download">
+              {file.truncated ? (
+                <span className="muted">
+                  File is large; showing the first 256 KB.
+                </span>
+              ) : null}
+              <button
+                className="button"
+                type="button"
+                disabled={loading}
+                onClick={() => void downloadFile(file.path)}
+              >
+                <DownloadIcon />
+                Download
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : listing ? (
         <ul className="file-list">

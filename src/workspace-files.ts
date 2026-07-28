@@ -184,3 +184,50 @@ export function buildWorkspaceFile(input: {
 function utf8Length(value: string): number {
   return new TextEncoder().encode(value).length;
 }
+
+/**
+ * One file read raw for download.
+ *
+ * The counterpart of {@link WorkspaceFile} for the files that preview refuses:
+ * content is kept whatever its encoding, and nothing is truncated — a download
+ * that silently stops at 256 KB would be a corrupt file, not a shorter one.
+ */
+export interface WorkspaceDownload {
+  path: string;
+  content: string;
+  encoding: 'utf-8' | 'base64';
+}
+
+/** The download's bytes, exactly as the container read them. */
+export function workspaceDownloadBytes(download: WorkspaceDownload): Uint8Array {
+  if (download.encoding === 'base64') {
+    const binary = atob(download.content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+  return new TextEncoder().encode(download.content);
+}
+
+/**
+ * A Content-Disposition value naming the download after the file.
+ *
+ * The quoted filename stays ASCII for old parsers; anything richer also rides
+ * in the RFC 5987 `filename*` form, which browsers prefer when both appear.
+ */
+export function workspaceDownloadDisposition(path: string): string {
+  const name = path.split('/').pop() || 'file';
+  const fallback = name.replace(/[^\x20-\x7e]/g, '_').replace(/[\\"]/g, '_');
+  if (fallback === name) {
+    return `attachment; filename="${fallback}"`;
+  }
+  // encodeURIComponent leaves a few characters that RFC 5987 does not allow
+  // bare in ext-value, so they are percent-escaped by hand.
+  const extended = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${extended}`;
+}

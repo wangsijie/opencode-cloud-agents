@@ -90,6 +90,7 @@ import {
   buildWorkspaceListing,
   normalizeWorkspaceRelativePath,
   resolveWorkspacePath,
+  type WorkspaceDownload,
   type WorkspaceFile,
   type WorkspaceListing
 } from './workspace-files';
@@ -1375,6 +1376,39 @@ export class Sandbox extends BaseSandbox<Env> {
         content: result.content,
         ...(result.encoding ? { encoding: result.encoding } : {})
       });
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Read one file raw, for download rather than preview.
+   *
+   * Same path rules as {@link readWorkspaceFile}, but binary content comes back
+   * instead of being described, and text is not truncated — the caller serves
+   * the bytes as an attachment, not a page.
+   */
+  async downloadWorkspaceFile(
+    runtimeEpoch: string,
+    path: string
+  ): Promise<WorkspaceDownload> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Downloading a workspace file');
+    this.beginActiveOperation();
+    try {
+      const { directory } = this.requireCheckout();
+      const relative = normalizeWorkspaceRelativePath(path);
+      if (!relative) {
+        throw new Error('A file path is required');
+      }
+      const result = await this.withControlPlaneAccess(() =>
+        this.readFile(resolveWorkspacePath(directory, relative))
+      );
+      return {
+        path: relative,
+        content: result.content,
+        encoding: result.encoding === 'base64' ? 'base64' : 'utf-8'
+      };
     } finally {
       this.finishActiveOperation();
     }

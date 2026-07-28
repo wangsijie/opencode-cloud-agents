@@ -8,6 +8,8 @@ import {
   normalizeWorkspaceRelativePath,
   parentPath,
   resolveWorkspacePath,
+  workspaceDownloadBytes,
+  workspaceDownloadDisposition,
 } from '../src/workspace-files.ts'
 
 test('normalizes browser-supplied paths to a relative form', () => {
@@ -86,6 +88,35 @@ test('describes binary files instead of rendering them', () => {
   assert.equal(file.binary, true)
   assert.equal(file.content, undefined)
   assert.equal(file.size, 6)
+})
+
+test('recovers download bytes from either encoding', () => {
+  const binary = workspaceDownloadBytes({
+    path: 'logo.png',
+    content: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+    encoding: 'base64',
+  })
+  assert.deepEqual([...binary], [0x89, 0x50, 0x4e, 0x47])
+
+  const text = workspaceDownloadBytes({ path: 'a.txt', content: 'héllo', encoding: 'utf-8' })
+  assert.equal(Buffer.from(text).toString('utf-8'), 'héllo')
+})
+
+test('names downloads after the file, with an escaped form when needed', () => {
+  assert.equal(
+    workspaceDownloadDisposition('src/logo.png'),
+    'attachment; filename="logo.png"',
+  )
+  // Non-ASCII names keep an ASCII fallback and ride whole in filename*.
+  assert.equal(
+    workspaceDownloadDisposition('docs/说明.pdf'),
+    `attachment; filename="__.pdf"; filename*=UTF-8''%E8%AF%B4%E6%98%8E.pdf`,
+  )
+  // A quote would end the quoted-string early, so it is replaced.
+  assert.equal(
+    workspaceDownloadDisposition('a"b.txt'),
+    `attachment; filename="a_b.txt"; filename*=UTF-8''a%22b.txt`,
+  )
 })
 
 test('caps text files and reports the cut', () => {

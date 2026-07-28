@@ -57,6 +57,10 @@ import {
   type SessionView
 } from './sessions';
 import { getTranscriptMirror } from './transcript-mirror';
+import {
+  workspaceDownloadBytes,
+  workspaceDownloadDisposition
+} from './workspace-files';
 
 /**
  * Session API.
@@ -769,6 +773,18 @@ async function readSessionFiles(
   const sandbox = resolveSandbox(env, instance);
   const path = url.searchParams.get('path') ?? '';
   try {
+    if (url.searchParams.get('download') === '1') {
+      const download = await sandbox.downloadWorkspaceFile(runtimeEpoch, path);
+      // Always an opaque attachment: serving repository content as a renderable
+      // type from the Hub's own origin would hand it the admin cookie's scope.
+      return new Response(workspaceDownloadBytes(download), {
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-disposition': workspaceDownloadDisposition(download.path),
+          'x-content-type-options': 'nosniff'
+        }
+      });
+    }
     return json(
       url.searchParams.get('read') === '1'
         ? await sandbox.readWorkspaceFile(runtimeEpoch, path)

@@ -129,6 +129,21 @@ function readFile(root: MockWorkspaceDir, path: string): Response {
   });
 }
 
+/** Binary fixtures carry no bytes, so downloads answer with placeholder text. */
+function downloadFile(root: MockWorkspaceDir, path: string): Response {
+  const node = resolveNode(root, path);
+  if (!node || node.type === 'dir') {
+    return notFound('No such file');
+  }
+  const name = path.split('/').pop() ?? 'file';
+  return new Response(node.content ?? `mock bytes of ${path}\n`, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-disposition': `attachment; filename="${name}"`
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 
@@ -376,6 +391,9 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         return notFound('No workspace fixture for this session');
       }
       const filePath = url.searchParams.get('path') ?? '';
+      if (url.searchParams.get('download') === '1') {
+        return downloadFile(workspace, filePath);
+      }
       return url.searchParams.get('read') === '1'
         ? readFile(workspace, filePath)
         : listDirectory(workspace, filePath);
