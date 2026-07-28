@@ -843,6 +843,7 @@ body.resizing .resize-handle {
 textarea,
 select,
 input[type='text'],
+input[type='number'],
 input[type='password'] {
   width: 100%;
   border: 1px solid var(--border-strong);
@@ -1346,6 +1347,7 @@ summary:focus-visible {
   only because iOS zooms into anything smaller.
 */
 .settings-page input[type='text'],
+.settings-page input[type='number'],
 .settings-page input[type='password'],
 .settings-page select,
 .settings-page textarea {
