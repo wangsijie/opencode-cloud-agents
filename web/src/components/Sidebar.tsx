@@ -250,6 +250,12 @@ function Row({
           <i className="row-dot lost" aria-hidden="true" />
         ) : null}
         <span className="row-title">{session.displayTitle}</span>
+        {/* Only the odd one out is named: with Docker unconfigured every
+            session is a Cloudflare one, and a badge on all of them says
+            nothing. */}
+        {session.provider === 'docker' ? (
+          <span className="row-tag">docker</span>
+        ) : null}
       </a>
       <button
         className="row-menu-button"

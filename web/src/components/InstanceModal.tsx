@@ -8,6 +8,7 @@ import {
   STATUS_LABELS
 } from '../format';
 import { CloseIcon } from './icons';
+import { PROVIDER_LABELS } from './ProviderSelect';
 
 /**
  * What the container has been doing, behind the status badge.
@@ -41,6 +42,11 @@ export function InstanceModal({
       ? session.transcript.usage
       : undefined;
   const wake = session.instance.runtime.lastWake;
+  // The one thing a reader has to know about the host: what happens to the
+  // workspace when the container stops. Cloudflare containers are ephemeral and
+  // the workspace survives as a snapshot taken at idle; the Docker agent keeps
+  // it on a named volume that outlives every container it runs.
+  const snapshots = session.provider !== 'docker';
 
   return (
     <div className="modal-layer">
@@ -76,6 +82,14 @@ export function InstanceModal({
             <dd className="mono">{session.instance.runtime.lifecycle}</dd>
             <dt>Shuts down</dt>
             <dd>{formatIdleShutdown(session)}</dd>
+            <dt>Sandbox</dt>
+            <dd>{PROVIDER_LABELS[session.provider] ?? session.provider}</dd>
+            <dt>Workspace</dt>
+            <dd>
+              {snapshots
+                ? 'Snapshotted when the container sleeps'
+                : 'Kept on a named volume between containers'}
+            </dd>
           </dl>
 
           {/*
@@ -118,7 +132,7 @@ export function InstanceModal({
                 <dl className="meta-list">
                   {wake.restoreMs !== undefined ? (
                     <>
-                      <dt>Container + snapshot</dt>
+                      <dt>{snapshots ? 'Container + snapshot' : 'Container start'}</dt>
                       <dd className="mono">{formatDuration(wake.restoreMs)}</dd>
                     </>
                   ) : null}

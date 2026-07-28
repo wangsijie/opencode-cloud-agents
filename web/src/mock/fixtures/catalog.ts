@@ -45,6 +45,9 @@ export function buildCatalog(): Catalog {
         modelName: 'Gemini 3 Pro Preview (extremely long model name for truncation testing)'
       }
     ],
+    // Both hosts, so the composer's provider picker is visible in the mock. A
+    // real deployment lists Docker only once its agent is configured.
+    providers: ['cloudflare', 'docker'],
     defaultSelection: {
       model: 'anthropic/claude-opus-4-5',
       variant: 'medium'

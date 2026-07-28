@@ -1,5 +1,5 @@
 /**
- * SettingView fixtures — all seven descriptors from the Worker's
+ * SettingView fixtures — every descriptor from the Worker's
  * `src/settings-schema.ts`, mixing configured and unset states. Exposure rules
  * are mirrored: secrets carry no value, partial settings carry the public half.
  */
@@ -125,6 +125,33 @@ export function buildSettings(): SettingView[] {
           { owner: 'silverhand-io', name: 'Sijie @ Silverhand', email: 'sijie@silverhand.io' }
         ]
       }
+    },
+    // Configured, which is what puts Docker in the mock catalog's providers
+    // and the composer's picker beside it.
+    {
+      key: 'docker.agent-url',
+      group: 'docker',
+      label: 'Docker agent URL',
+      required: false,
+      configured: true,
+      updatedAt: daysAgo(1),
+      value: 'https://docker-agent-1.cloud-agents.dev'
+    },
+    {
+      key: 'docker.agent-token',
+      group: 'docker',
+      label: 'Docker agent token',
+      required: false,
+      configured: true,
+      updatedAt: daysAgo(1)
+      // Secret exposure: no value, ever.
+    },
+    {
+      key: 'docker.image',
+      group: 'docker',
+      label: 'Docker session image',
+      required: false,
+      configured: false
     }
   ];
 }

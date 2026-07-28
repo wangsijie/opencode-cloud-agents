@@ -48,6 +48,7 @@ const SECTIONS: Section[] = [
   { id: 'skills', label: 'Skills', key: 'opencode.skills' },
   { id: 'agents-md', label: 'AGENTS.md', key: 'opencode.agents-md' },
   { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
+  { id: 'docker', label: 'Docker host', key: 'docker.agent-url' },
   { id: 'password', label: 'Admin password' }
 ];
 
@@ -228,6 +229,13 @@ export function SettingsPage({
                 ) : active === 'git-identity' ? (
                   <GitIdentitySection
                     setting={byKey.get('git.identity')}
+                    onSaved={saved}
+                  />
+                ) : active === 'docker' ? (
+                  <DockerSection
+                    url={byKey.get('docker.agent-url')}
+                    token={byKey.get('docker.agent-token')}
+                    image={byKey.get('docker.image')}
                     onSaved={saved}
                   />
                 ) : (
@@ -1172,6 +1180,129 @@ function GitIdentitySection({
         >
           Save identity
         </button>
+      </div>
+      <SectionStatus error={error} notice={notice} />
+    </section>
+  );
+}
+
+/** The image the agent falls back to when `docker.image` is unset. */
+const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
+
+/**
+ * The second sandbox host, which is opt-in.
+ *
+ * Three settings rather than one, because the token is a secret and never reads
+ * back, so it cannot share an object with the two that do. Storing the URL and
+ * the token is what puts Docker in the composer's picker — the image is
+ * optional and only names something other than the default.
+ *
+ * Clearing this while Docker sessions exist strands them: deleting one goes out
+ * over the agent, and there would be no agent to ask. Delete the sessions
+ * first, which is what the warning below says.
+ */
+function DockerSection({
+  url,
+  token,
+  image,
+  onSaved
+}: {
+  url?: SettingView;
+  token?: SettingView;
+  image?: SettingView;
+  onSaved: () => void;
+}) {
+  const storedUrl = typeof url?.value === 'string' ? url.value : '';
+  const storedImage = typeof image?.value === 'string' ? image.value : '';
+  const [urlText, setUrlText] = useState<string>();
+  const [tokenText, setTokenText] = useState('');
+  const [imageText, setImageText] = useState<string>();
+  const { busy, error, notice, run } = useSave();
+
+  const currentUrl = urlText ?? storedUrl;
+  const currentImage = imageText ?? storedImage;
+  const configured = Boolean(url?.configured && token?.configured);
+
+  return (
+    <section className="settings-section">
+      <h2>Docker host</h2>
+      <p className="muted">
+        A machine of your own running the sandbox agent, offered beside
+        Cloudflare when a session is created. Its workspaces live on named
+        volumes instead of snapshots, so a container can be replaced without
+        losing the checkout.
+      </p>
+      <input
+        type="text"
+        placeholder="https://agent.example.com"
+        aria-label="Docker agent URL"
+        value={currentUrl}
+        disabled={busy}
+        onChange={(event) => setUrlText(event.target.value)}
+      />
+      <input
+        type="password"
+        autoComplete="off"
+        placeholder={configuredHint(token)}
+        aria-label="Docker agent token"
+        value={tokenText}
+        disabled={busy}
+        onChange={(event) => setTokenText(event.target.value)}
+      />
+      <input
+        type="text"
+        placeholder={`Session image (default ${DEFAULT_DOCKER_IMAGE})`}
+        aria-label="Docker session image"
+        value={currentImage}
+        disabled={busy}
+        onChange={(event) => setImageText(event.target.value)}
+      />
+      <p className="muted">
+        {configured
+          ? 'Configured. Clearing the URL turns the provider off — delete any Docker sessions first, or they cannot be deleted at all.'
+          : 'Both the URL and a token are needed before Docker is offered.'}
+      </p>
+      <div className="actions">
+        <button
+          className="button primary"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              const nextUrl = currentUrl.trim();
+              const nextImage = currentImage.trim();
+              // A cleared field is `null`, which is how an optional setting is
+              // removed; the token is the exception — it never reads back, so
+              // an empty box means "leave it alone" rather than "clear it".
+              await saveSetting('docker.agent-url', nextUrl || null);
+              if (tokenText.trim()) {
+                await saveSetting('docker.agent-token', tokenText.trim());
+              }
+              await saveSetting('docker.image', nextImage || null);
+              setTokenText('');
+              setUrlText(undefined);
+              setImageText(undefined);
+              onSaved();
+              return undefined;
+            })
+          }
+        >
+          Save Docker host
+        </button>
+        {token?.configured ? (
+          <button
+            className="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await saveSetting('docker.agent-token', null);
+                onSaved();
+                return 'Token cleared';
+              })
+            }
+          >
+            Clear token
+          </button>
+        ) : null}
       </div>
       <SectionStatus error={error} notice={notice} />
     </section>

@@ -7,7 +7,11 @@ its Sandbox runtime uses is **not in the code**: it lives in the D1 `settings`
 table and is edited on the Hub's `/settings` page.
 
 - `src/settings.ts` / `src/settings-schema.ts` are the setting keys and the
-  validation gate in front of them; `src/api-settings.ts` is the API.
+  validation gate in front of them; `src/api-settings.ts` is the API. The page
+  itself is not descriptor-driven: `web/src/components/SettingsPage.tsx` is a
+  hand-written `SECTIONS` list with one component per section, so a new
+  descriptor has no UI until one is written for it — which is how the Docker
+  host settings spent a while being edited straight in D1.
 - `src/model-catalog.ts` derives the model picker from the stored config at
   request time.
 - `Dockerfile` is the OpenCode version for Sandbox images. It carries no

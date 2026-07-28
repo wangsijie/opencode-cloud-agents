@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5、6、7 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5、6、7、8 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。任务 8 的 UI 已实现并在 `pnpm dev:mock` 走查通过,顺带补上了设置页此前完全缺失的 Docker 分组——生产的 docker 配置是手写进 D1 的。只剩任务 9 的后半段:让站点真正驱动一次 docker session。
 
 ## 目标架构(已确认)
 
@@ -135,10 +135,18 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 **未验证 ⚠**:agent 只被 `agent/e2e.mjs` 驱动过,还没有被站点的 `HostClient` 驱动过——真实的凭证注入、clone、publish、transcript 镜像都留在任务 9。
 
-## 任务 8:Web UI
+## 任务 8:Web UI ✅ 已实现,未部署
 
-**内容**:`web/src/api.ts`(`SessionView.provider`、catalog `providers`、create 入参);新建页 provider pill(仅 `providers.includes('docker')` 时显示,默认 cloudflare);列表/详情 "docker" 徽标;docker 隐藏 checkpoint 按钮改显 volume 持久化说明;设置页 Docker 分组确认渲染;`web/src/mock/router.ts` + fixtures 同步。
-**交付/验收**:`pnpm dev:mock` 走查全部新 UI 状态。
+**内容**:`web/src/api.ts`(`SessionView.provider`、catalog `providers`、create 入参);新建页 provider pill(仅 `providers.length > 1` 时显示,默认 cloudflare);列表/详情 "docker" 徽标;docker 隐藏 checkpoint 按钮改显 volume 持久化说明;设置页 Docker 分组确认渲染;`web/src/mock/router.ts` + fixtures 同步。
+
+**实际落地的三处偏离**:
+1. **设置页不是 descriptor 驱动的**(任务 3 里的假设是错的)。`SettingsPage.tsx` 是一张手写的 `SECTIONS` 表加一个 section 一个组件,所以 docker 三个 key 此前在 UI 里根本没有入口——生产上的 `docker.agent-url` / `docker.agent-token` 是直接写进 D1 的。本任务新增 `DockerSection`(URL + token + image 三个字段,token 是 secret:留空表示"别动",不是"清空";清 URL = 关掉 provider,配套写了"先删 session 再清配置"的提示,对应任务 6 的已知遗留)。
+2. **没有 checkpoint 按钮可以隐藏**。手动 checkpoint 只有 `POST /api/instances/:id/checkpoint` 这条 API,UI 从来没暴露过。所以"volume 持久化说明"落在了状态徽标背后的 InstanceModal 里:多两行 `Sandbox` / `Workspace`,并把冷启动分段的 `Container + snapshot` 在无快照时改成 `Container start`。`lost` 卡片的文案也按 provider 分叉("容器没 checkpoint 就重启了" vs "workspace volume 被重建了")。
+3. **pill 的显示条件是 `providers.length > 1` 而不是 `includes('docker')`**——含义一样,但读起来是"有得选才给选",而不是给 docker 开的后门。另加一个 effect:catalog 里的 provider 消失时(操作员清了配置)选择回落到第一个,否则会拿一个 Hub 必然 400 的值去建 session。
+
+mock 侧:catalog 的 `providers` 由 mock settings 派生(和 Hub 一样),所以"清掉 Docker 配置 → composer 的 pill 消失"这条路径在 `pnpm dev:mock` 里能走;新增 `ses_docker` fixture(睡眠中的 docker session,覆盖两处徽标 + volume 文案)。
+
+**交付/验收**:`pnpm test` 243 例 + `pnpm run typecheck` 三个 project 全绿 ✅。`pnpm dev:mock` 浏览器走查 ✅:composer pill(Cloudflare/Docker)、建出来的 session 头部与列表都带 docker 徽标、`ses_docker` 的 InstanceModal 显示 `Sandbox: Docker` / `Workspace: Kept on a named volume between containers` / `Container start`、CF session 对照显示 `Cloudflare` / `Snapshotted when the container sleeps` / `Container + snapshot`、设置页 Docker 分组存取正常且清掉 URL 后 pill 消失,控制台零 error。
 **依赖**:任务 2、3(mock 可先行,真实数据依赖 6)。
 
 ## 任务 9:端到端联调
@@ -161,7 +169,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 ```
 任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换 ✅) ──→ 任务6(docker 接通) ──→ 任务9(e2e)
 任务2(数据) ──────────────────────↗            任务7(agent,可并行) ────↗
-任务3(settings) ────────────────────────────────↗  任务8(UI) ──────────↗
+任务3(settings) ────────────────────────────────↗  任务8(UI ✅) ───────↗
 任务4.5(拆桶,与 4 并行) ──────────↗
 ```
 

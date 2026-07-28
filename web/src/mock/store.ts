@@ -11,6 +11,7 @@ import type {
   MessageAttachment,
   MessagePart,
   SessionMessage,
+  SessionProvider,
   SessionUsage,
   SessionView,
   Transcript
@@ -631,6 +632,8 @@ export function createSessionState(input: {
   model: string;
   variant?: string;
   prompt: string;
+  /** The sandbox host the composer picked; the Hub defaults it the same way. */
+  provider?: SessionProvider;
 }): MockSessionState {
   const id = nextSessionId();
   const title = input.prompt.split('\n')[0].slice(0, 120);
@@ -638,6 +641,7 @@ export function createSessionState(input: {
     view: {
       id,
       ...(input.repoKey ? { repoKey: input.repoKey } : {}),
+      provider: input.provider ?? 'cloudflare',
       model: input.model,
       ...(input.variant ? { variant: input.variant } : {}),
       title,

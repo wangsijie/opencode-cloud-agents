@@ -16,6 +16,7 @@
  * | ses_cjk       | CJK title and transcript                                      |
  * | ses_long      | long-title truncation + variant pill                          |
  * | ses_no_repo   | session started with no repository: /workspace, no Changes tab |
+ * | ses_docker    | Docker host: list + header badge, volume-persistence copy      |
  */
 import type { SessionUsage, SessionView } from '../../api';
 import type { MockSessionState } from '../types';
@@ -53,6 +54,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const working: MockSessionState = {
     view: {
       id: 'ses_working',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/logto',
       directory: '/workspace/logto',
       model: 'anthropic/claude-opus-4-5',
@@ -97,6 +99,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const idle: MockSessionState = {
     view: {
       id: 'ses_idle',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/opencode-cloud',
       directory: '/workspace/opencode-cloud',
       model: 'anthropic/claude-opus-4-5',
@@ -152,6 +155,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const sleeping: MockSessionState = {
     ...bareState({
       id: 'ses_sleeping',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/opencode-cloud',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Migrate the web build to Vite 8.',
@@ -191,6 +195,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const waking: MockSessionState = {
     ...bareState({
       id: 'ses_waking',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/opencode-cloud',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Backfill the D1 migration history.',
@@ -219,6 +224,7 @@ export function buildFixtureSessions(): MockSessionState[] {
 
   const queued = bareState({
     id: 'ses_queued',
+    provider: 'cloudflare',
     repoKey: 'wangsijie/logto',
     model: 'anthropic/claude-opus-4-5',
     variant: 'medium',
@@ -236,6 +242,7 @@ export function buildFixtureSessions(): MockSessionState[] {
 
   const starting = bareState({
     id: 'ses_starting',
+    provider: 'cloudflare',
     repoKey: 'silverhand-io/experimental-payment-reconciliation-service',
     model: 'openai/gpt-5.2-codex',
     variant: 'medium',
@@ -253,6 +260,7 @@ export function buildFixtureSessions(): MockSessionState[] {
 
   const failed = bareState({
     id: 'ses_failed',
+    provider: 'cloudflare',
     repoKey: 'wangsijie/opencode-cloud',
     model: 'anthropic/claude-sonnet-4-5',
     title: 'Clone from the repo with a revoked deploy key.',
@@ -272,6 +280,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const lost: MockSessionState = {
     ...bareState({
       id: 'ses_lost',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/logto',
       model: 'anthropic/claude-opus-4-5',
       title: 'Prototype: WASM sqlite in the Worker.',
@@ -304,6 +313,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const error: MockSessionState = {
     ...bareState({
       id: 'ses_error',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/opencode-cloud',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Container stuck in a restart loop.',
@@ -329,6 +339,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const deleting: MockSessionState = {
     ...bareState({
       id: 'ses_deleting',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/logto',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Teardown test.',
@@ -353,6 +364,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const cjk: MockSessionState = {
     ...bareState({
       id: 'ses_cjk',
+      provider: 'cloudflare',
       repoKey: 'wangsijie/知识库',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'リポジトリの CI を高速化する — キャッシュ導入と並列化の検証',
@@ -383,6 +395,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const long: MockSessionState = {
     ...bareState({
       id: 'ses_long',
+      provider: 'cloudflare',
       repoKey: 'silverhand-io/experimental-payment-reconciliation-service',
       model: 'anthropic/claude-opus-4-5',
       variant: 'high',
@@ -440,6 +453,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const noRepo: MockSessionState = {
     ...bareState({
       id: 'ses_no_repo',
+      provider: 'cloudflare',
       directory: '/workspace',
       model: 'anthropic/claude-opus-4-5',
       title: 'Sketch a migration plan before touching any repository.',
@@ -471,6 +485,63 @@ export function buildFixtureSessions(): MockSessionState[] {
     workspace: repoWorkspace()
   };
 
+  // The only session on the Docker host: the badge in the list and the header,
+  // and an instance modal that says the workspace lives on a volume rather than
+  // in a snapshot. Asleep, because that is where the difference is visible —
+  // this one's container is gone and its checkout is not.
+  const docker: MockSessionState = {
+    ...bareState({
+      id: 'ses_docker',
+      provider: 'docker',
+      repoKey: 'wangsijie/logto',
+      directory: '/workspace/logto',
+      model: 'anthropic/claude-opus-4-5',
+      variant: 'high',
+      title: 'Profile the connector test suite on the mini.',
+      displayTitle: 'Profile the connector test suite',
+      phase: 'working',
+      status: 'sleeping',
+      lastActivityAt: hoursAgo(5),
+      instance: {
+        id: 'ses_docker',
+        lifecycle: 'ready',
+        runtime: {
+          container: 'stopped',
+          lifecycle: 'sleeping',
+          // No restore stage: a volume is already there when the container
+          // starts, so a Docker wake has one fewer thing to wait for.
+          lastWake: {
+            restoreMs: 1_400,
+            repoMs: 900,
+            serverMs: 2_600,
+            totalMs: 4_900,
+            at: hoursAgo(5),
+            cold: true
+          }
+        }
+      },
+      transcript: {
+        mirroredAt: hoursAgo(5),
+        messageCount: 2,
+        lastMessageAt: hoursAgo(5),
+        usage: usage({
+          inputTokens: 48_000,
+          outputTokens: 3_100,
+          cost: 0.41,
+          assistantMessages: 1
+        })
+      }
+    }),
+    transcript: shortTranscript({
+      prompt: 'Find out why the connector tests take four minutes on this box.',
+      reply:
+        'It is the Docker bind mount: the suite stats every fixture twice. Caching the listing in `setup.ts` takes it to 48 seconds.',
+      baseMinutesAgo: 5 * 60
+    }),
+    mirroredAt: hoursAgo(5),
+    workspace: repoWorkspace()
+  };
+
   return [
     working,
     idle,
@@ -484,6 +555,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     deleting,
     cjk,
     long,
-    noRepo
+    noRepo,
+    docker
   ];
 }

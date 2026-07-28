@@ -584,6 +584,20 @@ body.resizing .resize-handle {
   text-overflow: ellipsis;
 }
 
+/* The sandbox host, when it is not the default one. Quieter than a `.tag`: it
+   qualifies the title rather than standing beside it, and it must never be the
+   thing that truncates the title it follows. */
+.row-tag {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .row-dot {
   flex: none;
   width: 7px;

@@ -18,6 +18,14 @@ export type SessionStatus =
   | 'error'
   | 'deleting';
 
+/**
+ * Mirrors `SessionProvider` in `protocol/types.ts`.
+ *
+ * Which sandbox host runs the container — not the model's provider prefix.
+ * Chosen when the session is created and fixed for its life.
+ */
+export type SessionProvider = 'cloudflare' | 'docker';
+
 /** Mirrors `RuntimeLifecycle` in the Worker's `src/instances.ts`. */
 export type RuntimeLifecycle =
   | 'sleeping'
@@ -71,6 +79,8 @@ export interface SessionView {
   model: string;
   /** OpenCode variant (reasoning effort) for `model`, when it has any. */
   variant?: string;
+  /** The sandbox host this session's container runs on. */
+  provider: SessionProvider;
   /** The record's own title: the first line of the opening prompt. */
   title: string;
   /** What to show — OpenCode's own title once it has one. */
@@ -111,6 +121,14 @@ export interface Catalog {
     model: string;
     variant?: string;
   };
+  /**
+   * The sandbox hosts a new session may run on, in preference order.
+   *
+   * Always contains `cloudflare`; `docker` appears only once an operator has
+   * stored the agent's URL and token, so the composer's picker is hidden until
+   * there is a second thing to pick.
+   */
+  providers: SessionProvider[];
   /** When the Hub last read the repository list from GitHub. */
   reposFetchedAt?: string;
   /** The stored list is past its TTL: worth one refresh once the page is up. */
@@ -531,6 +549,8 @@ export const createSession = (input: {
   variant?: string;
   prompt: string;
   attachments?: MessageAttachment[];
+  /** Omitted takes the Hub's default, which is `cloudflare`. */
+  provider?: SessionProvider;
 }) => call<SessionView>('/api/sessions', { method: 'POST', body: JSON.stringify(input) });
 
 export const deleteSession = (id: string) =>

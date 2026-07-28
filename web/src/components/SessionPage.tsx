@@ -343,6 +343,13 @@ export function SessionPage({
                 {modelLabel}
               </span>
             ) : null}
+            {/* The host is worth naming only when it is not the default one;
+                what it changes about the session is in the instance modal. */}
+            {session.provider === 'docker' ? (
+              <span className="tag" title="Runs on the Docker sandbox host">
+                docker
+              </span>
+            ) : null}
           </div>
         ) : null}
         <span className="spacer" />
@@ -423,9 +430,14 @@ export function SessionPage({
                     <section className="card">
                       <h2>This session was lost</h2>
                       <p className="muted">
-                        Its container restarted without a workspace checkpoint, so
-                        OpenCode no longer has this conversation. The history above
-                        is the last mirror the Hub exported; it cannot be continued.
+                        {/* Same loss, reached a different way: a Docker session
+                            keeps its workspace on a volume rather than in a
+                            snapshot, so there is no checkpoint to blame. */}
+                        {session?.provider === 'docker'
+                          ? 'Its workspace volume was recreated, so OpenCode no longer has this conversation.'
+                          : 'Its container restarted without a workspace checkpoint, so OpenCode no longer has this conversation.'}{' '}
+                        The history above is the last mirror the Hub exported; it
+                        cannot be continued.
                       </p>
                       {session?.lastError ? (
                         <p className="muted mono">{session.lastError}</p>

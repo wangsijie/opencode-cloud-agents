@@ -6,7 +6,12 @@
  * take a little longer. Container-only endpoints answer 409 while a session is
  * asleep, exactly like the Worker.
  */
-import type { MessageAttachment, WorkspaceEntry, WorkspaceListing } from '../api';
+import type {
+  MessageAttachment,
+  SessionProvider,
+  WorkspaceEntry,
+  WorkspaceListing
+} from '../api';
 import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
 import { minutesAgo } from './fixtures/util';
 import {
@@ -163,7 +168,7 @@ function putSetting(key: string, body: Record<string, unknown>): Response {
   setting.updatedAt = new Date().toISOString();
   // Mirror the Worker's exposure rules: secrets store nothing readable,
   // partial settings store the public half only.
-  if (key === 'github.token') {
+  if (key === 'github.token' || key === 'docker.agent-token') {
     delete setting.value;
   } else if (key === 'container.ssh-key') {
     setting.value = {
@@ -263,6 +268,15 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       store.catalog.reposFetchedAt = new Date().toISOString();
       store.catalog.reposStale = false;
     }
+    // Derived rather than fixed, like the Hub's: clearing the Docker settings
+    // in the section above takes the provider out of the composer's picker on
+    // the next read, which is the state worth being able to walk into.
+    const configured = (key: string) =>
+      store.settings.find((entry) => entry.key === key)?.configured === true;
+    store.catalog.providers =
+      configured('docker.agent-url') && configured('docker.agent-token')
+        ? ['cloudflare', 'docker']
+        : ['cloudflare'];
     return json(store.catalog);
   }
 
@@ -276,6 +290,13 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     if (!prompt.trim()) {
       return json({ error: 'A prompt is required' }, 400);
     }
+    // The Hub validates the provider against the same list it put in the
+    // catalog, so a session on an unconfigured host is a 400 rather than a
+    // session that can never wake.
+    const provider = (body.provider ?? 'cloudflare') as SessionProvider;
+    if (!store.catalog.providers.includes(provider)) {
+      return json({ error: 'Unknown provider' }, 400);
+    }
     const session = createSessionState({
       // Absent means the composer's "No repository": the session works in
       // /workspace and has no changes to show.
@@ -284,6 +305,7 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         : {}),
       model: typeof body.model === 'string' ? body.model : 'anthropic/claude-opus-4-5',
       ...(typeof body.variant === 'string' ? { variant: body.variant } : {}),
+      provider,
       prompt
     });
     store.sessions.set(session.view.id, session);

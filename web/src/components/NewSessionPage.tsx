@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { createSession, type Catalog } from '../api';
+import { createSession, type Catalog, type SessionProvider } from '../api';
 import { navigate, sessionPath } from '../router';
 import {
   AttachButton,
@@ -9,6 +9,7 @@ import {
 } from './ComposerAttachments';
 import { ArrowUpIcon, MenuIcon, SparkIcon } from './icons';
 import { ModelSelect } from './ModelSelect';
+import { ProviderSelect } from './ProviderSelect';
 import { NO_REPO, RepoSelect } from './RepoSelect';
 import { defaultVariant, VariantSelect } from './VariantSelect';
 
@@ -47,6 +48,7 @@ export function NewSessionPage({
   const [model, setModel] = useState('');
   const [variant, setVariant] = useState('');
   const [prompt, setPrompt] = useState('');
+  const [provider, setProvider] = useState<SessionProvider>('cloudflare');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const attachmentsApi = useComposerAttachments(setError);
@@ -73,6 +75,19 @@ export function NewSessionPage({
         : (repos[0]?.repoKey ?? NO_REPO)
     );
   }, [repos]);
+
+  // A provider can leave the catalog under an open tab — clearing the Docker
+  // settings is all it takes — and starting a session on one the Hub would
+  // refuse is a 400 in place of a session.
+  const providers = catalog?.providers;
+  useEffect(() => {
+    if (!providers || providers.length === 0) {
+      return;
+    }
+    setProvider((current) =>
+      providers.includes(current) ? current : (providers[0] ?? 'cloudflare')
+    );
+  }, [providers]);
 
   useEffect(() => {
     const models = catalog?.models;
@@ -121,6 +136,7 @@ export function NewSessionPage({
         model,
         ...(variant ? { variant } : {}),
         prompt: text,
+        provider,
         ...(attachments.length > 0
           ? { attachments: toAttachmentPayload(attachments) }
           : {})
@@ -225,6 +241,14 @@ export function NewSessionPage({
                     value={variant}
                     disabled={busy}
                     onChange={setVariant}
+                  />
+                ) : null}
+                {providers && providers.length > 1 ? (
+                  <ProviderSelect
+                    providers={providers}
+                    value={provider}
+                    disabled={busy}
+                    onChange={setProvider}
                   />
                 ) : null}
                 <span className="spacer" />
