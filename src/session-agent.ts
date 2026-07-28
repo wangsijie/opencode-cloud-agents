@@ -411,12 +411,12 @@ export class SessionAgent extends DurableObject<Env> {
     const prefix = promptAttachmentPrefix(sessionId);
     let cursor: string | undefined;
     do {
-      const page = await this.env.BACKUP_BUCKET.list({
+      const page = await this.env.SESSION_BUCKET.list({
         prefix,
         ...(cursor ? { cursor } : {})
       });
       if (page.objects.length > 0) {
-        await this.env.BACKUP_BUCKET.delete(
+        await this.env.SESSION_BUCKET.delete(
           page.objects.map((object) => object.key)
         );
       }
@@ -560,7 +560,7 @@ export class SessionAgent extends DurableObject<Env> {
       if (prompt.attachments?.length) {
         // Only after the dequeue is durable: a dispatch that throws must leave
         // the staged bytes in place for the retry ladder.
-        await this.env.BACKUP_BUCKET.delete(
+        await this.env.SESSION_BUCKET.delete(
           prompt.attachments.map((attachment) => attachment.key)
         ).catch((error) => {
           console.warn('Failed to delete staged prompt attachments', {

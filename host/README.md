@@ -48,12 +48,16 @@ Worker, the same ones the site uses today:
 ```bash
 npx wrangler secret put R2_ACCESS_KEY_ID -c host/wrangler.jsonc
 npx wrangler secret put R2_SECRET_ACCESS_KEY -c host/wrangler.jsonc
-npx wrangler secret put CLOUDFLARE_ACCOUNT_ID -c host/wrangler.jsonc
+npx wrangler secret put CLOUDFLARE_R2_ACCOUNT_ID -c host/wrangler.jsonc
 ```
 
-Without them `POST /sessions/:id/snapshot` fails: the SDK uploads the archive
-straight from the container to R2 with a presigned URL, so the R2 binding alone
-is not enough.
+The names match the site's, because it is the same SDK reading them. Without
+them `POST /sessions/:id/snapshot` fails: the SDK uploads the archive straight
+from the container to R2 with a presigned URL, so the R2 binding alone is not
+enough. The key pair comes from an R2 API token (dashboard → R2 → API →
+Manage API tokens → Object Read & Write); the secret half is shown once at
+creation and cannot be read back from the site's Worker, so a lost one means
+issuing a new token rather than recovering the old.
 
 ## Types
 

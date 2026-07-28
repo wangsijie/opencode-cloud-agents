@@ -21,7 +21,16 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
+  // Two buckets, split by who writes them. `SESSION_BUCKET` is the site's own:
+  // transcript mirrors and staged prompt attachments, written and read here and
+  // nowhere else. `BACKUP_BUCKET` holds the container snapshots, which belong to
+  // the sandbox host worker — it is still bound here only until the site stops
+  // driving its own containers.
   "r2_buckets": [
+    {
+      "binding": "SESSION_BUCKET",
+      "bucket_name": "opencode-cloud-sessions"
+    },
     {
       "binding": "BACKUP_BUCKET",
       "bucket_name": "opencode-cloud-backups"

@@ -1125,7 +1125,7 @@ export class Sandbox extends BaseSandbox<Env> {
         | { type: 'file'; mime: string; filename?: string; url: string }
       > = [];
       for (const attachment of input.attachments ?? []) {
-        const object = await this.persistenceEnv.BACKUP_BUCKET.get(
+        const object = await this.persistenceEnv.SESSION_BUCKET.get(
           attachment.key
         );
         if (!object) {
@@ -2055,7 +2055,7 @@ export class Sandbox extends BaseSandbox<Env> {
         messages: result.data ?? [],
         ...(opencodeTitle ? { opencodeTitle } : {})
       });
-      await putTranscriptMirror(this.persistenceEnv.BACKUP_BUCKET, mirror);
+      await putTranscriptMirror(this.persistenceEnv.SESSION_BUCKET, mirror);
 
       const summary = transcriptMirrorSummary(mirror);
       await this.persistenceState.storage.put(
@@ -2291,10 +2291,11 @@ export class Sandbox extends BaseSandbox<Env> {
     await this.waitForContainerMonitorToSettle();
     await this.deleteBackupObjects(backups);
     if (this.instanceIdentity?.id) {
-      // The transcript mirror is R2 state this instance owns, so it goes with
-      // the backups rather than outliving the session as an orphan.
+      // The transcript mirror is R2 state this instance owns — in the session
+      // bucket rather than with the snapshots, but swept at the same moment so
+      // it does not outlive the session as an orphan.
       await deleteTranscriptMirror(
-        this.persistenceEnv.BACKUP_BUCKET,
+        this.persistenceEnv.SESSION_BUCKET,
         this.instanceIdentity.id
       );
     }

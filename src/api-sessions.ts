@@ -324,7 +324,7 @@ async function stageAttachments(
       bytes[i] = binary.charCodeAt(i);
     }
     const key = promptAttachmentKey(sessionId, promptId, index);
-    await env.BACKUP_BUCKET.put(key, bytes, {
+    await env.SESSION_BUCKET.put(key, bytes, {
       httpMetadata: { contentType: attachment.mime }
     });
     refs.push({
@@ -1110,7 +1110,7 @@ async function readTranscriptMirrorFor(
   | undefined
 > {
   try {
-    const mirror = await getTranscriptMirror(env.BACKUP_BUCKET, record.id);
+    const mirror = await getTranscriptMirror(env.SESSION_BUCKET, record.id);
     if (!mirror || mirror.opencodeSessionId !== record.opencodeSessionId) {
       return undefined;
     }

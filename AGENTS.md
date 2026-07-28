@@ -188,6 +188,20 @@ Until the site is switched over to the protocol client it still drives its own
 containers through the `Sandbox` Durable Object, and the host Worker is
 deployed but unused.
 
+## Two buckets, split by who writes them
+
+`opencode-cloud-sessions` (`SESSION_BUCKET`) is the site's: transcript mirrors
+under `transcripts/` and staged prompt attachments under `prompt-attachments/`.
+`opencode-cloud-backups` (`BACKUP_BUCKET`) is the container snapshots and their
+ledger under `backups/`, which belong to whichever host runs the container —
+the sandbox host Worker binds it, and the site keeps the binding only until it
+stops driving containers itself.
+
+The snapshot bucket is the one that cannot be renamed casually:
+`BACKUP_BUCKET_NAME` is read by the sandbox SDK to presign uploads, and every
+stored backup handle refers to objects in it. Transcripts are plain `put`/`get`
+of our own, which is why they were the side that moved.
+
 ## A deploy that touches the image is a deploy that can lose sessions
 
 Deploying a changed container image rolls out: each running instance is sent

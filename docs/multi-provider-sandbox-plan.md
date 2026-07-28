@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`,CI 已按 `Dockerfile/docker/host/protocol` 判定并先于站点部署,已部署且冒烟通过——`wrangler dev -c host/wrangler.jsonc`(proxy 变量 unset)对真实容器跑通 ensure/exec/文件/opencode start+SSE proxy/snapshot+restore/stop/delete 与全部错误分支)。其余任务待做。
+> 进度:任务 1、2、3、4 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`,CI 已按 `Dockerfile/docker/host/protocol` 判定并先于站点部署,已部署且冒烟通过——`wrangler dev -c host/wrangler.jsonc`(proxy 变量 unset)对真实容器跑通 ensure/exec/文件/opencode start+SSE proxy/snapshot+restore/stop/delete 与全部错误分支;任务 4.5 已完成:`opencode-cloud-sessions` 已建,站点 `SESSION_BUCKET` 接管 transcripts + attachments,存量 copy **不需要**——生产 D1 当时 0 条 session,无历史可迁,也因此这次 wrangler.jsonc 变更带的 container rollout 零影响)。其余任务待做。
 
 ## 目标架构(已确认)
 
