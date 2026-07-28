@@ -87,7 +87,7 @@ test('a default provider without an apiKey warns', () => {
   assert.ok(result.warnings.some((warning) => warning.includes('apiKey')))
 })
 
-test('skill names are path segments and env names are POSIX', () => {
+test('skill names are path segments, listed once', () => {
   const skills = findDescriptor('opencode.skills')
   assert.deepEqual(skills.validate([{ name: 'babysit', content: '# doc' }]), [])
   assert.ok(skills.validate([{ name: '../escape', content: 'x' }]).length > 0)
@@ -101,7 +101,42 @@ test('skill names are path segments and env names are POSIX', () => {
       ])
       .some((error) => error.includes('twice'))
   )
+})
 
+test('a skill may be scoped to a repository, once per scope', () => {
+  const skills = findDescriptor('opencode.skills')
+  assert.deepEqual(
+    skills.validate([
+      { name: 'deploy', content: '# doc', repoKey: 'opencode-cloud' },
+      { name: 'deploy', content: '# doc', repoKey: 'logto' }
+    ]),
+    []
+  )
+  // Repo keys follow the catalog's constraints.
+  assert.ok(
+    skills.validate([{ name: 'ok', content: 'x', repoKey: '../escape' }]).length > 0
+  )
+  // The same name for the same repo is a duplicate.
+  assert.ok(
+    skills
+      .validate([
+        { name: 'deploy', content: 'a', repoKey: 'logto' },
+        { name: 'deploy', content: 'b', repoKey: 'logto' }
+      ])
+      .some((error) => error.includes('twice'))
+  )
+  // A global and a per-repo entry of the same name would shadow one another.
+  assert.ok(
+    skills
+      .validate([
+        { name: 'deploy', content: 'a' },
+        { name: 'deploy', content: 'b', repoKey: 'logto' }
+      ])
+      .some((error) => error.includes('collide'))
+  )
+})
+
+test('env names are POSIX', () => {
   const env = findDescriptor('container.env')
   assert.deepEqual(env.validate([{ name: 'CLOUDFLARE_API_TOKEN', value: 't' }]), [])
   assert.ok(env.validate([{ name: '1BAD', value: 'x' }]).length > 0)

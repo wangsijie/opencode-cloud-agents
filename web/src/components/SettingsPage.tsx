@@ -702,8 +702,47 @@ function EnvVarsSection({
   );
 }
 
+/**
+ * Catalog repositories as select options. A stored key the catalog no longer
+ * lists must stay selectable, or opening the section would silently rewrite
+ * the entry.
+ */
+function useRepoOptions(storedKeys: string[]) {
+  const [catalogRepos, setCatalogRepos] = useState<RepoOption[]>();
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCatalog()
+      .then((catalog) => {
+        if (!cancelled) {
+          setCatalogRepos(catalog.repos);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return useMemo(() => {
+    const options = (catalogRepos ?? []).map((repo) => ({
+      value: repo.repoKey,
+      label: repo.displayName
+    }));
+    const known = new Set(options.map((option) => option.value));
+    for (const key of storedKeys) {
+      if (key && !known.has(key)) {
+        options.push({ value: key, label: key });
+      }
+    }
+    return options;
+  }, [catalogRepos, storedKeys]);
+}
+
 interface SkillRow {
   name: string;
+  /** Empty string means the skill applies to every repository. */
+  repoKey: string;
   content: string;
 }
 
@@ -716,13 +755,20 @@ function SkillsSection({
 }) {
   const stored = useMemo(
     () =>
-      Array.isArray(setting?.value) ? (setting.value as SkillRow[]) : [],
+      Array.isArray(setting?.value)
+        ? (setting.value as Partial<SkillRow>[]).map((row) => ({
+            name: row.name ?? '',
+            repoKey: row.repoKey ?? '',
+            content: row.content ?? ''
+          }))
+        : [],
     [setting?.value]
   );
   const [rows, setRows] = useState<SkillRow[]>();
   const { busy, error, notice, run } = useSave();
 
   const current = rows ?? stored;
+  const repoOptions = useRepoOptions(current.map((row) => row.repoKey));
   const edit = (index: number, patch: Partial<SkillRow>) => {
     setRows(current.map((row, at) => (at === index ? { ...row, ...patch } : row)));
   };
@@ -733,7 +779,9 @@ function SkillsSection({
       <p className="muted">
         Each skill is one <code>SKILL.md</code> the agent can invoke inside its
         container. Names become directories: lowercase letters, digits and
-        hyphens.
+        hyphens. A skill scoped to a repository is written only into that
+        repository's sandboxes — still under the global skills directory, so
+        the repository itself stays untouched.
       </p>
       {current.map((row, index) => (
         <div key={index} className="settings-skill">
@@ -746,6 +794,19 @@ function SkillsSection({
               disabled={busy}
               onChange={(event) => edit(index, { name: event.target.value })}
             />
+            <select
+              aria-label={`Repository for ${row.name || 'skill'}`}
+              value={row.repoKey}
+              disabled={busy}
+              onChange={(event) => edit(index, { repoKey: event.target.value })}
+            >
+              <option value="">All repositories</option>
+              {repoOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <button
               className="icon-button"
               type="button"
@@ -773,7 +834,9 @@ function SkillsSection({
           className="button"
           type="button"
           disabled={busy}
-          onClick={() => setRows([...current, { name: '', content: '' }])}
+          onClick={() =>
+            setRows([...current, { name: '', repoKey: '', content: '' }])
+          }
         >
           Add skill
         </button>
@@ -782,9 +845,16 @@ function SkillsSection({
           disabled={busy || rows === undefined}
           onClick={() =>
             void run(async () => {
-              const list = current.filter(
-                (row) => row.name.trim().length > 0 || row.content.trim().length > 0
-              );
+              const list = current
+                .filter(
+                  (row) =>
+                    row.name.trim().length > 0 || row.content.trim().length > 0
+                )
+                .map((row) => ({
+                  name: row.name,
+                  content: row.content,
+                  ...(row.repoKey.length > 0 ? { repoKey: row.repoKey } : {})
+                }));
               await saveSetting('opencode.skills', list.length === 0 ? null : list);
               setRows(undefined);
               onSaved();
@@ -817,47 +887,17 @@ function AgentsMdSection({
     | undefined;
   const [global, setGlobal] = useState<string>();
   const [rows, setRows] = useState<AgentsMdRepoRow[]>();
-  const [catalogRepos, setCatalogRepos] = useState<RepoOption[]>();
   const { busy, error, notice, run } = useSave();
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchCatalog()
-      .then((catalog) => {
-        if (!cancelled) {
-          setCatalogRepos(catalog.repos);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const currentGlobal = global ?? stored?.global ?? '';
   const currentRows = rows ?? stored?.repos ?? [];
+  const repoOptions = useRepoOptions(currentRows.map((row) => row.repoKey));
 
   const edit = (index: number, patch: Partial<AgentsMdRepoRow>) => {
     setRows(
       currentRows.map((row, at) => (at === index ? { ...row, ...patch } : row))
     );
   };
-
-  // A stored key the catalog no longer lists must stay selectable, or opening
-  // the section would silently rewrite the entry.
-  const repoOptions = useMemo(() => {
-    const options = (catalogRepos ?? []).map((repo) => ({
-      value: repo.repoKey,
-      label: repo.displayName
-    }));
-    const known = new Set(options.map((option) => option.value));
-    for (const row of currentRows) {
-      if (row.repoKey && !known.has(row.repoKey)) {
-        options.push({ value: row.repoKey, label: row.repoKey });
-      }
-    }
-    return options;
-  }, [catalogRepos, currentRows]);
 
   // A freshly added row that was never touched does not block the save.
   const meaningfulRows = currentRows.filter(

@@ -15,6 +15,10 @@ table and is edited on the Hub's `/settings` page.
 - The `opencode.agents-md` setting holds standing agent instructions (a
   global block plus per-repository additions); the wake merges them and
   writes `/root/.config/opencode/AGENTS.md` in the container.
+- The `opencode.skills` setting holds `SKILL.md` entries, each optionally
+  scoped to one repository; the wake writes the global entries plus the
+  instance repo's entries into `/root/.config/opencode/skills/` — always the
+  global directory, never the checkout.
 
 ## Configuration changes
 

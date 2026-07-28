@@ -210,7 +210,11 @@ function validateSkills(value: unknown): string[] {
     return ['Skills must be a list of { name, content }'];
   }
   const errors: string[] = [];
-  const seen = new Set<string>();
+  // Every skill lands at the same container path for its name, so a name may
+  // be either one global entry or per-repo entries with distinct keys — a
+  // global and a per-repo entry of the same name would silently shadow one
+  // another in that repository's container.
+  const scopes = new Map<string, { global: boolean; repos: Set<string> }>();
   for (const entry of value as Partial<SkillSetting>[]) {
     if (typeof entry?.name !== 'string' || !SKILL_NAME_PATTERN.test(entry.name)) {
       errors.push(
@@ -218,10 +222,37 @@ function validateSkills(value: unknown): string[] {
       );
       continue;
     }
-    if (seen.has(entry.name)) {
-      errors.push(`Skill "${entry.name}" is listed twice`);
+    if (entry.repoKey !== undefined && !isSafeRepoKey(entry.repoKey)) {
+      errors.push(
+        `"${String(entry.repoKey)}" is not a valid repository key for skill "${entry.name}" — use lowercase letters, digits and hyphens`
+      );
+      continue;
     }
-    seen.add(entry.name);
+    const scope = scopes.get(entry.name) ?? {
+      global: false,
+      repos: new Set<string>()
+    };
+    if (entry.repoKey === undefined) {
+      if (scope.global) {
+        errors.push(`Skill "${entry.name}" is listed twice`);
+      } else if (scope.repos.size > 0) {
+        errors.push(
+          `Skill "${entry.name}" is set both globally and per-repository — the two would collide at the same container path`
+        );
+      }
+      scope.global = true;
+    } else {
+      const repo = entry.repoKey.toLowerCase();
+      if (scope.repos.has(repo)) {
+        errors.push(`Skill "${entry.name}" is listed twice for "${entry.repoKey}"`);
+      } else if (scope.global) {
+        errors.push(
+          `Skill "${entry.name}" is set both globally and per-repository — the two would collide at the same container path`
+        );
+      }
+      scope.repos.add(repo);
+    }
+    scopes.set(entry.name, scope);
     if (typeof entry.content !== 'string' || entry.content.trim().length === 0) {
       errors.push(`Skill "${entry.name}" has no SKILL.md content`);
     }

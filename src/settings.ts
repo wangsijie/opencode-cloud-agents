@@ -47,6 +47,12 @@ export interface EnvVarSetting {
 export interface SkillSetting {
   name: string;
   content: string;
+  /**
+   * When set, only containers on this repository receive the skill. The file
+   * still lands in the container's global skills directory — a sandbox holds
+   * a single checkout, so nothing needs to be written into the repo itself.
+   */
+  repoKey?: string;
 }
 
 /** One entry in `opencode.agents-md.repos`: extra instructions for one repo. */

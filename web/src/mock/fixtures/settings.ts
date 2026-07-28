@@ -78,7 +78,21 @@ export function buildSettings(): SettingView[] {
       group: 'opencode',
       label: 'Skills',
       required: false,
-      configured: false
+      configured: true,
+      updatedAt: daysAgo(3),
+      value: [
+        {
+          name: 'babysit',
+          content:
+            '---\nname: babysit\ndescription: Watch a PR until CI passes.\n---\n\nRe-check the PR every few minutes until CI is green.'
+        },
+        {
+          name: 'deploy-preview',
+          repoKey: 'wangsijie/logto',
+          content:
+            '---\nname: deploy-preview\ndescription: Deploy a preview environment.\n---\n\nRun `pnpm deploy:preview` and post the URL.'
+        }
+      ]
     },
     {
       key: 'opencode.agents-md',

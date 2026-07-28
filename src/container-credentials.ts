@@ -75,7 +75,10 @@ export async function loadContainerCredentials(
  * settings list.
  *
  * `repoKey` is the instance's repository; it selects the per-repo AGENTS.md
- * addition when the settings hold one.
+ * addition and the repo-scoped skills when the settings hold any. Repo-scoped
+ * skills still land in the global skills directory — the sandbox holds a
+ * single checkout, so scoping decides *whether* a skill is written, never
+ * *where*, and the repository itself stays untouched.
  */
 export function credentialFiles(
   settings: ContainerCredentialSettings,
@@ -106,7 +109,7 @@ export function credentialFiles(
       mode: '600'
     });
   }
-  for (const skill of settings.skills) {
+  for (const skill of resolveSkills(settings.skills, repoKey)) {
     files.push({
       path: `${CONTAINER_SKILLS_ROOT}/${skill.name}/SKILL.md`,
       content: ensureTrailingNewline(skill.content),
@@ -122,6 +125,23 @@ export function credentialFiles(
     });
   }
   return files;
+}
+
+/**
+ * The skills this container should see: the global ones plus those scoped to
+ * its repository. A session without a repository gets only the global set.
+ * Repo keys compare case-insensitively, matching the catalog's lowercasing.
+ */
+export function resolveSkills(
+  skills: SkillSetting[],
+  repoKey?: string
+): SkillSetting[] {
+  return skills.filter(
+    (skill) =>
+      skill.repoKey === undefined ||
+      (repoKey !== undefined &&
+        skill.repoKey.toLowerCase() === repoKey.toLowerCase())
+  );
 }
 
 /**

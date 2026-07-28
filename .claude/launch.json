@@ -17,7 +17,8 @@
       "name": "dev-mock",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["run", "dev:mock"],
-      "port": 5173
+      "port": 5173,
+      "autoPort": true
     }
   ]
 }

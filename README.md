@@ -532,6 +532,16 @@ to `/root/.config/opencode/AGENTS.md`, where OpenCode reads it alongside
 whatever `AGENTS.md` the repository itself carries. Clearing the setting
 removes the file on the next wake.
 
+Skills (`opencode.skills`) work the same way: each entry is one `SKILL.md`,
+written on every wake into the container's global skills directory
+(`/root/.config/opencode/skills/<name>/SKILL.md`). An entry may optionally be
+scoped to a repository, in which case only sandboxes on that repository
+receive it — the file still lands in the global directory rather than the
+checkout, since a sandbox holds exactly one repository and nothing should be
+written into it. A skill name may be either one global entry or per-repo
+entries with distinct repositories; saves mixing the two are refused, as both
+would target the same container path.
+
 ## Verify and deploy
 
 Pushing to `master` deploys to production. `.github/workflows/deploy.yml` runs

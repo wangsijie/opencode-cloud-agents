@@ -7,7 +7,8 @@ import {
   containerEnv,
   credentialFiles,
   gitConfigCommands,
-  resolveAgentsMd
+  resolveAgentsMd,
+  resolveSkills
 } from '../src/container-credentials.ts'
 
 const full = () => ({
@@ -70,6 +71,32 @@ test('the merged AGENTS.md lands at the global config path', () => {
   for (const repoKey of ['other-repo', undefined]) {
     const globalOnly = credentialFiles(settings, repoKey)
     assert.equal(globalOnly[0].content, '# House rules\n')
+  }
+})
+
+test('a repo-scoped skill reaches only that repository, at the global path', () => {
+  const settings = {
+    env: [],
+    skills: [
+      { name: 'babysit', content: '# global' },
+      { name: 'deploy', content: '# scoped', repoKey: 'Opencode-Cloud' }
+    ]
+  }
+
+  // Repo keys compare case-insensitively, like the catalog's lowercasing.
+  const matching = credentialFiles(settings, 'opencode-cloud')
+  const paths = matching.map((file) => file.path)
+  assert.deepEqual(paths, [
+    `${CONTAINER_SKILLS_ROOT}/babysit/SKILL.md`,
+    `${CONTAINER_SKILLS_ROOT}/deploy/SKILL.md`
+  ])
+
+  // A session on another repo — or none — gets only the global skill.
+  for (const repoKey of ['other-repo', undefined]) {
+    assert.deepEqual(
+      resolveSkills(settings.skills, repoKey),
+      [{ name: 'babysit', content: '# global' }]
+    )
   }
 })
 
