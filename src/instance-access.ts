@@ -11,7 +11,6 @@
  * SessionAgent Durable Object also needs, declared structurally so that object
  * never imports the Sandbox class.
  */
-import { getSandbox } from '@cloudflare/sandbox';
 import { HttpError, isSafeInstanceId, json } from './http';
 import { getInstance } from './hub-store';
 import {
@@ -30,17 +29,16 @@ import type { Sandbox } from './sandbox';
 /**
  * Every container-bound call is a Durable Object RPC method on `Sandbox`.
  *
- * The stub `getSandbox()` returns also carries client-side proxies the SDK
- * defines — `terminal()` upgrading a WebSocket onto the container's PTY was the
- * one this app used, and it is gone. Nothing here reaches for them: a proxy that
- * bypasses the class bypasses the runtime gate and the control-plane admission
- * with it, which is exactly how the terminal came to be dead on arrival.
+ * A plain stub, named by the instance id. It used to come from the sandbox
+ * SDK's `getSandbox()`, which wrapped it in client-side proxies — `terminal()`
+ * upgrading a WebSocket onto the container's PTY was the one this app used, and
+ * it is gone. Nothing reaches around the class: a proxy that bypasses it
+ * bypasses the runtime gate, which is exactly how the terminal came to be dead
+ * on arrival. `getByName` hashes the same name `getSandbox` did, so an existing
+ * instance resolves to the object that holds its state.
  */
 export function resolveSandbox(env: Env, instance: InstanceRecord): Sandbox {
-  return getSandbox(env.Sandbox, instance.id, {
-    normalizeId: true,
-    keepAlive: true
-  }) as unknown as Sandbox;
+  return env.Sandbox.getByName(instance.id) as unknown as Sandbox;
 }
 
 export function resolveLifecycle(env: Env, instanceId: string) {

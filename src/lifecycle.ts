@@ -1,5 +1,4 @@
 import { DurableObject } from 'cloudflare:workers';
-import { getSandbox } from '@cloudflare/sandbox';
 import type { RuntimeLifecycle } from './instances';
 
 /**
@@ -1132,10 +1131,9 @@ export class LifecycleCoordinator extends DurableObject<Env> {
   }
 
   private resolveSandbox(): LifecycleSandboxRpc {
-    return getSandbox(this.env.Sandbox, this.requireState().instanceId, {
-      normalizeId: true,
-      keepAlive: true
-    }) as unknown as LifecycleSandboxRpc;
+    return this.env.Sandbox.getByName(
+      this.requireState().instanceId
+    ) as unknown as LifecycleSandboxRpc;
   }
 
   private toStatus(): LifecycleStatus {

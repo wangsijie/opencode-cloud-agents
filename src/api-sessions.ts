@@ -19,11 +19,7 @@ import {
   resolveSandbox,
   unknownRuntimeStatus
 } from './instance-access';
-import {
-  ensureLifecycleInitialized,
-  OPENCODE_PORT,
-  RUNTIME_EPOCH_HEADER
-} from './instance-runtime';
+import { ensureLifecycleInitialized } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
 import { loadModelCatalog, type ModelCatalog } from './model-catalog';
 import { isSafeRepoKey, workspaceDirectory } from './repos';
@@ -969,16 +965,9 @@ async function streamSessionEvents(
     return closedSessionEventStream({ ...state, state: 'sleeping' });
   }
 
-  const target = new URL(`http://localhost:${OPENCODE_PORT}/event`);
-  target.searchParams.set('directory', directory);
-  const upstream = await resolveSandbox(env, instance).containerFetch(
-    new Request(target.toString(), {
-      headers: {
-        accept: 'text/event-stream',
-        [RUNTIME_EPOCH_HEADER]: runtimeEpoch
-      }
-    }),
-    OPENCODE_PORT
+  const upstream = await resolveSandbox(env, instance).streamOpencodeEvents(
+    runtimeEpoch,
+    directory
   );
 
   if (!upstream.ok || !upstream.body) {

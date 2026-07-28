@@ -87,13 +87,14 @@ container shell command goes through `shellQuote`/`isSafeBranchName` in
 
 ## Never exclude anything from the workspace snapshot
 
-`CHECKPOINT_EXCLUDES` in `src/sandbox.ts` is empty and must stay that way unless
-somebody unpacks a real archive to prove otherwise. The container expands each
-exclude into `<pattern>` *and* `... <pattern>`, and mksquashfs 4.5 in
-`cloudflare/sandbox:0.12.3` reads the second form as "drop the parent
-directory". One entry for `.opencode-state/cache` therefore removed all of
-`.opencode-state` — OpenCode's database, and so every conversation — from every
-snapshot for eight hours, while every checkpoint and restore reported success.
+The snapshot protocol has no `excludes` field and the host passes none, which is
+deliberate — the reasoning is written out at `createBackup` in `host/host.ts`.
+The container expands each exclude into `<pattern>` *and* `... <pattern>`, and
+mksquashfs 4.5 in `cloudflare/sandbox:0.12.3` reads the second form as "drop the
+parent directory". One entry for `.opencode-state/cache` therefore removed all
+of `.opencode-state` — OpenCode's database, and so every conversation — from
+every snapshot for eight hours, while every checkpoint and restore reported
+success.
 
 ## A session can be lost, and that is terminal
 
@@ -116,48 +117,52 @@ old record — that is a different conversation wearing this one's name.
 
 Since M6 the stock OpenCode UI and its proxies (`/ui/`, `/assets/`, `/gateway/`,
 `/hub/bootstrap.js`) are deleted. The browser talks only to `/api/*` and the SPA
-shell; containers are reached exclusively by Durable Object RPC from inside the
-Worker. Keep it that way — do not add a route that forwards browser traffic to a
-container port. Files are `/api/sessions/:id/files`, which refuses a sleeping
-session rather than waking one.
+shell; containers are reached only by Durable Object RPC into `Sandbox`, which
+reaches them only through the host protocol. Keep it that way — do not add a
+route that forwards browser traffic to a container, and do not call
+`HostClient.proxyFetch` from outside the class: the gate is what keeps a passive
+retry from waking anything. Files are `/api/sessions/:id/files`, which refuses a
+sleeping session rather than waking one.
 
 ## The terminal was removed, and why that matters for the next one
 
 There was a shell: `GET /api/sessions/:id/terminal` upgraded a WebSocket and
 handed it to the Sandbox SDK's `stub.terminal()`, which proxies the PTY onto the
-container's control-plane port 3000. `containerFetch` admits port 3000 only
-while a `withControlPlaneAccess` operation is in flight, and a terminal is not
-one — so every attempt threw `Sandbox control plane is not admitted`. The panel
-sat behind a collapsed sidebar tab and was never opened, so it shipped dead and
-stayed dead. It is gone now: the route, the panel, xterm, the SDK stub cast, and
+container's control-plane port 3000. The site admitted port 3000 only while a
+control-plane operation was in flight, and a terminal was not one — so every
+attempt threw `Sandbox control plane is not admitted`. The panel sat behind a
+collapsed sidebar tab and was never opened, so it shipped dead and stayed dead. It is gone now: the route, the panel, xterm, the SDK stub cast, and
 the `keepalive` work-lease route that existed only to stop the idle probe from
 reaping an attached shell.
 
-Two things to keep when it is rebuilt. Go through the class, not the SDK's
-client-side stub proxies — a proxy that bypasses `Sandbox` bypasses the runtime
-gate and the control-plane admission with it, which is exactly how this one came
-to be dead on arrival. And a shell is invisible to the OpenCode activity probe,
-so it needs a work lease (`LifecycleCoordinator.beginWork`) renewed on a timer,
+Two things to keep when it is rebuilt. Go through the class — a path that
+bypasses `Sandbox` bypasses the runtime gate with it, which is exactly how this
+one came to be dead on arrival; the protocol has no terminal route today, and
+adding one means adding it to every host. And a shell is invisible to the
+OpenCode activity probe, so it needs a work lease
+(`LifecycleCoordinator.beginWork`) renewed on a timer,
 left to expire on its own when the tab closes; that is the one deliberate
 exception to "passive traffic never keeps a container alive".
 
 ## Local development
 
-`pnpm dev` starts `wrangler dev` with a real container. It hangs after
-"Preparing container image(s)" when `HTTP_PROXY`/`HTTPS_PROXY` are set in the
-environment: the image builds, but the server never starts listening and every
-request to `localhost:8787` times out with no error in the log. Start it with
-those variables unset instead:
+`pnpm dev` starts the site's `wrangler dev`, and the site runs no containers, so
+this alone gets you the Hub, D1 and the SPA — with every container path failing
+at the `SANDBOX_HOST` binding. To exercise a session end to end, run the sandbox
+host beside it:
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy pnpm dev
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy wrangler dev -c host/wrangler.jsonc
 ```
 
-`NO_PROXY` does not help — wrangler reads the proxy variables directly. Two
-`wrangler dev` processes on the same port fail the same silent way, so check for
-a stale one before assuming the proxy is at fault. `.wrangler/state` holds only
-local Durable Object and R2 data; deleting it is the way to recover from a
-wedged local run.
+That is the process with a real container in it, and it is the one the proxy
+variables break: it hangs after "Preparing container image(s)" when
+`HTTP_PROXY`/`HTTPS_PROXY` are set — the image builds, the server never listens,
+and every request times out with no error in the log. `NO_PROXY` does not help;
+wrangler reads the proxy variables directly. Two `wrangler dev` processes on the
+same port fail the same silent way, so check for a stale one before assuming the
+proxy is at fault. `.wrangler/state` holds only local Durable Object and R2
+data; deleting it is the way to recover from a wedged local run.
 
 For front-end-only work, `pnpm dev:mock` runs the Vite dev server against
 in-memory fixtures (`web/src/mock/`) — no wrangler, no Docker, no D1. Fixtures
@@ -173,56 +178,73 @@ fixtures compiling — `pnpm typecheck` covers them.
 production.** There is no separate release step and no manual `pnpm run deploy`
 to offer afterwards.
 
-## There are two Workers
+## There are two Workers, and only one of them runs containers
 
-The site (`src/`, root `wrangler.jsonc`) and `opencode-sandbox-host`
-(`host/`, `host/wrangler.jsonc`) — the Cloudflare implementation of the
-[Sandbox Host protocol](protocol/PROTOCOL.md), which runs session containers
-and nothing else. The same `Dockerfile` builds both container applications, so
-a change to it, to `docker/` or to `protocol/` deploys the host as well; the
-workflow does that first, because the site's service binding must not point at
-a Worker that is not there yet. `host/` has its own `tsconfig.json` and its own
-generated `worker-configuration.d.ts` — a second Worker is a second `Env`.
+The site (`src/`, root `wrangler.jsonc`) has no container binding at all. Every
+container belongs to a *sandbox host* — for Cloudflare sessions that is
+`opencode-sandbox-host` (`host/`, `host/wrangler.jsonc`), reached over the
+private `SANDBOX_HOST` service binding, which is also the authentication
+boundary. `host/` has its own `tsconfig.json` and its own generated
+`worker-configuration.d.ts`: a second Worker is a second `Env`.
 
-Until the site is switched over to the protocol client it still drives its own
-containers through the `Sandbox` Durable Object, and the host Worker is
-deployed but unused.
+The contract between them is the [Sandbox Host protocol](protocol/PROTOCOL.md).
+`src/host-client.ts` is the site's only client — one method per route, one
+transport per provider — and `src/runtime-ops.ts` is what the Hub does *inside*
+a container expressed against it. `src/sandbox.ts` keeps everything a host may
+not have: the runtime gate, the epoch, the backup ledger, the activity probe,
+the transcript mirror, the deletion barrier.
+
+A change to `Dockerfile`, `docker/`, `host/` or `protocol/` deploys the host;
+the workflow does that first, because the site's service binding must not point
+at a Worker that is not there yet. Everything else deploys the site alone, which
+now builds no image at all.
+
+Because the platform's `container.running` went with the binding, the site keeps
+its own answer to "is it up" under the `host:runtime` storage key, written by
+every call that starts or stops a container and calibrated against
+`GET /sessions/:id` wherever a round trip is affordable — the runtime status
+read, and the entry to every stop path. Do not reintroduce a synchronous
+container check; there is nothing local left to ask.
 
 ## Two buckets, split by who writes them
 
 `opencode-cloud-sessions` (`SESSION_BUCKET`) is the site's: transcript mirrors
 under `transcripts/` and staged prompt attachments under `prompt-attachments/`.
-`opencode-cloud-backups` (`BACKUP_BUCKET`) is the container snapshots and their
-ledger under `backups/`, which belong to whichever host runs the container —
-the sandbox host Worker binds it, and the site keeps the binding only until it
-stops driving containers itself.
+`opencode-cloud-backups` (`BACKUP_BUCKET`) is the container snapshots under
+`backups/`, written only by the sandbox host Worker — the site no longer sets
+`BACKUP_BUCKET_NAME`, which is the variable the sandbox SDK reads to presign
+uploads, because the SDK is on the host now.
 
-The snapshot bucket is the one that cannot be renamed casually:
-`BACKUP_BUCKET_NAME` is read by the sandbox SDK to presign uploads, and every
+The site still binds the snapshot bucket, for deletes and nothing else. Snapshot
+deletion is deliberately outside the protocol: the ledger of handles lives in
+the `Sandbox` object's own storage, so purge is the one thing that has to reach
+the bucket from this side. A host is never asked to forget a snapshot.
+
+The snapshot bucket is also the one that cannot be renamed casually: every
 stored backup handle refers to objects in it. Transcripts are plain `put`/`get`
 of our own, which is why they were the side that moved.
 
 ## A deploy that touches the image is a deploy that can lose sessions
 
-Deploying a changed container image rolls out: each running instance is sent
-`SIGTERM`, given 15 minutes, then `SIGKILL`. Nothing in the Worker checkpoints
-on the way down — `createCheckpoint` runs only at idle-stop and from the manual
-`/api/instances/:id/checkpoint` route — so an instance that has been busy since
-it was created has no snapshot, comes up on an empty `/workspace`, and its
-session goes to `lost`.
+This is the *host's* deploy now, not the site's. Deploying a changed container
+image rolls out: each running instance is sent `SIGTERM`, given 15 minutes, then
+`SIGKILL`. Nothing checkpoints on the way down — `createCheckpoint` runs only at
+idle-stop and from the manual `/api/instances/:id/checkpoint` route — so an
+instance that has been busy since it was created has no snapshot, comes up on an
+empty `/workspace`, and its session goes to `lost`.
 
-`rollout_active_grace_period` in `wrangler.jsonc` is set to 900 so an active
+`rollout_active_grace_period` in `host/wrangler.jsonc` is set to 900 so an active
 instance is left alone for fifteen minutes before it becomes eligible. **It buys
 time; it does not make a deploy safe.** Two things follow.
 
-The Worker version updates immediately and globally while containers roll out
-gradually, so for that whole window new Worker code is driving old-image
-containers. Nothing here is written to tolerate that yet, and the dangerous
-change is the one that moves both sides at once: bumping `@opencode-ai/sdk` in
-`package.json` together with `OPENCODE_VERSION` in the `Dockerfile`, or
-upgrading `@cloudflare/sandbox` — the SDK is in the Worker, its agent is in the
-image. Ship a version bump like that on its own, and expect the window to be
-inconsistent rather than assume it is not.
+The two Workers move independently, so a host rollout leaves new site code
+driving old-image containers, and a site deploy leaves new site code driving a
+host that has not moved. The dangerous change is the one that moves several
+sides at once: bumping `@opencode-ai/sdk` in `package.json` together with
+`OPENCODE_VERSION` in the `Dockerfile`, or upgrading `@cloudflare/sandbox` — the
+SDK is now in the host Worker, its agent is in the image, and the OpenCode
+client is in the site. Ship a version bump like that on its own, and expect the
+window to be inconsistent rather than assume it is not.
 
 And anything still running past the grace period is killed regardless. A deploy
 that must not lose work needs the instances drained first — checkpoint, then
@@ -230,11 +252,11 @@ stop — not a longer grace period.
 
 ## Most deploys do not touch the container at all
 
-`.github/workflows/deploy.yml` diffs the push against its predecessor and only
-runs `pnpm run deploy` when `Dockerfile`, `docker/` or `wrangler.jsonc` changed.
-Everything else ships with `pnpm run deploy:worker-only`, which passes
-`--containers-rollout=none`: the Worker is deployed without building or updating
-the container, and running instances are left alone entirely.
+`.github/workflows/deploy.yml` diffs the push against its predecessor and
+deploys `opencode-sandbox-host` only when `Dockerfile`, `docker/`, `host/` or
+`protocol/` changed. Everything else leaves the host — and therefore every
+running container — completely alone; the site is deployed on its own and builds
+no image.
 
 This has to be decided from the paths, not left to wrangler. Wrangler does skip
 a rollout when the container application's config does not change, but the image
@@ -242,13 +264,13 @@ is built from the `Dockerfile` on every deploy and its digest rarely reproduces
 across runners and days — `apt-get` and `npm install --global` see to that — so
 wrangler would see a new image nearly every time.
 
-Two consequences. `wrangler.jsonc` is on the list because a container
-configuration change (instance type, grace period, region constraints) reaches
-the platform through the same application update a rollout carries; skip it and
-the change silently does not apply. And a Worker-only deploy leaves the fleet on
-the old image indefinitely, so the version-skew warning above is not confined to
-a fifteen-minute window — the image only catches up on the next deploy that
-touches it.
+Two consequences. `host/wrangler.jsonc` is inside a watched directory because a
+container configuration change (instance type, grace period, region constraints)
+reaches the platform through the same application update a rollout carries; skip
+it and the change silently does not apply. And a site-only deploy leaves the
+fleet on the old image indefinitely, so the version-skew warning above is not
+confined to a fifteen-minute window — the image only catches up on the next
+push that touches a host path.
 
 ## Verification
 

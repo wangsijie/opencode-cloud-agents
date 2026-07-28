@@ -1,5 +1,4 @@
 import { DurableObject } from 'cloudflare:workers';
-import { getSandbox } from '@cloudflare/sandbox';
 import {
   deferDelete,
   finishDelete,
@@ -98,10 +97,7 @@ export class Hub extends DurableObject<Env> {
 }
 
 function resolveSandbox(env: Env, id: string) {
-  return getSandbox(env.Sandbox, id, {
-    normalizeId: true,
-    keepAlive: true
-  });
+  return env.Sandbox.getByName(id);
 }
 
 function resolveLifecycle(env: Env, id: string) {

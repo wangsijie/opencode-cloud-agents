@@ -3,8 +3,9 @@
  *
  * This module is the single-domain HTTP router and nothing else: it checks the
  * front door, dispatches to the API handlers, serves the SPA shell, and
- * re-exports the Durable Object classes Wrangler binds. The container itself
- * lives in [sandbox.ts](sandbox.ts).
+ * re-exports the Durable Object classes Wrangler binds. Container orchestration
+ * lives in [sandbox.ts](sandbox.ts); the containers themselves belong to a
+ * sandbox host, which this Worker only talks to.
  *
  * Since M6 there is no public route into a container. The stock OpenCode UI and
  * its proxies (`/ui/`, `/assets/`, `/gateway/`, `/hub/bootstrap.js`) are gone;
@@ -12,7 +13,6 @@
  * `/api/sessions/*` route, and the only thing that reaches a container is a
  * Durable Object RPC from inside this Worker.
  */
-import { ContainerProxy } from '@cloudflare/sandbox';
 import {
   enforceSameOrigin,
   handleAuthApi,
@@ -34,7 +34,7 @@ import { Sandbox } from './sandbox';
 import { listSessionProviders } from './sandbox-providers';
 import { SessionAgent } from './session-agent';
 
-export { ContainerProxy, Hub, LifecycleCoordinator, Sandbox, SessionAgent };
+export { Hub, LifecycleCoordinator, Sandbox, SessionAgent };
 
 /** Matches `build.assetsDir` in [vite.config.ts](../vite.config.ts). */
 const SPA_ASSET_DIR = 'hub-assets';

@@ -14,7 +14,6 @@
  * replication) is deliberately unused, so reads here are strongly consistent
  * with the writes that precede them.
  */
-import { getSandbox } from '@cloudflare/sandbox';
 import type { SessionProvider } from '../protocol/types.ts';
 import {
   REPO_CATALOG_TTL_MS,
@@ -503,10 +502,7 @@ async function repoLastUse(env: Env): Promise<Map<string, string>> {
 }
 
 function resolveSandbox(env: Env, id: string) {
-  return getSandbox(env.Sandbox, id, {
-    normalizeId: true,
-    keepAlive: true
-  });
+  return env.Sandbox.getByName(id);
 }
 
 function resolveLifecycle(env: Env, id: string) {

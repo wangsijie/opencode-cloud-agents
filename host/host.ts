@@ -455,10 +455,29 @@ export class CloudflareSandboxHost extends BaseSandbox<Env> {
     const name = optionalString(body, 'name');
     const ttl = optionalNumber(body, 'ttlSeconds');
     this.requireRunning();
-    // No excludes, ever: mksquashfs in this image reads the SDK's expanded
-    // `... <pattern>` form as "drop the parent directory", which once removed
-    // all of `.opencode-state` — and so every conversation — from snapshots
-    // that reported success. See AGENTS.md.
+    // Nothing is left out of the workspace snapshot, and the protocol has no
+    // way to ask for it. This once excluded `.opencode-state/cache`, and that
+    // one entry silently dropped the whole `.opencode-state` tree from every
+    // archive — including `data/opencode/opencode.db`, which is the entire
+    // conversation. Every session that slept between 2026-07-26 08:15 UTC and
+    // the fix came back to a container that had never heard of it, and answered
+    // the next prompt with a 404.
+    //
+    // The mechanism is here rather than in the caller. `createArchive` expands
+    // every exclude into two patterns — the pattern itself and
+    // `... <pattern>`, the match-at-any-depth form — and writes both into an
+    // `-ef` file. Verified inside `cloudflare/sandbox:0.12.3`, whose mksquashfs
+    // is 4.5:
+    //
+    //   .opencode-state/cache        → drops the cache, correctly
+    //   ... .opencode-state/cache    → drops all of .opencode-state
+    //
+    // So any exclude with a `/` in it takes its parent directory with it. (4.6
+    // locally does not, which is what makes this so easy to miss.) Do not add
+    // one back without unpacking a real archive afterwards to see what
+    // survived: the checkpoint succeeds, the restore succeeds, the handle is
+    // stored, and the only symptom arrives one wake later as somebody else's
+    // 404. The cache it was saving was 3 MB of a 165 MB archive.
     const backup = await this.createBackup({
       dir,
       ...(name ? { name } : {}),

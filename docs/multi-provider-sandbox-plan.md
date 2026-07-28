@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`,CI 已按 `Dockerfile/docker/host/protocol` 判定并先于站点部署,已部署且冒烟通过——`wrangler dev -c host/wrangler.jsonc`(proxy 变量 unset)对真实容器跑通 ensure/exec/文件/opencode start+SSE proxy/snapshot+restore/stop/delete 与全部错误分支;任务 4.5 已完成:`opencode-cloud-sessions` 已建,站点 `SESSION_BUCKET` 接管 transcripts + attachments,存量 copy **不需要**——生产 D1 当时 0 条 session,无历史可迁,也因此这次 wrangler.jsonc 变更带的 container rollout 零影响)。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`,已部署并对真实容器冒烟通过;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬,存量 copy 不需要——生产 D1 当时 0 条 session。任务 5 已落地:站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B;两处偏离计划见任务 5 正文的"实际落地"。**尚未部署验证**——回归清单在任务 5 验收里,合并前请按它走一遍)。其余任务待做。
 
 ## 目标架构(已确认)
 
@@ -65,15 +65,23 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 **交付/验收**:`pnpm test` + typecheck 绿;部署后睡眠 session 的历史仍可读(即 copy 生效)。未动继承与 containers,零风险。
 **依赖**:无(可与任务 4 并行)。
 
-## 任务 5:站点切换到 HostClient(CF-only)⚠ 风险最高,单独 PR
+## 任务 5:站点切换到 HostClient(CF-only)⚠ 风险最高,单独 PR ✅ 已实现,未部署
 
 **内容**:
 - `src/host-client.ts`:唯一协议客户端,传输可插(service binding stub / fetch+baseUrl+bearer),含 `opencodeServerEnv(config)`、proxy URL 重写(剥 epoch header)。
-- `sandbox.ts` 去 `extends BaseSandbox` 改普通 `DurableObject`(类名/storage 不变):约 20 处 `persistenceState.container?.running` → 本地真值 `host:runtime` + 探针经 `GET /sessions/:id` 校准;5 处 `getTcpPort(4096)` → `host.proxyFetch`;`containerFetch` override 删除,SSE 改新编排方法 `streamOpencodeEvents`(`api-sessions.ts:934` 改调);凭证注入/provision/changes/publish 方法体抽 `src/runtime-ops.ts`(接 HostClient + 窄接口,批量化:一次 write-batch + 一次脚本 exec);wake/quiesce/purge 改走协议(snapshot 句柄进出台账);gate/epoch/drain 一行不动。
-- 解析点(`instance-access.ts:39`、`instance-runtime.ts:98`、`hub-store.ts:499`、`hub.ts:101`)改普通 DO stub。
-- 站点 wrangler.jsonc:删 containers,加 `services: [{binding:"SANDBOX_HOST", service:"opencode-sandbox-host"}]`;**同时删站点的 `BACKUP_BUCKET` 绑定和 `BACKUP_BUCKET_NAME`**(快照已归 Worker B,留着就是残留权限);`pnpm run types`。
-**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs`、`test/runtime-ops.test.mjs`);部署后存量 CF session 全流程无回归:唤醒(台账句柄经 B 恢复)→ 对话 → 空闲睡眠 → mirror 读 → 再唤醒 → checkpoint → publish → 删除。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox\|BACKUP_BUCKET" src/`。
-**依赖**:任务 2、4、4.5。
+- `sandbox.ts` 去 `extends BaseSandbox` 改普通 `DurableObject`(类名/storage 不变):约 20 处 `persistenceState.container?.running` → 本地真值 `host:runtime` + 探针经 `GET /sessions/:id` 校准;5 处 `getTcpPort(4096)` → `host.proxyFetch`;`containerFetch` override 删除,SSE 改新编排方法 `streamOpencodeEvents`(`api-sessions.ts` 改调);凭证注入/provision/changes/publish 方法体抽 `src/runtime-ops.ts`(接 HostClient + 窄接口,批量化:一次 write-batch + 一次脚本 exec);wake/quiesce/purge 改走协议(snapshot 句柄进出台账);gate/epoch/drain 一行不动。
+- 解析点(`instance-access.ts`、`instance-runtime.ts`、`hub-store.ts`、`hub.ts`、`lifecycle.ts`)改 `env.Sandbox.getByName(id)`——`getSandbox` 内部就是 `idFromName(id.toLowerCase())`,实例 id 本来就全小写,DO 身份不变。
+- 站点 wrangler.jsonc:删 containers,加 `services: [{binding:"SANDBOX_HOST", service:"opencode-sandbox-host"}]`;删 `BACKUP_BUCKET_NAME` / `PERSISTENCE_LOCAL_BUCKET`;`pnpm run types`。
+
+**实际落地的两处偏离**(都是有意的):
+1. **站点保留 `BACKUP_BUCKET` 绑定**。原计划要一并删掉,但 PROTOCOL.md 明确把"快照删除"留在调用方:句柄台账在 `Sandbox` DO storage 里,purge 要按 `backups/<id>/` 前缀删对象、还要扫 `meta.json` 找孤儿。要删站点绑定就得给协议加 snapshot delete/list 两个端点(以及 agent 的对应实现),在本就最高风险的一步里不值得。所以只删 `BACKUP_BUCKET_NAME`(那是 SDK presign 用的,SDK 已经在 B 了),绑定留着**只用于删**,AGENTS.md 写清楚了。
+2. **CI 简化**。站点不再有 containers,`deploy:worker-only` / `--containers-rollout=none` 那条分支变成死代码,已删;站点每次都 `pnpm run deploy`(不再构建镜像,反而更快),容器 rollout 只由 `Dockerfile/docker/host/protocol` 触发的 Worker B 部署决定。
+
+顺手修掉的既有 bug:`ensureRepoProvisioned` 声明成 `async` 又返回 promise,`await` 会把内层 fetch 一起等掉——注释里说的"与 server start 重叠"从来没生效过。现在 `provisionRepository` 返回 `{fetching?}` 包一层。
+
+**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs` 13 例、`test/runtime-ops.test.mjs` 15 例)✅。**部署后仍需存量回归**:唤醒(台账句柄经 B 恢复)→ 对话 → 空闲睡眠 → mirror 读 → 再唤醒 → checkpoint → publish → 删除。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox\|containerFetch" src/` ✅ 全空。
+
+**部署注意**:这次部署会让在跑的站点容器退役(站点的 container application 被移除),没 checkpoint 的活跃会话会 `lost`。要么先把实例 drain 掉(checkpoint 再 stop),要么挑没人用的时间窗。
 
 ## 任务 6:docker provider 接通(站点侧)
 
@@ -103,7 +111,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 ## 依赖图与建议节奏
 
 ```
-任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换) ──→ 任务6(docker 接通) ──→ 任务9(e2e)
+任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换 ✅) ──→ 任务6(docker 接通) ──→ 任务9(e2e)
 任务2(数据) ──────────────────────↗            任务7(agent,可并行) ────↗
 任务3(settings) ────────────────────────────────↗  任务8(UI) ──────────↗
 任务4.5(拆桶,与 4 并行) ──────────↗

@@ -4,6 +4,13 @@ An OpenCode Hub on Cloudflare Workers, Durable Objects, Containers, and R2. One
 Worker hostname serves a session dashboard and routes traffic to any number of
 independently sleeping OpenCode containers.
 
+There are two Workers. The site (`src/`) owns the Hub — the SPA, the API, D1,
+and the Durable Objects that decide when anything happens. It runs no containers
+itself: those belong to a *sandbox host*, reached over the
+[Sandbox Host protocol](protocol/PROTOCOL.md). `opencode-sandbox-host` (`host/`)
+is the Cloudflare implementation, deployed beside the site and bound privately;
+a second implementation runs Docker containers on a machine of your own.
+
 The container integration follows Cloudflare's
 [`sandbox-sdk/examples/opencode`](https://github.com/cloudflare/sandbox-sdk/tree/main/examples/opencode)
 example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
@@ -44,7 +51,7 @@ example. This repository pins Sandbox SDK/container image `0.12.3` and OpenCode
 The Hub is a single Worker hostname and nothing behind it is publicly routable.
 Every browser request is either the SPA shell, its hashed assets, or an
 `/api/*` route; the only thing that reaches a container is a Durable Object RPC
-made inside the Worker.
+made inside the Worker, which reaches it in turn through the host protocol.
 
 That was not always true. Until M6 the stock OpenCode SPA was served through
 this Worker as an escape hatch for terminals and file browsing, which needed a
@@ -63,10 +70,10 @@ cannot restart the container.
 
 The other half of that retirement, a terminal, has been removed. Its PTY was
 proxied through the Sandbox SDK's `stub.terminal()` onto container port 3000,
-which `containerFetch` admits only during a control-plane operation, so it threw
-on every attempt; behind a collapsed sidebar tab nobody ever found out. There is
-no WebSocket route into a container today, and the Sandbox Durable Object
-refuses an upgrade outright.
+which was admitted only during a control-plane operation, so it threw on every
+attempt; behind a collapsed sidebar tab nobody ever found out. There is no
+WebSocket route into a container today, the protocol has none either, and the
+Sandbox Durable Object refuses an upgrade outright.
 
 The upside of the retirement is that OpenCode upgrades are no longer coupled to
 a bundle patch, and `/gateway/` no longer exists as a public route.
@@ -212,18 +219,21 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:8787>. Building the container image for the first time
-can take several minutes. Local development uses Wrangler's local R2 store via
-`PERSISTENCE_LOCAL_BUCKET=true`.
-
-If `HTTP_PROXY`/`HTTPS_PROXY` are set in the shell, Wrangler hangs after
-"Preparing container image(s)": the image builds, but the server never listens
-and every request times out with nothing in the log. `NO_PROXY` does not help.
-Start it with those variables unset:
+Open <http://localhost:8787>. That is the site alone, which is enough for
+everything but running a session; container paths fail at the `SANDBOX_HOST`
+binding until the sandbox host is running too:
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy pnpm dev
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy wrangler dev -c host/wrangler.jsonc
 ```
+
+Building the container image for the first time can take several minutes. That
+host process is also the one the proxy variables break: with
+`HTTP_PROXY`/`HTTPS_PROXY` set, Wrangler hangs after "Preparing container
+image(s)" — the image builds, the server never listens, and every request times
+out with nothing in the log. `NO_PROXY` does not help; start it with those
+variables unset, as above. Local development uses Wrangler's local R2 store via
+`PERSISTENCE_LOCAL_BUCKET`, which is the host's variable now.
 
 A second `wrangler dev` already holding the port fails the same silent way, so
 check for a stale process before blaming the proxy. `.wrangler/state` holds only

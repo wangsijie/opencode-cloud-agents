@@ -1,5 +1,5 @@
 /**
- * The instance container: one Sandbox Durable Object per Hub instance.
+ * The instance orchestrator: one Sandbox Durable Object per Hub instance.
  *
  * This object owns everything that happens inside a container — the R2-backed
  * workspace checkpoint/restore cycle, the runtime gate that admits requests
@@ -7,18 +7,38 @@
  * time, the semantic activity probe, and the deletion barrier. The Worker
  * router in [index.ts](index.ts) never reaches into a container except through
  * the RPC surface declared here.
+ *
+ * It no longer *runs* the container. Everything physical — booting, exec, file
+ * I/O, the OpenCode server, the HTTP proxy, snapshots — goes out over the
+ * [Sandbox Host protocol](../protocol/PROTOCOL.md) through
+ * [host-client.ts](host-client.ts), to whichever host the instance's provider
+ * names. What stays here is the part no host may have: policy, state, and the
+ * decision of when anything is allowed to happen.
+ *
+ * Because the platform's `container.running` is gone with the container
+ * binding, "is it up" is this object's own record (`host:runtime`), written
+ * whenever it starts or stops one and calibrated against the host's
+ * `GET /sessions/:id` on the paths that can afford a round trip.
  */
-import {
-  Sandbox as BaseSandbox,
-  type DirectoryBackup
-} from '@cloudflare/sandbox';
-import { createOpencodeServer } from '@cloudflare/sandbox/opencode';
+import { DurableObject } from 'cloudflare:workers';
 import type { Part } from '@opencode-ai/sdk/v2';
-import type { SessionProvider } from '../protocol/types.ts';
+import type { SessionProvider, SnapshotHandle } from '../protocol/types.ts';
 import {
   createOpencodeClient,
   type OpencodeClient
 } from '@opencode-ai/sdk/v2/client';
+import {
+  isContainerNotRunning,
+  opencodeServerEnv,
+  resolveHostClient,
+  type HostClient
+} from './host-client';
+import {
+  injectContainerCredentials,
+  provisionRepository,
+  publishSessionChanges as publishChangesOnHost,
+  readSessionChanges as readChangesOnHost
+} from './runtime-ops';
 import {
   isSafeRuntimeEpoch,
   isWebSocketUpgrade,
@@ -41,14 +61,7 @@ import {
   type OpencodeSessionActivityInput,
   type PromptOpencodeSessionInput
 } from './instance-runtime';
-import {
-  CONTAINER_AGENTS_MD_PATH,
-  CONTAINER_SKILLS_ROOT,
-  containerEnv,
-  credentialFiles,
-  gitConfigCommands,
-  loadContainerCredentials
-} from './container-credentials';
+import { loadContainerCredentials } from './container-credentials';
 import { loadOpencodeConfig } from './model-catalog';
 import {
   classifyLegacySessionStatuses,
@@ -62,24 +75,14 @@ import {
 } from './opencode-activity';
 import {
   isSafeRepoDefinition,
-  repoOwnerFromCloneUrl,
   workspaceDirectory,
   WORKSPACE_ROOT,
   type RepoDefinition
 } from './repos';
-import {
-  decodeGitStatusOutput,
-  isSafeBranchName,
-  limitDiff,
-  normalizeCommitMessage,
-  parseGitStatus,
-  parsePullRequestUrl,
-  resolvePublishBranch,
-  shellQuote,
-  type PublishSessionChangesInput,
-  type PublishSessionChangesResult,
-  type SessionChanges,
-  type SessionChangesHead
+import type {
+  PublishSessionChangesInput,
+  PublishSessionChangesResult,
+  SessionChanges
 } from './session-changes';
 import { frameBelongsToSession, SseFrameBuffer } from './session-events';
 import {
@@ -122,43 +125,33 @@ const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
 const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
 const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
 const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
-
 /**
- * Nothing is left out of the workspace snapshot.
+ * This object's own answer to "is the container up".
  *
- * This used to exclude `.opencode-state/cache`, and that one entry silently
- * dropped the whole `.opencode-state` tree from every archive — including
- * `data/opencode/opencode.db`, which is the entire conversation. Every session
- * that slept between 2026-07-26 08:15 UTC and this fix came back to a container
- * that had never heard of it, and answered the next prompt with a 404.
- *
- * The mechanism is in the container, not here. `createArchive` expands every
- * exclude into two patterns — the pattern itself and `... <pattern>`, the
- * match-at-any-depth form — and writes both into an `-ef` file. Verified inside
- * `cloudflare/sandbox:0.12.3`, whose mksquashfs is 4.5:
- *
- *   .opencode-state/cache        → drops the cache, correctly
- *   ... .opencode-state/cache    → drops all of .opencode-state
- *
- * So any exclude with a `/` in it takes its parent directory with it. (4.6
- * locally does not, which is what makes this so easy to miss.)
- *
- * Do not add an exclude back without unpacking a real archive afterwards to see
- * what survived. This failure is invisible from every angle the Hub can see:
- * the checkpoint succeeds, the restore succeeds, `hasBackup` is true, and the
- * only symptom arrives one wake later as somebody else's 404.
- *
- * The cache it was saving was 3 MB of a 165 MB archive.
+ * The platform used to answer it synchronously through the container binding.
+ * A host is a network hop away, so the answer is recorded here — written by
+ * every call that starts or stops one, and re-read from the host wherever a
+ * round trip is affordable (the runtime status, the activity probe, the stop
+ * paths). It is persisted because a Durable Object restart must not come back
+ * believing a running container is stopped.
  */
-const CHECKPOINT_EXCLUDES: string[] = [];
+const HOST_RUNTIME_STORAGE_KEY = 'host:runtime';
+
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
-const CONTAINER_TERMINATION_TIMEOUT_MS = 10_000;
-const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
-const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
-const GIT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
-const GH_COMMAND_TIMEOUT_MS = 60 * 1000;
 const MAX_KNOWN_OPENCODE_LOCATIONS = 64;
+
+/**
+ * Grace before a stop escalates to SIGKILL.
+ *
+ * Zero, deliberately. Lifecycle callers have already checkpointed and purge
+ * callers have raised an irreversible deletion barrier, while a graceful
+ * SIGTERM can wait on OpenCode's long-lived server for minutes with admission
+ * already closed. The host bounds its own wait for the kill to land and answers
+ * `stopped: false` if it has not, which keeps the operation retryable rather
+ * than hanging.
+ */
+const STOP_GRACE_SECONDS = 0;
 
 /**
  * How often a running container re-exports its transcript.
@@ -193,10 +186,42 @@ const OPENCODE_ENV = {
 
 type CheckpointReason = 'manual' | 'idle-stop';
 
+/**
+ * A snapshot handle as this object stores it.
+ *
+ * The protocol treats handles as opaque and hands them back verbatim, which is
+ * all the wake path needs. The ledger needs slightly more: purge deletes the R2
+ * objects itself (PROTOCOL.md leaves snapshot deletion to the caller, which
+ * holds both the ledger and the bucket), and the keys are derived from `id`.
+ * Nothing else here reads inside a handle.
+ */
+interface StoredSnapshotHandle extends SnapshotHandle {
+  id: string;
+  dir: string;
+}
+
 interface StoredBackup {
-  backup: DirectoryBackup;
+  backup: StoredSnapshotHandle;
   createdAt: string;
   reason: CheckpointReason;
+}
+
+/**
+ * What this object believes about the container behind it.
+ *
+ * `running` is the local truth every gate check reads; the rest is what
+ * {@link InstanceRuntimeStatus} used to take from the platform's container
+ * state and now takes from the host's `GET /sessions/:id`.
+ */
+interface HostRuntimeState {
+  running: boolean;
+  /** When the host last saw the run state change, if it said. */
+  changedAt?: string;
+  exitCode?: number;
+  /** When this record was last written, from either a call or a probe. */
+  observedAt: string;
+  /** Set when the last read of the host itself failed. */
+  error?: string;
 }
 
 interface PersistenceError {
@@ -324,17 +349,22 @@ export type PurgeInstanceResult = {
  * another checkpoint, every known R2 object is deleted, then DO storage is
  * cleared. A failed purge is retryable because the backup handles remain.
  */
-export class Sandbox extends BaseSandbox<Env> {
+export class Sandbox extends DurableObject<Env> {
   private readonly persistenceState: DurableObjectState<{}>;
   private readonly persistenceEnv: Env;
   private readonly lifecycleReady: Promise<void>;
+  /** Local truth about the container; see {@link HOST_RUNTIME_STORAGE_KEY}. */
+  private hostRuntime: HostRuntimeState = {
+    running: false,
+    observedAt: new Date(0).toISOString()
+  };
+  private hostClient: HostClient | undefined;
   private restoreInProgress: Promise<void> | undefined;
   private checkpointInProgress: Promise<StoredBackup> | undefined;
   private purgeInProgress: Promise<PurgeInstanceResult> | undefined;
   private purgeRequested = false;
   private instanceIdentity: InstanceIdentity | undefined;
   private runtimeGate: RuntimeGate | undefined;
-  private controlPlaneOperations = 0;
   private locationsNeedDiscovery = false;
   private knownLocations = new Map<string, OpenCodeLocation>([
     [
@@ -376,7 +406,8 @@ export class Sandbox extends BaseSandbox<Env> {
         knownLocations,
         transcriptTarget,
         transcriptMirror,
-        lastWake
+        lastWake,
+        hostRuntime
       ] = await Promise.all([
         ctx.storage.get<boolean>(PURGE_STORAGE_KEY),
         ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY),
@@ -384,9 +415,13 @@ export class Sandbox extends BaseSandbox<Env> {
         ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY),
         ctx.storage.get<TranscriptTarget>(TRANSCRIPT_TARGET_STORAGE_KEY),
         ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY),
-        ctx.storage.get<WakeTimings>(WAKE_TIMINGS_STORAGE_KEY)
+        ctx.storage.get<WakeTimings>(WAKE_TIMINGS_STORAGE_KEY),
+        ctx.storage.get<HostRuntimeState>(HOST_RUNTIME_STORAGE_KEY)
       ]);
       this.purgeRequested = Boolean(purgeRequested);
+      if (hostRuntime) {
+        this.hostRuntime = hostRuntime;
+      }
       this.instanceIdentity = identity;
       this.runtimeGate = runtimeGate;
       this.transcriptTarget = transcriptTarget;
@@ -403,6 +438,90 @@ export class Sandbox extends BaseSandbox<Env> {
     });
   }
 
+  /**
+   * The host that runs this instance's container.
+   *
+   * Resolved from the identity's provider and cached for this object's
+   * lifetime: an instance's provider is chosen when its session is created and
+   * never changes, so re-deriving it per call would only cost settings reads.
+   */
+  private get host(): HostClient {
+    const identity = this.instanceIdentity;
+    if (!identity) {
+      throw new Error('This instance has no sandbox host');
+    }
+    this.hostClient ??= resolveHostClient(
+      this.persistenceEnv,
+      identity.id,
+      identity.provider ?? 'cloudflare'
+    );
+    return this.hostClient;
+  }
+
+  /** Record what this object now believes about the container. */
+  private async setHostRuntime(
+    state: Omit<HostRuntimeState, 'observedAt'>
+  ): Promise<void> {
+    const stored: HostRuntimeState = {
+      ...state,
+      observedAt: new Date().toISOString()
+    };
+    this.hostRuntime = stored;
+    await this.persistenceState.storage.put(HOST_RUNTIME_STORAGE_KEY, stored);
+  }
+
+  /** Whether the container is up, as far as this object knows. */
+  private get hostRunning(): boolean {
+    return this.hostRuntime.running;
+  }
+
+  /**
+   * Ask the host what is actually true and adopt the answer.
+   *
+   * A host that cannot be reached leaves the previous belief in place with the
+   * failure recorded beside it: an unreachable host is not evidence that the
+   * container stopped, and treating it as such would let a wake tear down a
+   * container that is still serving.
+   */
+  private async refreshHostRuntime(): Promise<HostRuntimeState> {
+    if (!this.instanceIdentity) {
+      return this.hostRuntime;
+    }
+    try {
+      const state = await this.host.state();
+      await this.setHostRuntime({
+        running: state.running,
+        ...(state.changedAt ? { changedAt: state.changedAt } : {}),
+        ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode })
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.setHostRuntime({ ...this.hostRuntime, error: message });
+      console.warn('Failed to read sandbox host session state', {
+        instanceId: this.instanceIdentity.id,
+        error: message
+      });
+    }
+    return this.hostRuntime;
+  }
+
+  /**
+   * Run one host call, keeping the local truth in step with what it reports.
+   *
+   * `CONTAINER_NOT_RUNNING` is the host telling us the container went away
+   * under us, which is exactly the transition this record exists to notice.
+   */
+  private async onHost<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (isContainerNotRunning(error) && this.hostRuntime.running) {
+        await this.setHostRuntime({ running: false });
+      }
+      throw error;
+    }
+  }
+
   async initializeInstance(
     id: string,
     repoKey?: string,
@@ -410,7 +529,6 @@ export class Sandbox extends BaseSandbox<Env> {
     provider: SessionProvider = 'cloudflare'
   ): Promise<void> {
     await this.lifecycleReady;
-    await this.setKeepAlive(true);
     if (this.purgeRequested) {
       throw new Error('A deleting instance cannot be initialized');
     }
@@ -426,7 +544,7 @@ export class Sandbox extends BaseSandbox<Env> {
         throw new Error('A deleted instance cannot be reactivated');
       }
       this.instanceActive = true;
-      if (!this.runtimeGate && this.persistenceState.container?.running !== true) {
+      if (!this.runtimeGate && !this.hostRunning) {
         await this.setRuntimeGate({ phase: 'sleeping', revision: 0 });
       }
       return;
@@ -456,14 +574,19 @@ export class Sandbox extends BaseSandbox<Env> {
     await this.setRuntimeGate({ phase: 'sleeping', revision: 0 });
   }
 
+  /**
+   * Bring the container up and put the workspace back inside it.
+   *
+   * The two are one step: the host's `ensure` is what boots a stopped
+   * container, and a booted container is by definition on a fresh writable
+   * filesystem until a snapshot is restored into it.
+   */
   async ensureWorkspaceRestored(): Promise<void> {
     await this.lifecycleReady;
     this.assertInstanceActive();
 
     if (!this.restoreInProgress) {
-      this.restoreInProgress = this.withControlPlaneAccess(() =>
-        this.restoreWorkspace()
-      ).finally(() => {
+      this.restoreInProgress = this.restoreWorkspace().finally(() => {
         this.restoreInProgress = undefined;
       });
     }
@@ -493,7 +616,7 @@ export class Sandbox extends BaseSandbox<Env> {
     if (
       this.runtimeGate?.phase === 'running' &&
       this.runtimeGate.runtimeEpoch === input.runtimeEpoch &&
-      this.persistenceState.container?.running === true
+      (await this.refreshHostRuntime()).running
     ) {
       return this.inspectExecutionIfRunning();
     }
@@ -515,7 +638,7 @@ export class Sandbox extends BaseSandbox<Env> {
     // A wake that finds the container already up is a restart of the OpenCode
     // server, not a cold start, and mixing the two would make the number
     // meaningless.
-    const cold = this.persistenceState.container?.running !== true;
+    const cold = !this.hostRunning;
 
     try {
       // The config lives in D1 now, so read it before touching the container:
@@ -524,42 +647,50 @@ export class Sandbox extends BaseSandbox<Env> {
 
       const restoreStartedAt = Date.now();
       await this.ensureWorkspaceRestored();
-      // Container boot is inside this number: the first call into a stopped
-      // container is what starts it, and that call is the restore.
+      // Container boot is inside this number: `ensure` is what starts a stopped
+      // container, and the restore is what follows it into the fresh
+      // filesystem.
       timings.restoreMs = since(restoreStartedAt);
 
-      // Provisioning and the server start share one control-plane scope. The
-      // resumed-checkout fetch outlives the call that started it, and the scope
-      // is what admits its container traffic — closing it in between would fail
-      // the fetch on the next command it issues.
-      await this.withControlPlaneAccess(async () => {
-        // Credentials live outside /workspace, so a restored snapshot never
-        // carries them; every boot injects them fresh, inside this scope
-        // (exec and writeFile ride the control plane, which is only admitted
-        // here) and before anything reaches the repository over SSH.
-        const credentialsStartedAt = Date.now();
-        const containerEnv = await this.injectContainerCredentials();
-        timings.credentialsMs = since(credentialsStartedAt);
+      // Credentials live outside /workspace, so a restored snapshot never
+      // carries them; every boot injects them fresh, and before anything
+      // reaches the repository over SSH.
+      const credentialsStartedAt = Date.now();
+      const operatorEnv = await injectContainerCredentials(
+        this.host,
+        await loadContainerCredentials(this.persistenceEnv),
+        this.requireCheckout()
+      );
+      timings.credentialsMs = since(credentialsStartedAt);
 
-        const provisionStartedAt = Date.now();
-        const deferredFetch = await this.ensureRepoProvisioned();
-        timings.repoMs = since(provisionStartedAt);
+      const provisionStartedAt = Date.now();
+      const { fetching } = await provisionRepository(
+        this.host,
+        this.requireCheckout()
+      );
+      timings.repoMs = since(provisionStartedAt);
 
-        const serverStartedAt = Date.now();
-        // That fetch gates nothing the server needs, so it runs alongside the
-        // server start instead of in front of it. On a warm wake this takes the
-        // fetch — seconds against an SSH remote — off the serial path.
-        await Promise.all([
-          createOpencodeServer(this, {
+      const serverStartedAt = Date.now();
+      // That fetch gates nothing the server needs, so it runs alongside the
+      // server start instead of in front of it. On a warm wake this takes the
+      // fetch — seconds against an SSH remote — off the serial path.
+      await Promise.all([
+        this.onHost(() =>
+          this.host.opencodeStart({
             port: OPENCODE_PORT,
             directory: WORKSPACE_DIRECTORY,
-            config: opencodeConfig,
-            env: { ...containerEnv, ...OPENCODE_ENV }
-          }),
-          deferredFetch ?? Promise.resolve()
-        ]);
-        timings.serverMs = since(serverStartedAt);
-      });
+            // The host never sees the stored config: the site derives the
+            // environment the SDK used to derive in-container, and the operator's
+            // variables and the XDG redirects are merged last so they win.
+            env: opencodeServerEnv(opencodeConfig, {
+              ...operatorEnv,
+              ...OPENCODE_ENV
+            })
+          })
+        ),
+        fetching ?? Promise.resolve()
+      ]);
+      timings.serverMs = since(serverStartedAt);
 
       await this.setRuntimeGate({
         phase: 'running',
@@ -591,127 +722,6 @@ export class Sandbox extends BaseSandbox<Env> {
     await this.persistenceState.storage.put(WAKE_TIMINGS_STORAGE_KEY, timings);
   }
 
-  /**
-   * Provision the instance's catalog repository below /workspace during wake.
-   * The first wake clones; later wakes see the snapshot-restored checkout and
-   * only run a best-effort fetch, never touching the working tree.
-   *
-   * An instance created without a repository has nothing to provision: the
-   * workspace root is where its session works, and it is already there.
-   *
-   * Returns the fetch when there was already a checkout: it is deliberately not
-   * awaited here so the caller can overlap it with starting the server.
-   */
-  private async ensureRepoProvisioned(): Promise<Promise<void> | undefined> {
-    const identity = this.instanceIdentity;
-    if (!identity) {
-      return undefined;
-    }
-    const { repo, repoKey, directory } = this.requireCheckout();
-    if (!repoKey) {
-      return undefined;
-    }
-    const checkout = await this.exists(`${directory}/.git`);
-    if (checkout.exists) {
-      // A restored checkout knows its own remote, so resuming one needs nothing
-      // from the catalog. That is what keeps an instance created before the
-      // catalog was dynamic — or one whose repository has since left it —
-      // working exactly as it did.
-      //
-      // A fetch failure (offline remote, revoked key) must not block resuming
-      // the already-restored workspace — and neither must its latency, so this
-      // is handed back unawaited for the caller to overlap with the server
-      // start. Nothing downstream reads the refs it updates.
-      return this.exec(`git -C ${shellQuote(directory)} fetch origin --prune`, {
-        timeout: REPO_FETCH_TIMEOUT_MS
-      }).then(
-        (fetched) => {
-          if (!fetched.success) {
-            console.warn(
-              `Repo fetch failed for ${repoKey}: ${truncateOutput(fetched.stderr)}`
-            );
-          }
-        },
-        (error) => {
-          // A timed-out or refused fetch is a warning, not a failed wake: the
-          // checkout it was refreshing is already restored and usable.
-          console.warn(`Repo fetch failed for ${repoKey}`, error);
-        }
-      );
-    }
-
-    if (!repo) {
-      throw new Error(
-        `Instance ${identity.id} has no checkout and no pinned repository for ${repoKey}; wake refused`
-      );
-    }
-    const cloned = await this.exec(
-      `git clone --depth 1 --branch ${shellQuote(repo.defaultBranch)} ${shellQuote(
-        repo.cloneUrl
-      )} ${shellQuote(directory)}`,
-      { timeout: REPO_CLONE_TIMEOUT_MS }
-    );
-    if (!cloned.success) {
-      throw new Error(
-        `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
-      );
-    }
-    return undefined;
-  }
-
-  /**
-   * Write the operator's credentials and skills into the container.
-   *
-   * Runs on every wake, after the workspace restore and before anything
-   * touches the repository over SSH. Everything written here lives under
-   * `/root`, which no snapshot covers, so the container always reflects the
-   * settings table as of this wake — including deletions: the skills tree is
-   * rewritten wholesale.
-   *
-   * Returns the operator's extra environment variables for the server start.
-   */
-  private async injectContainerCredentials(): Promise<Record<string, string>> {
-    const settings = await loadContainerCredentials(this.persistenceEnv);
-
-    // A skill or AGENTS.md removed from settings must disappear from the
-    // container too.
-    await this.mustExec(`rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)}`);
-    await this.mustExec(`rm -f ${shellQuote(CONTAINER_AGENTS_MD_PATH)}`);
-
-    const files = credentialFiles(settings, this.instanceIdentity?.repoKey);
-    const directories = [
-      ...new Set(files.map((file) => file.path.slice(0, file.path.lastIndexOf('/'))))
-    ];
-    for (const directory of directories) {
-      await this.mustExec(`mkdir -p ${shellQuote(directory)}`);
-    }
-    for (const file of files) {
-      await this.writeFile(file.path, file.content);
-      // `writeFile` guarantees nothing about permissions, and OpenSSH refuses
-      // a private key other users could read.
-      await this.mustExec(`chmod ${file.mode} ${shellQuote(file.path)}`);
-    }
-    // The instance is bound to one repository, so the identity choice — a
-    // per-organization override or the base one — is made here, not by git.
-    const repoOwner = this.instanceIdentity?.repo
-      ? repoOwnerFromCloneUrl(this.instanceIdentity.repo.cloneUrl)
-      : undefined;
-    for (const command of gitConfigCommands(settings, repoOwner)) {
-      await this.mustExec(command);
-    }
-    return containerEnv(settings);
-  }
-
-  /** `exec` that treats a non-zero exit as the failure it is. */
-  private async mustExec(command: string): Promise<void> {
-    const result = await this.exec(command, { timeout: GIT_COMMAND_TIMEOUT_MS });
-    if (!result.success) {
-      throw new Error(
-        `Container command failed (${command}): ${truncateOutput(result.stderr)}`
-      );
-    }
-  }
-
   async getExecutionSnapshotIfRunning(
     runtimeEpoch: string
   ): Promise<ExecutionSnapshot> {
@@ -720,7 +730,7 @@ export class Sandbox extends BaseSandbox<Env> {
       if (
         this.runtimeGate?.phase !== 'running' ||
         this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-        this.persistenceState.container?.running !== true
+        !this.hostRunning
       ) {
         return notRunningExecutionSnapshot();
       }
@@ -752,7 +762,9 @@ export class Sandbox extends BaseSandbox<Env> {
   private async performQuiesceAndStopIfIdle(
     input: LifecycleStopInput
   ): Promise<LifecycleStopResult> {
-    if (this.persistenceState.container?.running !== true) {
+    // A stop is rare and irreversible, so it starts from the host's own answer
+    // rather than from what this object last believed.
+    if (!(await this.refreshHostRuntime()).running) {
       await this.setRuntimeGate({
         phase: 'sleeping',
         revision: Math.max(input.revision, this.runtimeGate?.revision ?? 0)
@@ -820,7 +832,7 @@ export class Sandbox extends BaseSandbox<Env> {
           operationId: input.operationId
         });
       }
-      if (this.persistenceState.container?.running === true) {
+      if (this.hostRunning) {
         const terminated = await this.terminateContainerBounded();
         if (!terminated) {
           return { outcome: 'termination_pending', snapshot };
@@ -832,7 +844,7 @@ export class Sandbox extends BaseSandbox<Env> {
       });
       return { outcome: 'stopped', snapshot };
     } catch (error) {
-      if (this.persistenceState.container?.running === true) {
+      if ((await this.refreshHostRuntime()).running) {
         await this.setRuntimeGate({
           phase: 'running',
           runtimeEpoch: input.runtimeEpoch,
@@ -863,7 +875,7 @@ export class Sandbox extends BaseSandbox<Env> {
     runtimeEpoch?: string;
     operationId: string;
   }): Promise<LifecycleForceStopResult> {
-    if (this.persistenceState.container?.running !== true) {
+    if (!(await this.refreshHostRuntime()).running) {
       await this.setRuntimeGate({
         phase: 'sleeping',
         revision: (this.runtimeGate?.revision ?? 0) + 1
@@ -913,7 +925,7 @@ export class Sandbox extends BaseSandbox<Env> {
           operationId: input.operationId
         });
       }
-      if (this.persistenceState.container?.running === true) {
+      if (this.hostRunning) {
         const terminated = await this.terminateContainerBounded();
         if (!terminated) {
           return { outcome: 'termination_pending' };
@@ -922,7 +934,7 @@ export class Sandbox extends BaseSandbox<Env> {
       await this.setRuntimeGate({ phase: 'sleeping', revision });
       return { outcome: 'stopped' };
     } catch (error) {
-      if (this.persistenceState.container?.running === true) {
+      if ((await this.refreshHostRuntime()).running) {
         await this.setRuntimeGate({
           phase: 'running',
           runtimeEpoch: previousEpoch,
@@ -946,7 +958,7 @@ export class Sandbox extends BaseSandbox<Env> {
       if (
         this.runtimeGate?.phase !== 'running' ||
         this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-        this.persistenceState.container?.running !== true
+        !this.hostRunning
       ) {
         throw new Error('Manual checkpoint requires the current running epoch');
       }
@@ -984,10 +996,18 @@ export class Sandbox extends BaseSandbox<Env> {
     };
   }
 
+  /**
+   * The status the instance API and the session list read.
+   *
+   * This is the calibration point: it is called on every instance view, it can
+   * afford one `GET /sessions/:id`, and it is where a container that stopped
+   * without this object noticing — a host rollout, a crash — is turned back
+   * into local truth before anything decides to wake or sleep it.
+   */
   async getInstanceRuntimeStatus(): Promise<InstanceRuntimeStatus> {
     await this.lifecycleReady;
     const [state, persistence, workspaceLost] = await Promise.all([
-      this.getState(),
+      this.refreshHostRuntime(),
       this.getPersistenceStatus(),
       this.persistenceState.storage.get<WorkspaceLoss>(
         WORKSPACE_LOST_STORAGE_KEY
@@ -995,23 +1015,14 @@ export class Sandbox extends BaseSandbox<Env> {
     ]);
 
     return {
-      container: state.status,
-      ...(this.persistenceState.container?.running !== true &&
-      (state.status === 'healthy' || state.status === 'running')
-        ? { container: 'stopped' as const }
-        : {}),
-      containerLastChangedAt: new Date(state.lastChange).toISOString(),
-      ...('exitCode' in state && state.exitCode !== undefined
-        ? { exitCode: state.exitCode }
-        : {}),
+      container: containerStatusFromHost(state),
+      ...(state.changedAt ? { containerLastChangedAt: state.changedAt } : {}),
+      ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode }),
       deleting: this.purgeRequested,
-      platformRunning: this.persistenceState.container?.running === true,
+      platformRunning: state.running,
       lifecycle: this.purgeRequested
         ? 'stopping'
-        : runtimeLifecycleFromGate(
-            this.runtimeGate,
-            this.persistenceState.container?.running === true
-          ),
+        : runtimeLifecycleFromGate(this.runtimeGate, state.running),
       persistence,
       ...(workspaceLost ? { workspaceLost } : {}),
       ...(this.lastWake ? { lastWake: this.lastWake } : {}),
@@ -1019,30 +1030,27 @@ export class Sandbox extends BaseSandbox<Env> {
     };
   }
 
-  override async containerFetch(
-    requestOrUrl: Request | string | URL,
-    portOrInit?: number | RequestInit,
-    portParam?: number
-  ): Promise<Response> {
+  /**
+   * Forward one request to the container's OpenCode server, under the gate.
+   *
+   * This is what `containerFetch` was: the single door every passive read and
+   * every SDK call goes through, refusing anything that is not for the current
+   * running runtime generation. What changed is the far side — the host's
+   * `proxy/` route rather than a container port — and that the epoch header is
+   * consumed here rather than travelling into the container.
+   *
+   * It never starts anything. A stopped container answers 503 from the host and
+   * a closed gate answers 410 from here; neither is a reason to boot one, which
+   * is the whole point of a passive path.
+   */
+  private async proxyOpencodeFetch(request: Request): Promise<Response> {
     await this.lifecycleReady;
-    const { request, port } = parseContainerFetchRequest(
-      requestOrUrl,
-      portOrInit,
-      portParam,
-      this.defaultPort
-    );
-    if (port === 3000) {
-      if (this.controlPlaneOperations === 0) {
-        throw new Error('Sandbox control plane is not admitted');
-      }
-      return super.containerFetch(request, port);
-    }
     const runtimeEpoch = request.headers.get(RUNTIME_EPOCH_HEADER);
     if (
       !runtimeEpoch ||
       this.runtimeGate?.phase !== 'running' ||
       this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-      this.persistenceState.container?.running !== true
+      !this.hostRunning
     ) {
       return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
     }
@@ -1051,19 +1059,49 @@ export class Sandbox extends BaseSandbox<Env> {
     if (
       this.runtimeGate?.phase !== 'running' ||
       this.runtimeGate.runtimeEpoch !== runtimeEpoch ||
-      this.persistenceState.container?.running !== true
+      !this.hostRunning
     ) {
       return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
     }
     this.beginActiveOperation();
     try {
-      // Use the already-running port directly. BaseSandbox.containerFetch()
-      // automatically starts stopped containers, which is forbidden for
-      // passive UI/SSE retries.
-      return await this.persistenceState.container.getTcpPort(port).fetch(request);
+      const response = await this.host.proxyFetch(request);
+      if (response.status === 503) {
+        // The host is telling us the container went away under the gate. Adopt
+        // that before answering, so the next caller is not admitted into a
+        // runtime that no longer exists.
+        await this.setHostRuntime({ running: false });
+        await response.body?.cancel().catch(() => undefined);
+        return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
+      }
+      return response;
     } finally {
       this.finishActiveOperation();
     }
+  }
+
+  /**
+   * Attach to the container's event stream on behalf of a browser.
+   *
+   * The Worker used to reach the container through `containerFetch` for this
+   * one path. It goes through the class instead, so the runtime gate decides —
+   * and so the SSE body streams host → this object → the API → the browser
+   * without ever being buffered.
+   */
+  async streamOpencodeEvents(
+    runtimeEpoch: string,
+    directory: string
+  ): Promise<Response> {
+    const url = new URL(`http://localhost:${OPENCODE_PORT}/event`);
+    url.searchParams.set('directory', directory);
+    return await this.proxyOpencodeFetch(
+      new Request(url.toString(), {
+        headers: {
+          accept: 'text/event-stream',
+          [RUNTIME_EPOCH_HEADER]: runtimeEpoch
+        }
+      })
+    );
   }
 
   /**
@@ -1191,14 +1229,13 @@ export class Sandbox extends BaseSandbox<Env> {
         `http://localhost:${OPENCODE_PORT}`
       );
       url.searchParams.set('directory', input.directory);
-      const response = await this.containerFetch(
+      const response = await this.proxyOpencodeFetch(
         new Request(url.toString(), {
           headers: {
             accept: 'application/json',
             [RUNTIME_EPOCH_HEADER]: runtimeEpoch
           }
-        }),
-        OPENCODE_PORT
+        })
       );
       if (!response.ok) {
         throw new Error(
@@ -1354,9 +1391,7 @@ export class Sandbox extends BaseSandbox<Env> {
       const { directory } = this.requireCheckout();
       const relative = normalizeWorkspaceRelativePath(path);
       const target = resolveWorkspacePath(directory, relative);
-      const listing = await this.withControlPlaneAccess(() =>
-        this.listFiles(target, { includeHidden: true })
-      );
+      const listing = await this.onHost(() => this.host.listFiles(target));
       return buildWorkspaceListing(relative, listing.files);
     } finally {
       this.finishActiveOperation();
@@ -1377,13 +1412,13 @@ export class Sandbox extends BaseSandbox<Env> {
       if (!relative) {
         throw new Error('A file path is required');
       }
-      const result = await this.withControlPlaneAccess(() =>
-        this.readFile(resolveWorkspacePath(directory, relative))
+      const result = await this.onHost(() =>
+        this.host.readFile(resolveWorkspacePath(directory, relative))
       );
       return buildWorkspaceFile({
         path: relative,
         content: result.content,
-        ...(result.encoding ? { encoding: result.encoding } : {})
+        encoding: result.encoding
       });
     } finally {
       this.finishActiveOperation();
@@ -1410,13 +1445,13 @@ export class Sandbox extends BaseSandbox<Env> {
       if (!relative) {
         throw new Error('A file path is required');
       }
-      const result = await this.withControlPlaneAccess(() =>
-        this.readFile(resolveWorkspacePath(directory, relative))
+      const result = await this.onHost(() =>
+        this.host.readFile(resolveWorkspacePath(directory, relative))
       );
       return {
         path: relative,
         content: result.content,
-        encoding: result.encoding === 'base64' ? 'base64' : 'utf-8'
+        encoding: result.encoding
       };
     } finally {
       this.finishActiveOperation();
@@ -1426,119 +1461,29 @@ export class Sandbox extends BaseSandbox<Env> {
   /**
    * Read what the agent changed in the session's checkout.
    *
-   * This is a git read and not an OpenCode one: the diff the user cares about is
-   * the working tree, including edits an agent made through a shell rather than
-   * through the edit tool. Untracked files are listed but not diffed — showing
-   * their content would mean staging them, and a read must not move the index.
+   * The git itself is in [runtime-ops.ts](runtime-ops.ts), against the host
+   * protocol; what stays here is the gate, the operation lease, and the refusal
+   * to run git in a session that has no repository.
    */
   async readSessionChanges(runtimeEpoch: string): Promise<SessionChanges> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Reading session changes');
     this.beginActiveOperation();
     try {
-      const { repo, repoKey, directory, sessionId } = this.requireRepoCheckout();
-      const defaultBranch = await this.resolveDefaultBranch(directory, repo);
-      const at = shellQuote(directory);
-      const [branchOut, headOut, statusOut, diffOut, remoteOut] =
-        await this.withControlPlaneAccess(() =>
-          Promise.all([
-            this.exec(`git -C ${at} rev-parse --abbrev-ref HEAD`),
-            this.exec(`git -C ${at} log -1 --format='%H%x09%s'`),
-            // Wrapped in base64 because the NUL separators do not reliably
-            // survive the exec transport; the worker decodes before parsing.
-            this.exec(`git -C ${at} status --porcelain=v1 -z | base64`),
-            this.exec(`git -C ${at} diff HEAD --no-color`),
-            this.exec(`git -C ${at} branch --remotes --list 'origin/*'`)
-          ])
-        );
-      if (!branchOut.success) {
-        throw new Error(
-          `git rev-parse failed: ${truncateOutput(branchOut.stderr)}`
-        );
-      }
-      if (!statusOut.success) {
-        throw new Error(
-          `git status failed: ${truncateOutput(statusOut.stderr)}`
-        );
-      }
-
-      const branch = branchOut.stdout.trim();
-      const remoteBranches = new Set(
-        remoteOut.success
-          ? remoteOut.stdout
-              .split('\n')
-              .map((line) => line.trim().replace(/^origin\//, ''))
-              .filter(Boolean)
-          : []
+      return await this.onHost(() =>
+        readChangesOnHost(this.host, this.requireRepoCheckout())
       );
-      const publishBranch = resolvePublishBranch({
-        sessionId,
-        currentBranch: branch,
-        defaultBranch
-      });
-      return {
-        observedAt: new Date().toISOString(),
-        repoKey,
-        branch,
-        defaultBranch,
-        onDefaultBranch: branch === defaultBranch,
-        ...(headOut.success && headOut.stdout.trim()
-          ? { head: parseHeadLine(headOut.stdout) }
-          : {}),
-        files: parseGitStatus(decodeGitStatusOutput(statusOut.stdout)),
-        // A diff that fails on a repository whose status read worked is an empty
-        // diff as far as the user is concerned; the file list is the part that
-        // must be right.
-        ...limitDiff(diffOut.success ? diffOut.stdout : ''),
-        unpushedCommits: await this.countUnpushedCommits(
-          directory,
-          branch,
-          defaultBranch,
-          remoteBranches.has(branch)
-        ),
-        publishBranch,
-        ...(remoteBranches.has(publishBranch)
-          ? { remoteBranch: publishBranch }
-          : {})
-      };
     } finally {
       this.finishActiveOperation();
     }
   }
 
   /**
-   * How far this branch is ahead of what the remote already has.
-   *
-   * A branch that has been pushed is measured against its own remote; one that
-   * has not is measured against the default branch, because "5 commits nobody
-   * else has" is the useful answer either way.
-   */
-  private async countUnpushedCommits(
-    directory: string,
-    branch: string,
-    defaultBranch: string,
-    hasRemoteBranch: boolean
-  ): Promise<number> {
-    const base = hasRemoteBranch ? branch : defaultBranch;
-    const result = await this.withControlPlaneAccess(() =>
-      this.exec(
-        `git -C ${shellQuote(directory)} rev-list --count ${shellQuote(
-          `origin/${base}..HEAD`
-        )}`
-      )
-    );
-    const count = Number.parseInt(result.stdout.trim(), 10);
-    return result.success && Number.isFinite(count) ? count : 0;
-  }
-
-  /**
    * Commit the working tree onto the session branch, push it, and optionally
    * open a pull request.
    *
-   * Every step is sequential and stops at the first failure, so a push that
-   * cannot reach the remote leaves a real commit behind rather than an unclear
-   * half-state — the commit is in the workspace snapshot and the next publish
-   * pushes it.
+   * The sequence — and why it stops at the first failure rather than being
+   * batched into one script — is in [runtime-ops.ts](runtime-ops.ts).
    */
   async publishSessionChanges(
     runtimeEpoch: string,
@@ -1546,151 +1491,14 @@ export class Sandbox extends BaseSandbox<Env> {
   ): Promise<PublishSessionChangesResult> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Publishing session changes');
-    const message = normalizeCommitMessage(input.message);
-    if (!message) {
-      throw new Error('A commit message of up to 4000 characters is required');
-    }
-    if (input.branch !== undefined && !isSafeBranchName(input.branch)) {
-      throw new Error('Invalid branch name');
-    }
-
     this.beginActiveOperation();
     try {
-      const { repo, directory, sessionId } = this.requireRepoCheckout();
-      const defaultBranch = await this.resolveDefaultBranch(directory, repo);
-      const at = shellQuote(directory);
-      const current = await this.runGit(
-        directory,
-        'rev-parse --abbrev-ref HEAD',
-        'read the current branch'
+      return await this.onHost(() =>
+        publishChangesOnHost(this.host, this.requireRepoCheckout(), input)
       );
-      const branch = resolvePublishBranch({
-        sessionId,
-        currentBranch: current.trim(),
-        defaultBranch,
-        ...(input.branch === undefined ? {} : { requested: input.branch })
-      });
-      if (branch === defaultBranch) {
-        throw new Error(
-          `Publishing to the default branch (${defaultBranch}) is not supported; use a branch of its own`
-        );
-      }
-
-      if (current.trim() !== branch) {
-        // `switch -c` refuses an existing branch, which is the safe order: a
-        // second publish reuses the branch instead of resetting it to HEAD.
-        const created = await this.exec(
-          `git -C ${at} switch -c ${shellQuote(branch)}`
-        );
-        if (!created.success) {
-          await this.runGit(
-            directory,
-            `switch ${shellQuote(branch)}`,
-            `switch to branch ${branch}`
-          );
-        }
-      }
-
-      await this.runGit(directory, 'add -A', 'stage the working tree');
-      const staged = await this.withControlPlaneAccess(() =>
-        this.exec(`git -C ${at} diff --cached --quiet`)
-      );
-      // `--quiet` exits non-zero when there *is* a difference, so a successful
-      // run means the tree was already clean.
-      const nothingToCommit = staged.success;
-      if (!nothingToCommit) {
-        await this.runGit(
-          directory,
-          `commit -m ${shellQuote(message)}`,
-          'commit the working tree'
-        );
-      }
-
-      const head = parseHeadLine(
-        await this.runGit(
-          directory,
-          `log -1 --format='%H%x09%s'`,
-          'read the new commit'
-        )
-      );
-      await this.runGit(
-        directory,
-        `push --set-upstream origin ${shellQuote(branch)}`,
-        `push ${branch}`
-      );
-
-      return {
-        branch,
-        ...(nothingToCommit ? {} : { commit: head }),
-        pushed: true,
-        nothingToCommit,
-        ...(input.pullRequest
-          ? await this.openPullRequest(directory, {
-              branch,
-              base: defaultBranch,
-              title: input.pullRequest.title,
-              ...(input.pullRequest.body === undefined
-                ? {}
-                : { body: input.pullRequest.body })
-            })
-          : {})
-      };
     } finally {
       this.finishActiveOperation();
     }
-  }
-
-  /**
-   * Open a pull request for a branch that was just pushed.
-   *
-   * An existing pull request is not an error: `gh` refuses to create a second
-   * one and names the existing URL in the refusal, which is the answer the
-   * caller wanted anyway.
-   */
-  private async openPullRequest(
-    directory: string,
-    input: { branch: string; base: string; title: string; body?: string }
-  ): Promise<{ pullRequestUrl?: string }> {
-    const result = await this.withControlPlaneAccess(() =>
-      this.exec(
-        [
-          `cd ${shellQuote(directory)} &&`,
-          'gh pr create',
-          `--base ${shellQuote(input.base)}`,
-          `--head ${shellQuote(input.branch)}`,
-          `--title ${shellQuote(input.title)}`,
-          `--body ${shellQuote(input.body ?? '')}`
-        ].join(' '),
-        { timeout: GH_COMMAND_TIMEOUT_MS }
-      )
-    );
-    const url =
-      parsePullRequestUrl(result.stdout) ?? parsePullRequestUrl(result.stderr);
-    if (!result.success && !url) {
-      throw new Error(
-        `gh pr create failed: ${truncateOutput(result.stderr || result.stdout)}`
-      );
-    }
-    return url ? { pullRequestUrl: url } : {};
-  }
-
-  /** Run one git command in a checkout, raising its stderr on failure. */
-  private async runGit(
-    directory: string,
-    args: string,
-    intent: string
-  ): Promise<string> {
-    const result = await this.withControlPlaneAccess(() =>
-      this.exec(`git -C ${shellQuote(directory)} ${args}`, {
-        timeout: GIT_COMMAND_TIMEOUT_MS
-      })
-    );
-    if (!result.success) {
-      throw new Error(
-        `Failed to ${intent}: ${truncateOutput(result.stderr || result.stdout)}`
-      );
-    }
-    return result.stdout;
   }
 
   /**
@@ -1737,28 +1545,6 @@ export class Sandbox extends BaseSandbox<Env> {
       throw new Error('This session was created without a repository');
     }
     return { ...checkout, repoKey: checkout.repoKey };
-  }
-
-  /**
-   * The branch this checkout treats as its trunk.
-   *
-   * Read from `origin/HEAD` rather than from the pinned catalog entry: the
-   * remote's own answer is the correct one, it is available to instances that
-   * predate pinning, and it stays right if the repository's default branch is
-   * renamed. The pinned value is the fallback for a checkout whose `origin/HEAD`
-   * was never set — a shallow clone that has not fetched since.
-   */
-  private async resolveDefaultBranch(
-    directory: string,
-    repo?: RepoDefinition
-  ): Promise<string> {
-    const result = await this.withControlPlaneAccess(() =>
-      this.exec(
-        `git -C ${shellQuote(directory)} symbolic-ref --short refs/remotes/origin/HEAD`
-      )
-    );
-    const branch = result.stdout.trim().replace(/^origin\//, '');
-    return (result.success && branch) || repo?.defaultBranch || 'main';
   }
 
   private assertCurrentRuntime(runtimeEpoch: string, intent: string): void {
@@ -1809,7 +1595,7 @@ export class Sandbox extends BaseSandbox<Env> {
       !runtimeEpoch ||
       !this.transcriptTarget ||
       this.purgeRequested ||
-      this.persistenceState.container?.running !== true
+      !this.hostRunning
     ) {
       return;
     }
@@ -1856,21 +1642,20 @@ export class Sandbox extends BaseSandbox<Env> {
     subscription: LiveEventSubscription,
     target: TranscriptTarget
   ): Promise<void> {
-    const container = this.persistenceState.container;
-    if (container?.running !== true) {
+    if (!this.hostRunning) {
       return;
     }
     const url = new URL(`http://localhost:${OPENCODE_PORT}/event`);
     url.searchParams.set('directory', target.directory);
-    // Straight to the port, like the mirror client: this read outlives the
-    // runtime gate's `running` phase by design, ending when the stream ends
-    // rather than when the gate closes to outside requests.
-    const response = await container.getTcpPort(OPENCODE_PORT).fetch(
-      url.toString(),
-      {
-        headers: { accept: 'text/event-stream' },
-        signal: subscription.abort.signal
-      }
+    // Straight through the host proxy, like the mirror client, rather than
+    // through the gate: this read outlives the gate's `running` phase by
+    // design, ending when the stream ends rather than when the gate closes to
+    // outside requests.
+    const response = await this.host.proxyFetch(
+      new Request(url.toString(), {
+        headers: { accept: 'text/event-stream' }
+      }),
+      subscription.abort.signal
     );
     if (!response.ok || !response.body) {
       await response.body?.cancel().catch(() => undefined);
@@ -1954,8 +1739,8 @@ export class Sandbox extends BaseSandbox<Env> {
    * The read deliberately bypasses the runtime gate: the gate exists to keep
    * *outside* requests away from a container that is shutting down, whereas this
    * call is the shutdown, running between the last idle confirmation and the
-   * checkpoint. It stays honest by reading `this.persistenceState.container`
-   * directly, which is by construction this object's current container.
+   * checkpoint. It stays honest by going straight to the host's proxy, which by
+   * construction reaches this object's own container or nothing.
    *
    * A failure is reported and swallowed. Losing an export means a sleeping
    * session shows an older history; failing the stop around it would mean a
@@ -2013,7 +1798,7 @@ export class Sandbox extends BaseSandbox<Env> {
       !target ||
       !sessionId ||
       this.purgeRequested ||
-      this.persistenceState.container?.running !== true
+      !this.hostRunning
     ) {
       return undefined;
     }
@@ -2107,13 +1892,10 @@ export class Sandbox extends BaseSandbox<Env> {
     return createOpencodeClient({
       baseUrl: `http://localhost:${OPENCODE_PORT}`,
       fetch: (input, init) => {
-        const container = this.persistenceState.container;
-        if (container?.running !== true) {
+        if (!this.hostRunning) {
           throw new Error('Mirroring requires a running container');
         }
-        return container
-          .getTcpPort(OPENCODE_PORT)
-          .fetch(new Request(input, init));
+        return this.host.proxyFetch(new Request(input, init));
       }
     });
   }
@@ -2134,10 +1916,7 @@ export class Sandbox extends BaseSandbox<Env> {
         const request = new Request(input, init);
         const headers = new Headers(request.headers);
         headers.set(RUNTIME_EPOCH_HEADER, runtimeEpoch);
-        return this.containerFetch(
-          new Request(request, { headers }),
-          OPENCODE_PORT
-        );
+        return this.proxyOpencodeFetch(new Request(request, { headers }));
       }
     });
   }
@@ -2208,43 +1987,34 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   /**
-   * Nothing crosses this boundary as a WebSocket any more.
+   * Nothing reaches this object over HTTP.
    *
-   * The terminal was the one thing that did — a PTY socket the SDK's stub
-   * proxied onto the container's control-plane port, which the admission check
-   * in `containerFetch` refused every single time, so the panel never opened.
-   * Refusing the upgrade here says that in one place instead of leaving a socket
-   * to fail three layers down. Everything else the Worker asks for is an RPC
-   * method on this class, and each one takes the runtime gate on the way in.
+   * Every operation the Worker asks for is an RPC method on this class, and
+   * each one takes the runtime gate on the way in. The one thing that ever
+   * arrived here as a request was the terminal's WebSocket upgrade, which the
+   * control-plane admission check refused every single time; it is named
+   * because a future terminal must go through the class rather than around it
+   * (see AGENTS.md).
    */
-  override async fetch(request: Request): Promise<Response> {
-    if (isWebSocketUpgrade(request)) {
-      return new Response('This Sandbox does not serve WebSocket upgrades', {
-        status: 404
-      });
-    }
-    return super.fetch(request);
+  async fetch(request: Request): Promise<Response> {
+    return new Response(
+      isWebSocketUpgrade(request)
+        ? 'This Sandbox does not serve WebSocket upgrades'
+        : 'This Sandbox is reached by RPC, not by HTTP',
+      { status: 404 }
+    );
   }
 
-  override async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.lifecycleReady;
-    if (!this.instanceActive || this.purgeRequested) {
-      return;
-    }
-    // This is only the Sandbox SDK's transport-activity timer. keepAlive is
-    // enabled, so it cannot stop or start a container and must not delay the
-    // semantic lifecycle's request-drain barrier.
-    await super.alarm(alarmInfo);
-  }
-
-  override async stop(
-    signal?: Parameters<BaseSandbox<Env>['stop']>[0]
-  ): Promise<void> {
-    void signal;
-    await this.forceStopForLifecycle({
-      runtimeEpoch: this.runtimeGate?.runtimeEpoch,
-      operationId: crypto.randomUUID()
-    });
+  /**
+   * Nothing sets an alarm on this object.
+   *
+   * The sandbox SDK's transport-activity timer did, and a Durable Object that
+   * has one stored will keep being called until it is cleared — so this exists
+   * to clear the inherited one rather than to fail forever on a handler that no
+   * longer exists.
+   */
+  async alarm(): Promise<void> {
+    await this.persistenceState.storage.deleteAlarm();
   }
 
   private async doPurgeInstance(): Promise<PurgeInstanceResult> {
@@ -2280,15 +2050,14 @@ export class Sandbox extends BaseSandbox<Env> {
     );
 
     // Deletion must not create one final backup after the purge barrier has
-    // been raised. Avoid the SDK's unbounded destroy() for the same reason as
-    // normal lifecycle stops: a control-plane outage must remain retryable.
-    if (this.persistenceState.container?.running === true) {
-      const terminated = await this.terminateContainerBounded();
-      if (!terminated) {
-        return { outcome: 'termination_pending' };
-      }
+    // been raised, and it must destroy the workspace storage as well as the
+    // container — which is `DELETE`, not `stop`. It stays retryable: a host
+    // that is still terminating answers `removed: false` rather than blocking.
+    const removed = await this.onHost(() => this.host.remove());
+    if (!removed.removed) {
+      return { outcome: 'termination_pending' };
     }
-    await this.waitForContainerMonitorToSettle();
+    await this.setHostRuntime({ running: false });
     await this.deleteBackupObjects(backups);
     if (this.instanceIdentity?.id) {
       // The transcript mirror is R2 state this instance owns — in the session
@@ -2303,52 +2072,29 @@ export class Sandbox extends BaseSandbox<Env> {
     return { outcome: 'purged' };
   }
 
-  private async waitForContainerMonitorToSettle(): Promise<void> {
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      const state = await this.getState();
-      if (
-        this.persistenceState.container?.running !== true &&
-        state.status !== 'running' &&
-        state.status !== 'healthy' &&
-        state.status !== 'stopping'
-      ) {
-        return;
-      }
-      await scheduler.wait(100);
-    }
-    throw new Error('Container monitor did not settle after termination');
-  }
-
+  /**
+   * Stop the container and wait, bounded, for the host to agree it is down.
+   *
+   * The grace period is zero: callers have either checkpointed or raised the
+   * deletion barrier, and a graceful SIGTERM can wait on OpenCode's long-lived
+   * server for minutes with admission already closed. `false` means termination
+   * is still pending — admission stays closed and the coordinator's alarm takes
+   * the next step, rather than this object blocking on a host that may be in
+   * trouble.
+   */
   private async terminateContainerBounded(): Promise<boolean> {
-    // Lifecycle callers have already checkpointed; purge callers have raised
-    // an irreversible deletion barrier. A graceful SIGTERM can wait for
-    // OpenCode's long-lived server for minutes while admission is closed. Send
-    // SIGKILL directly, then bound the read-only monitor wait. We do not call
-    // the SDK's unbounded destroy(): its late completion could kill a newly
-    // woken generation after admission reopened.
-    const container = this.persistenceState.container;
-    if (!container) {
-      return true;
-    }
-    const monitor = container.monitor();
-    container.signal(9);
     try {
-      const stopped = await Promise.race([
-        monitor.then(() => true),
-        scheduler
-          .wait(CONTAINER_TERMINATION_TIMEOUT_MS)
-          .then(() => false)
-      ]);
-      return stopped && this.persistenceState.container?.running !== true;
+      const result = await this.host.stop(STOP_GRACE_SECONDS);
+      if (result.stopped) {
+        await this.setHostRuntime({ running: false });
+      }
+      return result.stopped;
     } catch (error) {
-      // SIGKILL is reported by the local monitor as an exit-code 137 rejection.
-      // That is still a successful termination once the physical state agrees.
-      if (container.running !== true) {
+      if (isContainerNotRunning(error)) {
+        await this.setHostRuntime({ running: false });
         return true;
       }
-      console.warn('Container termination monitor failed', error);
-      // The signal was already accepted. Keep admission closed and let the
-      // coordinator alarm reconcile physical state before taking another step.
+      console.warn('Container termination failed', error);
       return false;
     }
   }
@@ -2437,7 +2183,13 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   private async restoreWorkspace(): Promise<void> {
-    const marker = await this.exists(PERSISTENCE_MARKER);
+    // `ensure` is what boots a stopped container, so it comes first: every call
+    // below needs one running, and on this host a container that had to be
+    // started is by definition on an empty workspace.
+    await this.host.ensure();
+    await this.setHostRuntime({ running: true });
+
+    const marker = await this.onHost(() => this.host.exists(PERSISTENCE_MARKER));
     if (marker.exists) {
       return;
     }
@@ -2457,7 +2209,9 @@ export class Sandbox extends BaseSandbox<Env> {
 
     try {
       if (storedBackup) {
-        await this.restoreBackup(storedBackup.backup);
+        await this.onHost(() =>
+          this.host.snapshotRestore(storedBackup.backup)
+        );
         await this.persistenceState.storage.put(
           RESTORE_STORAGE_KEY,
           new Date().toISOString()
@@ -2466,9 +2220,13 @@ export class Sandbox extends BaseSandbox<Env> {
 
       // The marker lives inside /workspace and therefore distinguishes a fresh
       // image from the currently restored writable filesystem.
-      await this.writeFile(
-        PERSISTENCE_MARKER,
-        JSON.stringify({ readyAt: new Date().toISOString() })
+      await this.onHost(() =>
+        this.host.writeBatch([
+          {
+            path: PERSISTENCE_MARKER,
+            content: JSON.stringify({ readyAt: new Date().toISOString() })
+          }
+        ])
       );
       await this.persistenceState.storage.delete(ERROR_STORAGE_KEY);
     } catch (error) {
@@ -2516,9 +2274,7 @@ export class Sandbox extends BaseSandbox<Env> {
     this.assertInstanceActive();
 
     if (!this.checkpointInProgress) {
-      this.checkpointInProgress = this.withControlPlaneAccess(() =>
-        this.doCreateCheckpoint(reason)
-      ).finally(() => {
+      this.checkpointInProgress = this.doCreateCheckpoint(reason).finally(() => {
         this.checkpointInProgress = undefined;
       });
     }
@@ -2536,24 +2292,33 @@ export class Sandbox extends BaseSandbox<Env> {
       this.getTrackedBackupHandles()
     ]);
 
+    if (!this.host.supportsSnapshots) {
+      throw new Error('This sandbox host does not support snapshots');
+    }
     try {
-      await this.writeFile(
-        PERSISTENCE_MARKER,
-        JSON.stringify({ checkpointStartedAt: new Date().toISOString() })
+      await this.onHost(() =>
+        this.host.writeBatch([
+          {
+            path: PERSISTENCE_MARKER,
+            content: JSON.stringify({
+              checkpointStartedAt: new Date().toISOString()
+            })
+          }
+        ])
       );
-      await this.exec('sync');
+      await this.onHost(() => this.host.exec('sync'));
 
-      const backup = await this.createBackup({
-        dir: WORKSPACE_ROOT,
-        name: `opencode:${this.instanceIdentity!.id}:${reason}`,
-        ttl: BACKUP_TTL_SECONDS,
-        // Snapshot size is restore time, and restore time is the cold start.
-        // Only caches are excluded: everything a session might have installed
-        // or built stays, because re-creating it costs the user far more than
-        // the seconds the smaller archive saves.
-        excludes: CHECKPOINT_EXCLUDES,
-        localBucket: this.persistenceEnv.PERSISTENCE_LOCAL_BUCKET === 'true'
-      });
+      // The protocol has no excludes and never will: the host is the one that
+      // runs mksquashfs, and the rule — with the eight hours of lost
+      // conversations behind it — is written down beside it in host/host.ts.
+      const { handle } = await this.onHost(() =>
+        this.host.snapshot({
+          dir: WORKSPACE_ROOT,
+          name: `opencode:${this.instanceIdentity!.id}:${reason}`,
+          ttlSeconds: BACKUP_TTL_SECONDS
+        })
+      );
+      const backup = asStoredHandle(handle);
       const storedBackup: StoredBackup = {
         backup,
         createdAt: new Date().toISOString(),
@@ -2581,7 +2346,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
       // Keep failed deletions in the ledger so a later checkpoint or instance
       // purge retries them instead of turning them into untracked R2 objects.
-      const remaining: DirectoryBackup[] = [backup];
+      const remaining: StoredSnapshotHandle[] = [backup];
       for (const stale of knownBackups) {
         if (stale.id === backup.id) {
           continue;
@@ -2604,9 +2369,9 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
-  private async getTrackedBackupHandles(): Promise<DirectoryBackup[]> {
+  private async getTrackedBackupHandles(): Promise<StoredSnapshotHandle[]> {
     const [legacy, ledger] = await Promise.all([
-      this.persistenceState.storage.get<DirectoryBackup[]>(
+      this.persistenceState.storage.get<StoredSnapshotHandle[]>(
         LEGACY_BACKUP_HANDLES_STORAGE_KEY
       ),
       this.listBackupHandleLedger()
@@ -2618,12 +2383,12 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   private async listBackupHandleLedger(): Promise<
-    Map<string, DirectoryBackup>
+    Map<string, StoredSnapshotHandle>
   > {
-    const result = new Map<string, DirectoryBackup>();
+    const result = new Map<string, StoredSnapshotHandle>();
     let startAfter: string | undefined;
     for (;;) {
-      const page = await this.persistenceState.storage.list<DirectoryBackup>({
+      const page = await this.persistenceState.storage.list<StoredSnapshotHandle>({
         prefix: BACKUP_HANDLE_STORAGE_PREFIX,
         limit: 1000,
         ...(startAfter ? { startAfter } : {})
@@ -2643,7 +2408,7 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   private async replaceBackupHandleLedger(
-    backups: DirectoryBackup[]
+    backups: StoredSnapshotHandle[]
   ): Promise<void> {
     const existing = await this.listBackupHandleLedger();
     const desired = new Map(
@@ -2663,7 +2428,7 @@ export class Sandbox extends BaseSandbox<Env> {
   }
 
   private async deleteBackupObjects(
-    backups: DirectoryBackup[]
+    backups: StoredSnapshotHandle[]
   ): Promise<void> {
     for (const backup of backups) {
       const prefix = `backups/${backup.id}/`;
@@ -2681,13 +2446,13 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
-  private async discoverOwnedBackups(): Promise<DirectoryBackup[]> {
+  private async discoverOwnedBackups(): Promise<StoredSnapshotHandle[]> {
     const owner = this.instanceIdentity?.id;
     if (!owner) {
       return [];
     }
 
-    const discovered: DirectoryBackup[] = [];
+    const discovered: StoredSnapshotHandle[] = [];
     let cursor: string | undefined;
     do {
       const page = await this.persistenceEnv.BACKUP_BUCKET.list({
@@ -2751,15 +2516,6 @@ export class Sandbox extends BaseSandbox<Env> {
     }
   }
 
-  private async withControlPlaneAccess<T>(operation: () => Promise<T>): Promise<T> {
-    this.controlPlaneOperations += 1;
-    try {
-      return await operation();
-    } finally {
-      this.controlPlaneOperations -= 1;
-    }
-  }
-
   private async rememberRequestLocation(request: Request): Promise<void> {
     const location = extractOpenCodeLocation(request, WORKSPACE_DIRECTORY);
     if (!location || !isWorkspaceLocation(location.directory)) {
@@ -2796,8 +2552,7 @@ export class Sandbox extends BaseSandbox<Env> {
     if (!this.locationsNeedDiscovery) {
       return undefined;
     }
-    const container = this.persistenceState.container;
-    if (container?.running !== true) {
+    if (!this.hostRunning) {
       return 'Cannot discover OpenCode locations while the container is stopped';
     }
 
@@ -2808,11 +2563,9 @@ export class Sandbox extends BaseSandbox<Env> {
       );
       url.searchParams.set('roots', 'true');
       url.searchParams.set('limit', '1000');
-      const response = await container.getTcpPort(OPENCODE_PORT).fetch(
-        new Request(url, {
-          headers: { Accept: 'application/json' },
-          signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS)
-        })
+      const response = await this.host.proxyFetch(
+        new Request(url, { headers: { Accept: 'application/json' } }),
+        AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS)
       );
       if (!response.ok) {
         return `${GLOBAL_SESSION_LIST_PATH} returned HTTP ${response.status}`;
@@ -2841,8 +2594,7 @@ export class Sandbox extends BaseSandbox<Env> {
 
   private async inspectExecutionIfRunning(): Promise<ExecutionSnapshot> {
     const observedAt = new Date().toISOString();
-    const container = this.persistenceState.container;
-    if (container?.running !== true) {
+    if (!this.hostRunning) {
       return notRunningExecutionSnapshot(observedAt);
     }
 
@@ -2864,10 +2616,10 @@ export class Sandbox extends BaseSandbox<Env> {
       locations: this.knownLocations.values(),
       signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
       fetcher: async (request) => {
-        if (container.running !== true) {
+        if (!this.hostRunning) {
           throw new Error('Container stopped during activity probe');
         }
-        return container.getTcpPort(OPENCODE_PORT).fetch(request);
+        return this.onHost(() => this.host.proxyFetch(request));
       }
     });
     return {
@@ -2900,16 +2652,52 @@ function backupHandleStorageKey(id: string): string {
 }
 
 function mergeBackupHandles(
-  handles: DirectoryBackup[],
-  ...optional: Array<DirectoryBackup | undefined>
-): DirectoryBackup[] {
-  const merged = new Map<string, DirectoryBackup>();
+  handles: StoredSnapshotHandle[],
+  ...optional: Array<StoredSnapshotHandle | undefined>
+): StoredSnapshotHandle[] {
+  const merged = new Map<string, StoredSnapshotHandle>();
   for (const backup of [...handles, ...optional]) {
     if (backup) {
       merged.set(backup.id, backup);
     }
   }
   return [...merged.values()];
+}
+
+/**
+ * The container state the instance API reports, from what the host said.
+ *
+ * The platform used to distinguish `healthy` from `running`; a host reports
+ * neither, so a running container is `running` and a stopped one is
+ * `stopped_with_code` when it left an exit code behind. `unknown` is reserved
+ * for the case the status field exists to carry: the host could not be reached
+ * at all, so nothing here is known rather than presumed stopped.
+ */
+function containerStatusFromHost(
+  state: HostRuntimeState
+): InstanceRuntimeStatus['container'] {
+  if (state.error) {
+    return 'unknown';
+  }
+  if (state.running) {
+    return 'running';
+  }
+  return state.exitCode === undefined ? 'stopped' : 'stopped_with_code';
+}
+
+/**
+ * Adopt a snapshot handle into the ledger.
+ *
+ * Handles are opaque to the protocol, but the ledger indexes them by `id` and
+ * purge derives the R2 keys from it, so a host that returned something else has
+ * handed back a handle this object cannot track — which is worth failing the
+ * checkpoint over rather than storing an entry nothing can ever delete.
+ */
+function asStoredHandle(handle: SnapshotHandle): StoredSnapshotHandle {
+  if (typeof handle.id !== 'string' || typeof handle.dir !== 'string') {
+    throw new Error('The sandbox host returned an untrackable snapshot handle');
+  }
+  return handle as StoredSnapshotHandle;
 }
 
 function notRunningExecutionSnapshot(
@@ -2923,18 +2711,6 @@ function notRunningExecutionSnapshot(
     retrySessionCount: 0,
     locations: []
   };
-}
-
-/**
- * Split `git log -1 --format='%H<tab>%s'`. A subject may contain anything but a
- * newline, so only the first tab separates the two fields.
- */
-function parseHeadLine(output: string): SessionChangesHead {
-  const line = output.split('\n')[0] ?? '';
-  const tab = line.indexOf('\t');
-  return tab === -1
-    ? { sha: line.trim(), subject: '' }
-    : { sha: line.slice(0, tab).trim(), subject: line.slice(tab + 1).trim() };
 }
 
 function runtimeUnavailableResponse(phase: RuntimeGatePhase): Response {
@@ -2952,33 +2728,6 @@ function runtimeUnavailableResponse(phase: RuntimeGatePhase): Response {
       }
     }
   );
-}
-
-function parseContainerFetchRequest(
-  requestOrUrl: Request | string | URL,
-  portOrInit: number | RequestInit | undefined,
-  portParam: number | undefined,
-  defaultPort: number
-): { request: Request; port: number } {
-  const request =
-    requestOrUrl instanceof Request
-      ? requestOrUrl
-      : new Request(
-          typeof requestOrUrl === 'string'
-            ? requestOrUrl
-            : requestOrUrl.toString(),
-          typeof portOrInit === 'number' ? undefined : portOrInit
-        );
-  const port =
-    typeof portOrInit === 'number'
-      ? portOrInit
-      : typeof portParam === 'number'
-        ? portParam
-        : defaultPort;
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new Error(`Invalid container port: ${String(port)}`);
-  }
-  return { request, port };
 }
 
 function isWorkspaceLocation(value: string): boolean {

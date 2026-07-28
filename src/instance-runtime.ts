@@ -7,7 +7,6 @@
  * structurally (as in [lifecycle.ts](lifecycle.ts)) so this module never has to
  * import the Sandbox class and create a module cycle with the Worker entry.
  */
-import { getSandbox } from '@cloudflare/sandbox';
 import type { InstanceRuntimeStatus } from './instances';
 import type { LifecycleStatus } from './lifecycle';
 import type { SessionAttachmentRef } from './sessions';
@@ -98,10 +97,7 @@ export function resolveInstanceSandbox(
   env: Env,
   instanceId: string
 ): InstanceSandboxRpc {
-  return getSandbox(env.Sandbox, instanceId, {
-    normalizeId: true,
-    keepAlive: true
-  }) as unknown as InstanceSandboxRpc;
+  return env.Sandbox.getByName(instanceId) as unknown as InstanceSandboxRpc;
 }
 
 export function resolveInstanceLifecycle(env: Env, instanceId: string) {
