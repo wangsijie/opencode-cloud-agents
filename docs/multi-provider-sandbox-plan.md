@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint 全部通过,**唤醒-从-快照恢复 与 purge 尚未验证**)。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。其余任务待做。
 
 ## 目标架构(已确认)
 
@@ -91,8 +91,10 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 - **SSE 多跳直通**:R2 里的 mirror 写着 `reason: "live"`,而 `live` 只有事件订阅从 `/event` 消费到帧后才会写 —— 容器 → Worker B → 站点 DO → 浏览器这条流没被缓冲。站点 tail 里也能看到新的 `Sandbox.streamOpencodeEvents`。(`proxy/event` 不出现在 tail 里是正常的:长连接只在结束时落一行。)
 - **idle-stop + checkpoint,且顺序正确**:mirror `reason: idle-stop` 写于 09:45:53 → marker `write-batch` 09:45:54 → `exec sync` 09:45:55 → `snapshot` Ok 09:45:55 → `stop` Ok 09:45:59。即"OpenCode 还活着时先导完整 transcript,再 checkpoint,最后停"——AGENTS.md 那条不变量成立。
 
+- **唤醒-从-快照恢复**(本次改动风险最高的一环,已通过):`ensure` → `files/exists`(marker 不在)→ `snapshot/restore` Ok → 凭证 → `files/exists('.git')` → **`git fetch origin --prune` 而不是 `git clone`** → `opencode/start`。跑 fetch 就说明 checkout 是从快照回来的;restore 失败的话这里会重新 clone、session 会变 `lost`。更硬的证据在 R2:mirror 的消息数 6 → 9 且 `reason` 回到 `live`,即恢复出来的是**同一个 OpenCode 会话**、历史接上了,事件订阅也重新挂上了。
+- 全程唯一一条 warning 是 idle-stop 停容器时的 `Live transcript event subscription ended: Stream was cancelled.`,发生在完整导出完成一秒之后,是设计中的降级路径。
+
 **未验证 ⚠**
-- **唤醒-从-快照恢复**:台账句柄经 `snapshot/restore` 取回。这是本次改动里剩下风险最高的一环(睡眠后的第一次唤醒),需要对已睡眠的 session 发一条消息才能触发。
 - **purge**:`DELETE /sessions/:id` 清容器,以及站点侧删 `backups/` 与 `transcripts/` 前缀的 R2 对象。
 - **publish**:`runtime-ops` 的 git 路径只有单测覆盖,线上没跑过。
 
