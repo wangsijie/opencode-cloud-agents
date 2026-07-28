@@ -1333,6 +1333,7 @@ summary:focus-visible {
 */
 .settings-page input[type='text'],
 .settings-page input[type='password'],
+.settings-page select,
 .settings-page textarea {
   min-height: 32px;
   padding: 5px 10px;
@@ -1357,6 +1358,7 @@ summary:focus-visible {
 @media (min-width: 768px) {
   .settings-page input[type='text'],
   .settings-page input[type='password'],
+  .settings-page select,
   .settings-page textarea {
     font-size: 13.5px;
   }
