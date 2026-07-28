@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5、6 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 7 的 agent 才能端到端验证。其余任务待做。
+> 进度:任务 1、2、3、4、4.5、5、6、7 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 与 publish 尚未线上验证**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。其余任务待做。
 
 ## 目标架构(已确认)
 
@@ -114,11 +114,26 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 **已知遗留**(不属于本任务,记在这里):删除一个 docker session 要经 `DELETE /sessions/:id`,所以操作员清掉 docker 配置后,存量 docker session 会卡在 `deleting`。任务 9 运维文档里写清"先删 session 再清配置"。
 
-## 任务 7:Mac mini agent 实现(可与 5、6 并行)
+## 任务 7:Mac mini agent 实现 ✅ 已实现,本地 Docker e2e 42/42 通过
 
 **内容**:`agent/server.mjs`(路由 + bearer 恒定时间比较)、`agent/docker.mjs`(docker CLI 包装,纯参数构造独立)、`agent/session-image/Dockerfile`(`node:22-bookworm-slim` + git/ssh/gh/opencode-ai@1.18.4/pnpm 同 pin,COPY `docker/ssh/*`,构建上下文 = 仓库根)、`agent/launchd/*.plist`、`agent/README.md`(node/docker/launchd/Caddy,`/proxy/` 不设空闲超时)。容器 `oc-session-<id>` / volume `oc-vol-<id>` / `-p 127.0.0.1:0:4096`(macOS 必须发布端口)。**agent 不做任何自主生命周期决策**:不加 idle reaper,restart policy 不设开机自启以外的东西——停容器永远等站点的 `POST /stop`,否则 `idle-stop` 前的 transcript 完整导出会漏掉最后一段对话(volume 还在,不丢数据,但睡眠期间看到的历史缺一截)。
-**交付/验收**:`test/agent-docker.test.mjs`(参数构造/截断/二进制判定);开发机对本地 Docker 跑通脚本化 e2e:ensure → exec → write-batch → opencode/start → proxy SSE → stop → delete(脚本进 agent/,不进 `pnpm test`)。
+
+**实际落地的偏离**(都是有意的):
+- **OpenCode server 的 env 写进容器内的 600 文件再 `set -a; . file`,不走 `docker exec -e`**。env 里是每个 provider 的 API key,而 docker 的 argv 在这台机器上人人可以从 `ps` 读到。文件落在 `/root/`(容器自己的层,不是 volume),所以不进任何持久化。
+- **发布端口是查出来的,不是记住的**。`-p 127.0.0.1:0:4096` 每次启动都换端口,`docker port` 的结果只缓存 3 秒,并在每个生命周期调用后作废。缓存久了的风险是真的:容器崩溃 + restart policy 拉起后旧端口会被释放,理论上可能被另一个 session 的容器拿走,那就是把一个会话的流量代理进另一个会话的 workspace。
+- **`ensure` 会替换镜像已过期的已停止容器**(运行中的不动),这就是镜像升级路径——workspace 在 volume 上,所以换镜像不需要迁移。
+- **`--restart unless-stopped` 是 agent 唯一持有的生命周期意见**:重启/重开机后把容器拉回来,但绝不会复活站点主动停掉的那个。
+- 镜像比计划多装 `procps`(agent 用 `pgrep` 判断 OpenCode 是否已在跑)、coreutils `timeout`、GNU `find -printf`,以及 wrangler(与 CF 镜像对齐)。这三个是 agent 对镜像的额外要求,已写进 `agent/README.md`。
+
+**e2e 抓到的三个 bug**(都只有真跑才看得见,单测全绿的情况下):
+1. **proxy 自己掐死自己的上游**。`req.on('close')` 在无 body 的 GET 被读完时立刻触发——早于容器应答——于是每个代理请求都在 `response` 还没出现时 `upstream.destroy()`,表现为健康容器的 503 `socket hang up`。判据要挂在 `response` 上,看 `writableFinished`。
+2. **`timeout --signal=KILL` 退出码是 137 不是 124**。124 只在默认信号下才有,所以 `EXEC_TIMEOUT` 从来不会触发,超时的 exec 看起来只是"退出码 137 的失败命令"。改成 `--kill-after=5`(TERM 打头),并把 124/137 都算超时、再用实际耗时做二次判据。
+3. **`docker exec` 打到已停止容器退出码是 1 不是 125**。原来只认 125,于是 `CONTAINER_NOT_RUNNING` 从来不会触发——而站点的 `host:runtime` 本地真值正是靠这个 503 校准的。现在 1/125 都认,但要求 stderr 带 docker CLI 自己的 `Error response from daemon:` 前缀,免得容器里某条命令打印同样的字被误判。
+
+**交付/验收**:`test/agent-docker.test.mjs` 17 例(参数构造、容器脚本、截断、文本/二进制判定、listing 解析、inspect 映射、端口解析,外加一条把 `agent/server.mjs` 的路由表和 `protocol/routes.ts` 逐条对齐的防漂移用例)✅;`pnpm test` 243 例 + `tsc` 三个 project 全绿 ✅。`node agent/e2e.mjs` 对本地 Docker(29.5.2)跑通全序列 42/42 ✅:ensure(冷启/幂等/volume 复用)→ exec(退出码、stdout/stderr 分离、超时 408)→ write-batch(utf-8/base64/mode 600)→ read/exists/list(含 404 两种)→ snapshot 501 → opencode/start(首启 + 复用)→ proxy → **SSE 流边开边到** → stop → 停止后 primitive 503 → 重新 ensure(**workspace 从 volume 活下来**)→ delete(容器 + volume 都没了,幂等)。脚本在 `agent/`,不进 `pnpm test`(CI 没有 Docker)。
 **依赖**:任务 1(仅协议)。
+
+**未验证 ⚠**:agent 只被 `agent/e2e.mjs` 驱动过,还没有被站点的 `HostClient` 驱动过——真实的凭证注入、clone、publish、transcript 镜像都留在任务 9。
 
 ## 任务 8:Web UI
 
@@ -128,8 +143,16 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 ## 任务 9:端到端联调
 
-**内容**:mini 上装 agent(launchd + Caddy + token),构建 session 镜像;站点配置 docker settings;跑双 provider 完整生命周期(docker:创建 → 发消息 → 空闲睡眠 → mirror 读 transcript → 唤醒 → publish → 删除,mini 上确认容器+volume 已清;CF:回归确认);按 `WakeTimings` 调超时;文档化运维(token 轮换 60s 缓存生效、镜像升级流程)。
+**内容**:mini 上装 agent(launchd + Caddy + token,步骤见 `agent/README.md`),构建 session 镜像;先在 mini 上跑一遍 `node agent/e2e.mjs` 确认那台机器的 Docker/镜像没问题,再让站点接手;站点配置 docker settings;跑双 provider 完整生命周期(docker:创建 → 发消息 → 空闲睡眠 → mirror 读 transcript → 唤醒 → publish → 删除,mini 上确认容器+volume 已清;CF:回归确认);按 `WakeTimings` 调超时;文档化运维(token 轮换 60s 缓存生效、镜像升级流程)。
 **依赖**:全部。
+
+**已完成的前半段(2026-07-28,mini 上)**:agent 装在 `~/srv/opencode-cloud`,launchd user agent 监听 `127.0.0.1:8787`,token 在 `~/.config/opencode-agent/token`,镜像已构建;`node agent/e2e.mjs` 对那台机器的真 Docker(29.5.2)42/42 通过;TLS 前端 `docker-agent-1.cloud-agents.dev` 已就位,从公网驱动完整会话(ensure → opencode/start → proxy → SSE → delete)通过,**SSE 首帧 109ms、连续读 180 秒不断流**(OpenCode 每 10 秒一个 `server.heartbeat`,所以这条流实际上永远不空闲,反代的空闲回收构不成风险);站点的 `docker.agent-url` / `docker.agent-token` 已写入生产 D1。部署改为 CI 驱动,见 `.github/workflows/deploy.yml` 的 `docker-agent` job。
+
+**剩下的**:让站点真正驱动一次 docker session(凭证注入、clone、发消息、睡眠、mirror、唤醒、publish、删除),以及 CF 侧回归。
+
+两个非显然的坑,都会静默失败:
+- **非交互 ssh 下 `docker build` 拉基础镜像会失败**。Docker Desktop 在 `~/.docker/config.json` 写了 `credsStore: desktop`,而 `docker-credential-desktop` 只在 `/Applications/Docker.app/Contents/Resources/bin`——登录 shell 找得到,`ssh host 'docker build …'` 找不到,报的是一句看不出所以然的 `error getting credentials`。CI 的 build 步骤显式把这个目录加进了 PATH。
+- **mini 必须开自动登录**。Docker Desktop 是 GUI 用户级进程,没有登录会话就没有 daemon,断电重启后 agent 会一直被 launchd 拉起、但每个 session 都醒不了。
 
 ---
 

@@ -206,6 +206,39 @@ every call that starts or stops a container and calibrated against
 read, and the entry to every stop path. Do not reintroduce a synchronous
 container check; there is nothing local left to ask.
 
+## The third host ships over SSH
+
+[`agent/`](agent/README.md) is the Docker implementation of the same protocol: a
+zero-dependency Node server that runs `oc-session-<id>` containers against a
+local daemon, reached over public HTTPS with a bearer token. It is not a Worker,
+so it is not deployed by `wrangler`: the `docker-agent` job in
+[`deploy.yml`](.github/workflows/deploy.yml) rsyncs it onto the operator's box
+and restarts its launchd job.
+
+That job asks two questions, not one. Anything under `agent/` or `docker/ssh/`
+syncs and restarts — cheap, and safe by design, because restarting the agent
+touches no container. Only `agent/session-image/` and `docker/ssh/` rebuild the
+image, which takes minutes and reaches a session at its next *cold* start.
+
+A change to `protocol/` deploys the Cloudflare host and leaves the agent alone
+— the agent imports nothing from it, and the two are kept in step by
+`test/agent-docker.test.mjs`, which walks the agent's route table against
+`protocol/routes.ts`.
+
+The invariant to protect is that the agent decides nothing. No idle reaper, ever:
+the site stops a container only after exporting the whole transcript out of a
+still-live OpenCode, so an agent that stopped one on its own would truncate that
+history silently — the volume survives, so it is not data loss, and nothing
+anywhere would report it.
+
+`test/agent-docker.test.mjs` covers the pure half (argument vectors, container
+scripts, parsers) and runs in CI. The rest needs a daemon: `node agent/e2e.mjs`
+drives the whole protocol against real containers and cleans up after itself.
+Run it on the box before pointing the site at a new one — three bugs that every
+unit test passed through (a proxy that destroyed its own upstream, an
+`EXEC_TIMEOUT` that could not fire, a `CONTAINER_NOT_RUNNING` that could not
+fire) were only ever visible there.
+
 ## Snapshots are a host capability, not an assumption
 
 A session's provider is chosen when it is created and stored on both the Hub row
