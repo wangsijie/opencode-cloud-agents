@@ -146,7 +146,7 @@ stock OpenCode web 无法承载目标形态：它是"单 server → 多 project 
 | 开工顺序 | 最先执行 promptAsync spike（约半天），验证 D1 后再按 M1 起推进 |
 | 前端栈 | React + Vite + TS（评估过 Solid 借鉴 opencode share 页，按日常栈定 React） |
 | repo 列表来源 | 静态 `src/repos.ts` 起步，动态化留给 M6（已在 M6 落地：`GITHUB_TOKEN` 存在时走 GitHub API） |
-| 分支策略 | ~~不自动建分支，默认分支直接干~~；M6 定案：永不提交默认分支，发布落在 `opencode/<session-id>` |
+| 分支策略 | ~~不自动建分支，默认分支直接干~~；~~M6 定案：永不提交默认分支，发布落在 `opencode/<session-id>`~~；**2026-07-28 作废：Hub 不再自己发布**——容器里的 agent 有 git、`gh` 和凭证，让它推是实际一直在用的方式，Hub 那条路由从来没有按钮也从来没人调用，已整条删除。分支由 agent 自己决定 |
 | 空闲休眠时长 | 维持 10 分钟；M5 上线后再评估是否缩短 |
 | 移动端 | 手机是一等场景，M3 起移动优先布局 |
 | 多用户 | 单用户模型，不预留 owner 字段 |
@@ -599,9 +599,12 @@ ResizeObserver 的回调根本不投递**（拿一个独立的 observer 对照�
   刷新退居安全网，并负责 DO 重启后重新挂上订阅；purge 与任何非 running 相位都会断开。
   崩溃丢失窗口从"一个探针间隔"降到"数秒"，列表页的 `mirroredAt`/`messageCount`/用量也
   因此是秒级新鲜的。
-- ✅ **代码产出闭环**：新增 `src/session-changes.ts`（纯逻辑：porcelain 解析、shell 转义、
+- ✅ **代码产出闭环**（发布那一半已于 2026-07-28 删除，见决策表"分支策略"；本条保留当时的记录）：
+  新增 `src/session-changes.ts`（纯逻辑：porcelain 解析、shell 转义、
   分支名校验、发布分支决策）+ Sandbox `readSessionChanges`/`publishSessionChanges` +
   `GET /api/sessions/:id/changes`、`POST /api/sessions/:id/publish` + 会话页 `ChangesPanel`。
+  **今天仍然存在的只有读的那一半**：`readSessionChanges`、`GET .../changes`、`ChangesPanel`
+  和 `shellQuote`；分支决策、提交信息校验、PR 那些纯函数连同路由一起没了。
   **分支决策（补上决策记录里悬着的那条）**：永不提交到默认分支；默认落在
   `opencode/<session-id>`，首次发布创建、之后复用；已在别的分支上则继续用当前分支；
   只有显式传 `branch` 才能改。PR 走镜像内置的 `gh`，已存在的 PR 直接回链不报错。
@@ -676,8 +679,15 @@ M6 偏差与备注：
 - 冷启动优化同理：埋点已经在，但**还没有生产数字**。"镜像瘦身"这条因此仍然悬着——在
   知道恢复/启动各占多少之前，砍镜像里的 `gh`/wrangler 是凭感觉动刀。等 `lastWake` 攒够
   样本再决定。
+  > **2026-07-28 补：数字有了，而且结论和当初的猜想相反。** 一次 CF 冷唤醒 33 秒里，快照
+  > 恢复只占 4.7 秒（2.1 MB 工作区），`git fetch` 0.96 秒，剩下的绝大部分是容器起来和
+  > OpenCode 启动。**瘦镜像省不到那 4.7 秒，要省的是启动本身。** 同一天同一套代码，docker
+  > provider 的唤醒是 6 秒——差别不在镜像大小，在于它没有快照要恢复、容器也不是冷调度的。
+  > 所以"镜像瘦身"这条可以从悬着改成不做：砍 `gh`/wrangler 换不来体感，反而会拿掉 agent
+  > 真正在用的工具。详见 `docs/multi-provider-sandbox-plan.md` 任务 9。
 - 终端只在容器醒着时可用（睡着返回 409），没有做"打开终端即唤醒"。理由与 abort 一致：
   socket 已经连上却卡几十秒，体感是挂了而不是在唤醒。
+  > **作废（2026-07-27）**：终端本身已删除，见上一节的后记。这条连同它的取舍一起归档。
 
 ## 五、风险与开放问题
 
