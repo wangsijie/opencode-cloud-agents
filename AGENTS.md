@@ -283,6 +283,16 @@ The Docker host declares `snapshots: false` in `resolveHostClient` rather than
 having it probed from `/healthz`. It is a property of the design, not something
 an agent could answer differently, and a round trip per wake would buy nothing.
 
+The one place the two hosts do not behave identically is the end of an event
+stream. When a container stops, the browser's `/api/sessions/:id/events` ends —
+cleanly `Canceled` on Cloudflare, but sometimes `Exception Thrown: ReadableStream
+received over RPC disconnected prematurely` on Docker, where the SSE body came
+over public HTTPS and the connection was severed mid-stream rather than closed.
+Nothing is lost: the transcript export always finishes before the stop, and the
+browser reconnects. Do not "fix" it by swallowing a truncated upstream in
+`streamOpencodeEvents` — that hides a genuine mid-conversation disconnect, which
+is the case worth reporting. Verified 2026-07-28 against both hosts.
+
 ## Two buckets, split by who writes them
 
 `opencode-cloud-sessions` (`SESSION_BUCKET`) is the site's: transcript mirrors

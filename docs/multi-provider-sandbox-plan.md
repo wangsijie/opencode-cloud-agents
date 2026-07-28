@@ -1,6 +1,6 @@
 # 多 Provider Sandbox:任务拆解
 
-> 进度:任务 1、2、3、4、4.5、5、6、7、8 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 尚未线上验证;publish 已于 2026-07-28 整个删除,见任务 9**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。任务 8 的 UI 已实现并在 `pnpm dev:mock` 走查通过,顺带补上了设置页此前完全缺失的 Docker 分组——生产的 docker 配置是手写进 D1 的。任务 9 的完整 docker 生命周期已在生产跑通(创建 → 睡眠 → 唤醒,见该节),publish 功能已删除,只剩删除、CF 回归与运维文档。
+> 进度:任务 1、2、3、4、4.5、5、6、7、8 已完成(协议见 `protocol/PROTOCOL.md`;provider 数据管道已入库;docker settings + catalog `providers` 已上线,UI 消费留到任务 8;Worker B 见 `host/`;`opencode-cloud-sessions` 已建、站点 transcripts + attachments 已搬。任务 5 已上生产(2026-07-28,站点版本 `3f53a21a`):站点去掉 containers 绑定与 `BaseSandbox` 继承,全部容器原语走 `src/host-client.ts` → Worker B。生产验证结果见任务 5 的"线上验证"一节——冷启动、proxy、SSE、idle-stop+checkpoint、以及睡眠后从快照唤醒全部通过,**purge 尚未线上验证;publish 已于 2026-07-28 整个删除,见任务 9**)。任务 6 站点侧已实现,能力开关全部走 `HostClient.supportsSnapshots`,但要等任务 9 才能与真 agent 端到端验证。任务 7 的 agent 见 `agent/`,已对本地 Docker 跑通全协议(见该节),但还没有被站点驱动过。任务 8 的 UI 已实现并在 `pnpm dev:mock` 走查通过,顺带补上了设置页此前完全缺失的 Docker 分组——生产的 docker 配置是手写进 D1 的。任务 9 已完成:docker 与 CF 两条完整生命周期都在生产验过(见该节的实测数字),publish 功能已删除。全部九个任务收尾。
 
 ## 目标架构(已确认)
 
@@ -149,7 +149,7 @@ mock 侧:catalog 的 `providers` 由 mock settings 派生(和 Hub 一样),所以
 **交付/验收**:`pnpm test` 243 例 + `pnpm run typecheck` 三个 project 全绿 ✅。`pnpm dev:mock` 浏览器走查 ✅:composer pill(Cloudflare/Docker)、建出来的 session 头部与列表都带 docker 徽标、`ses_docker` 的 InstanceModal 显示 `Sandbox: Docker` / `Workspace: Kept on a named volume between containers` / `Container start`、CF session 对照显示 `Cloudflare` / `Snapshotted when the container sleeps` / `Container + snapshot`、设置页 Docker 分组存取正常且清掉 URL 后 pill 消失,控制台零 error。
 **依赖**:任务 2、3(mock 可先行,真实数据依赖 6)。
 
-## 任务 9:端到端联调
+## 任务 9:端到端联调 ✅ 已完成(2026-07-28)
 
 **内容**:mini 上装 agent(launchd + Caddy + token,步骤见 `agent/README.md`),构建 session 镜像;先在 mini 上跑一遍 `node agent/e2e.mjs` 确认那台机器的 Docker/镜像没问题,再让站点接手;站点配置 docker settings;跑双 provider 完整生命周期(docker:创建 → 发消息 → 空闲睡眠 → mirror 读 transcript → 唤醒 → 删除,mini 上确认容器+volume 已清;CF:回归确认);按 `WakeTimings` 调超时;文档化运维(token 轮换 60s 缓存生效、镜像升级流程)。
 **依赖**:全部。
@@ -158,11 +158,28 @@ mock 侧:catalog 的 `providers` 由 mock settings 派生(和 Hub 一样),所以
 
 **已完成的后半段(2026-07-28,session `inst-298ca973-…`,仓库 logto)**:站点真正驱动了一次完整 docker session。逐条证据:D1 里 `provider = docker`;`opencode-sandbox-host` 全程零日志(docker 不经 Worker B);mirror 写下 `reason: "live"`(SSE 容器 → agent → DO → 浏览器无缓冲);冷启动 create → 首个 prompt 派发 **15 秒**(含 clone);`readSessionChanges` 成功(容器内 git 可用);空闲 10 分钟后 `quiesceAndStopIfIdle`,mirror 在停机前 2 秒写下 `reason: idle-stop`(导出先于停机,不变量成立);唤醒后 mirror 从 6 条长到 9 条、`reason` 回 `live`、**OpenCode session id 不变**(volume 上的 workspace 原样回来),唤醒耗时约 **6 秒**(无快照可恢复)。
 
-**观察到的一处粗糙**:停容器那一刻,浏览器那条 `/api/sessions/:id/events` 以 `Exception Thrown — ReadableStream received over RPC disconnected prematurely` 收尾(随后正常重连)。功能无影响,但还没确认 CF 侧是否同样如此——CF 回归时一并看。
+删除也验了:`beginDelete` → `Sandbox.purgeInstance` Ok → `markDeleted`,四秒走完;D1 行没了,R2 的 `transcripts/inst-298ca973-…/latest.json` 读回 `The specified key does not exist.`。docker 的 purge 比 CF 少两件事——不按 `backups/<id>/` 前缀删对象,也不扫整个 `backups/` 找孤儿(`discoverOwnedBackups` 无快照能力时直接返回空),volume 由 agent 随容器一起销毁。
+
+**CF 回归(session `inst-30e0dfd7-…`,仓库 opencode-cloud)**:手动 Stop + 重新发消息,正好形成闭环。22:28:31 `forceStopForLifecycle` → 22:28:35 host `POST /snapshot`,`backup.create success cbdc80b0-… (3816ms, 2138112B)` → 22:28:39 `POST /stop`;22:28:52 `POST /snapshot/restore`,`backup.restore success cbdc80b0-…(4670ms)`——**恢复的正是四秒前刚建的那个快照 id**——随后凭证 write-batch、`git fetch origin --prune (961ms)`(不是 clone)、`opencode/start`,22:29:13 派发 prompt。任务 5 建立的那条路一行没歪。
+
+**两边冷唤醒实测**(同日同版本):
+
+| | CF | Docker |
+|---|---|---|
+| 唤醒总耗时 | 33 秒 | 6 秒 |
+| workspace 恢复 | `snapshot/restore` 4.67 秒(2.1 MB 快照) | 无,volume 已在 |
+| repo | `git fetch` 0.96 秒 | `git fetch` |
+| 首次冷启(含 clone) | — | 15 秒 |
+
+`WakeTimings` 的超时不用调:两边都远在现有上限之内(`opencode/start` 180s、clone 5min、fetch 2min)。
+
+**唯一一处两边行为不一致(已记进 AGENTS.md,暂不修)**:停容器瞬间浏览器那条 `/api/sessions/:id/events`,docker 侧出现过两次 `Exception Thrown — ReadableStream received over RPC disconnected prematurely`,CF 侧同一动作只是干净的 `Canceled`。机制推测是传输差异:docker 的 SSE 走公网 HTTPS,容器一停连接被硬断,DO 那侧的 RPC ReadableStream 就是"提前断开";CF 的 host worker 干净收尾。功能无影响——导出早已完成,浏览器随即重连。要修就是在 `streamOpencodeEvents` 里把上游断流当正常结束吞掉,但那会连真正的异常断流一起掩盖,得先想清楚怎么区分,所以先记着。
 
 **publish 已删除**:操作员从来不用这条路径(都是让容器里的 opencode 自己 push),它也从来没有 UI。整条路径连同 `resolvePublishBranch` / `isSafeBranchName` / `normalizeCommitMessage` / `parsePullRequestUrl` / `openPullRequest` 一起删掉,`SessionChanges` 去掉 `publishBranch` / `remoteBranch`,`shellQuote` 保留。理由写进 AGENTS.md 的"The Hub does not publish; the agent does"。
 
-**剩下的**:删除(容器 + volume 清干净)、CF 侧回归、按 `WakeTimings` 调超时、运维文档。
+**运维文档**:`agent/README.md` 的 Operations 一节——token 轮换(先写站点设置、再写 token 文件、再 `launchctl kickstart`,期间最多一分钟 401 因为 DO 缓存 60 秒)、镜像升级(`ensure` 只替换镜像过期的**已停止**容器,活着的不动;要立刻生效就从 Hub 停一次再唤醒)、删除必须先于清配置、日志在哪。
+
+**mini 侧待你确认的最后一格**:`docker ps -a --filter name=oc-session-` 与 `docker volume ls --filter name=oc-vol-` 应当都为空(站点看不到 agent 的执行结果,只知道 `DELETE` 返回 Ok)。
 
 两个非显然的坑,都会静默失败:
 - **非交互 ssh 下 `docker build` 拉基础镜像会失败**。Docker Desktop 在 `~/.docker/config.json` 写了 `credsStore: desktop`,而 `docker-credential-desktop` 只在 `/Applications/Docker.app/Contents/Resources/bin`——登录 shell 找得到,`ssh host 'docker build …'` 找不到,报的是一句看不出所以然的 `error getting credentials`。CI 的 build 步骤显式把这个目录加进了 PATH。
@@ -173,7 +190,7 @@ mock 侧:catalog 的 `providers` 由 mock settings 派生(和 Hub 一样),所以
 ## 依赖图与建议节奏
 
 ```
-任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换 ✅) ──→ 任务6(docker 接通) ──→ 任务9(e2e)
+任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换 ✅) ──→ 任务6(docker 接通 ✅) ──→ 任务9(e2e ✅)
 任务2(数据) ──────────────────────↗            任务7(agent,可并行) ────↗
 任务3(settings) ────────────────────────────────↗  任务8(UI ✅) ───────↗
 任务4.5(拆桶,与 4 并行) ──────────↗

@@ -185,6 +185,16 @@ construction, the container scripts, output truncation, the text/binary
 decision, the listing parser — is covered by
 [`test/agent-docker.test.mjs`](../test/agent-docker.test.mjs).
 
+**What a healthy session looks like in production** (measured 2026-07-28, a
+Mac mini over a TLS front end). A first cold start — container, credentials,
+`git clone`, OpenCode — took 15 seconds from `POST /api/sessions` to the first
+prompt reaching the container. A wake after an idle stop took 6 seconds: no
+snapshot to restore, so it is the container start, one credential batch, a
+`git fetch` and the server. The Cloudflare host, doing the same wake with a
+2 MB workspace snapshot to put back, took 33 seconds. If a wake here starts
+costing tens of seconds, the volume is not being reused — look for a recreated
+volume, which the site reports as a lost session rather than a slow one.
+
 ## Operations
 
 **Rotating the token.** Write the new value into the site's settings first, then
