@@ -152,6 +152,13 @@ export function buildSettings(): SettingView[] {
       label: 'Docker session image',
       required: false,
       configured: false
+    },
+    {
+      key: 'docker.idle-timeout-minutes',
+      group: 'docker',
+      label: 'Docker idle timeout (minutes)',
+      required: false,
+      configured: false
     }
   ];
 }

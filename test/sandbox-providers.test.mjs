@@ -4,7 +4,8 @@ import test from 'node:test'
 import {
   isDockerProviderConfigured,
   listSessionProviders,
-  readDockerProviderConfig
+  readDockerProviderConfig,
+  resolveLifecycleIdleTimeoutMs
 } from '../src/sandbox-providers.ts'
 
 /** Just enough D1 to answer `SELECT value FROM settings WHERE key = ?1`. */
@@ -60,4 +61,31 @@ test('the base URL loses its trailing slashes, the image is taken as stored', as
   const config = await readDockerProviderConfig(env)
   assert.equal(config.baseUrl, 'https://sandbox.example.com')
   assert.equal(config.image, 'ghcr.io/acme/opencode-session:v1')
+})
+
+test('cloudflare idle timeout stays at ten minutes', async () => {
+  const env = envWith({ 'docker.idle-timeout-minutes': 60 })
+  assert.equal(await resolveLifecycleIdleTimeoutMs(env, 'cloudflare'), 10 * 60_000)
+})
+
+test('docker idle timeout defaults to thirty minutes and accepts the setting', async () => {
+  assert.equal(
+    await resolveLifecycleIdleTimeoutMs(envWith({}), 'docker'),
+    30 * 60_000
+  )
+  assert.equal(
+    await resolveLifecycleIdleTimeoutMs(
+      envWith({ 'docker.idle-timeout-minutes': 45 }),
+      'docker'
+    ),
+    45 * 60_000
+  )
+  // Out-of-range stored values fall back rather than poison the deadline.
+  assert.equal(
+    await resolveLifecycleIdleTimeoutMs(
+      envWith({ 'docker.idle-timeout-minutes': 0 }),
+      'docker'
+    ),
+    30 * 60_000
+  )
 })

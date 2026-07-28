@@ -81,7 +81,12 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
       });
     }
     case 'checkpoint': {
-      const runtime = await ensureLifecycleInitialized(env, record.id, lifecycle);
+      const runtime = await ensureLifecycleInitialized(
+        env,
+        record.id,
+        lifecycle,
+        record.provider
+      );
       // A sleeping instance was already checkpointed before it stopped. Do
       // not start it merely to create an identical manual checkpoint.
       if (!runtime.admissionOpen) {
@@ -93,7 +98,12 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
       return json(await sandbox.checkpointWorkspace(runtime.runtimeEpoch));
     }
     case 'stop':
-      await ensureLifecycleInitialized(env, record.id, lifecycle);
+      await ensureLifecycleInitialized(
+        env,
+        record.id,
+        lifecycle,
+        record.provider
+      );
       await lifecycle.forceStop();
       return json(await getInstanceView(env, record));
     case 'test': {

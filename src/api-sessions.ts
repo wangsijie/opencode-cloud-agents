@@ -743,7 +743,7 @@ async function requireAwakeRuntime(
   if (!instance || instance.lifecycle !== 'ready') {
     throw new HttpError(409, `This session is not ready to ${intent}`);
   }
-  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record);
   if (!runtimeEpoch) {
     throw new HttpError(
       409,
@@ -875,7 +875,7 @@ async function streamSessionEvents(
   if (!instance || instance.lifecycle !== 'ready') {
     return closedSessionEventStream({ ...state, state: 'sleeping' });
   }
-  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record);
   if (!runtimeEpoch) {
     return closedSessionEventStream({ ...state, state: 'sleeping' });
   }
@@ -889,7 +889,7 @@ async function streamSessionEvents(
     // A runtime that stopped between the epoch read and this request answers
     // with the sleeping gate, which is a state and not a failure.
     await upstream.body?.cancel().catch(() => undefined);
-    const gone = await isRuntimeGoneError(env, record.instanceId, runtimeEpoch);
+    const gone = await isRuntimeGoneError(env, record, runtimeEpoch);
     return closedSessionEventStream({
       ...state,
       state: gone ? 'sleeping' : 'error',
@@ -949,7 +949,7 @@ async function readSessionTranscript(
     return await asleep();
   }
 
-  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record.instanceId);
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record);
   if (!runtimeEpoch) {
     return await asleep();
   }
@@ -967,7 +967,7 @@ async function readSessionTranscript(
     // The runtime can stop between the epoch read and the message read. That
     // race is a sleeping session, not a failure worth showing the user.
     const message = error instanceof Error ? error.message : String(error);
-    if (await isRuntimeGoneError(env, record.instanceId, runtimeEpoch)) {
+    if (await isRuntimeGoneError(env, record, runtimeEpoch)) {
       return await asleep();
     }
     console.warn(`Failed to read session ${record.id} messages`, error);
@@ -1037,13 +1037,18 @@ async function readTranscriptMirrorFor(
  */
 async function resolveRunningRuntimeEpoch(
   env: Env,
-  instanceId: string
+  record: SessionRecord
 ): Promise<string | undefined> {
   try {
-    const status = await ensureLifecycleInitialized(env, instanceId);
+    const status = await ensureLifecycleInitialized(
+      env,
+      record.instanceId,
+      undefined,
+      record.provider
+    );
     return status.phase.startsWith('running_') ? status.runtimeEpoch : undefined;
   } catch (error) {
-    console.warn(`Failed to read instance ${instanceId} lifecycle`, error);
+    console.warn(`Failed to read instance ${record.instanceId} lifecycle`, error);
     return undefined;
   }
 }
@@ -1051,10 +1056,10 @@ async function resolveRunningRuntimeEpoch(
 /** Whether the runtime generation a failed read targeted is no longer current. */
 async function isRuntimeGoneError(
   env: Env,
-  instanceId: string,
+  record: SessionRecord,
   runtimeEpoch: string
 ): Promise<boolean> {
-  return (await resolveRunningRuntimeEpoch(env, instanceId)) !== runtimeEpoch;
+  return (await resolveRunningRuntimeEpoch(env, record)) !== runtimeEpoch;
 }
 
 function resolveSessionAgent(env: Env, sessionId: string) {

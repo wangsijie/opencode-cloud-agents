@@ -236,6 +236,7 @@ export function SettingsPage({
                     url={byKey.get('docker.agent-url')}
                     token={byKey.get('docker.agent-token')}
                     image={byKey.get('docker.image')}
+                    idleTimeout={byKey.get('docker.idle-timeout-minutes')}
                     onSaved={saved}
                   />
                 ) : (
@@ -1189,6 +1190,9 @@ function GitIdentitySection({
 /** The image the agent falls back to when `docker.image` is unset. */
 const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
 
+/** Idle-stop default when `docker.idle-timeout-minutes` is unset. */
+const DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES = 30;
+
 /**
  * The second sandbox host, which is opt-in.
  *
@@ -1205,22 +1209,30 @@ function DockerSection({
   url,
   token,
   image,
+  idleTimeout,
   onSaved
 }: {
   url?: SettingView;
   token?: SettingView;
   image?: SettingView;
+  idleTimeout?: SettingView;
   onSaved: () => void;
 }) {
   const storedUrl = typeof url?.value === 'string' ? url.value : '';
   const storedImage = typeof image?.value === 'string' ? image.value : '';
+  const storedIdle =
+    typeof idleTimeout?.value === 'number'
+      ? String(idleTimeout.value)
+      : '';
   const [urlText, setUrlText] = useState<string>();
   const [tokenText, setTokenText] = useState('');
   const [imageText, setImageText] = useState<string>();
+  const [idleText, setIdleText] = useState<string>();
   const { busy, error, notice, run } = useSave();
 
   const currentUrl = urlText ?? storedUrl;
   const currentImage = imageText ?? storedImage;
+  const currentIdle = idleText ?? storedIdle;
   const configured = Boolean(url?.configured && token?.configured);
 
   return (
@@ -1258,10 +1270,21 @@ function DockerSection({
         disabled={busy}
         onChange={(event) => setImageText(event.target.value)}
       />
+      <input
+        type="number"
+        min={1}
+        max={1440}
+        step={1}
+        placeholder={`Idle timeout minutes (default ${DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES})`}
+        aria-label="Docker idle timeout minutes"
+        value={currentIdle}
+        disabled={busy}
+        onChange={(event) => setIdleText(event.target.value)}
+      />
       <p className="muted">
         {configured
-          ? 'Configured. Clearing the URL turns the provider off — delete any Docker sessions first, or they cannot be deleted at all.'
-          : 'Both the URL and a token are needed before Docker is offered.'}
+          ? 'Configured. Clearing the URL turns the provider off — delete any Docker sessions first, or they cannot be deleted at all. Idle timeout applies to new sessions only (Cloudflare stays at 10 minutes).'
+          : 'Both the URL and a token are needed before Docker is offered. Idle timeout defaults to 30 minutes when left empty.'}
       </p>
       <div className="actions">
         <button
@@ -1271,6 +1294,7 @@ function DockerSection({
             void run(async () => {
               const nextUrl = currentUrl.trim();
               const nextImage = currentImage.trim();
+              const nextIdle = currentIdle.trim();
               // A cleared field is `null`, which is how an optional setting is
               // removed; the token is the exception — it never reads back, so
               // an empty box means "leave it alone" rather than "clear it".
@@ -1279,9 +1303,25 @@ function DockerSection({
                 await saveSetting('docker.agent-token', tokenText.trim());
               }
               await saveSetting('docker.image', nextImage || null);
+              if (nextIdle === '') {
+                await saveSetting('docker.idle-timeout-minutes', null);
+              } else {
+                const minutes = Number(nextIdle);
+                if (
+                  !Number.isInteger(minutes) ||
+                  minutes < 1 ||
+                  minutes > 1440
+                ) {
+                  throw new Error(
+                    'Idle timeout must be a whole number of minutes between 1 and 1440'
+                  );
+                }
+                await saveSetting('docker.idle-timeout-minutes', minutes);
+              }
               setTokenText('');
               setUrlText(undefined);
               setImageText(undefined);
+              setIdleText(undefined);
               onSaved();
               return undefined;
             })

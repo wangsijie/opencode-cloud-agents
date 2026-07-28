@@ -19,7 +19,8 @@ export const SETTING_KEYS = {
   gitIdentity: 'git.identity',
   dockerAgentUrl: 'docker.agent-url',
   dockerAgentToken: 'docker.agent-token',
-  dockerImage: 'docker.image'
+  dockerImage: 'docker.image',
+  dockerIdleTimeoutMinutes: 'docker.idle-timeout-minutes'
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -91,6 +92,15 @@ export interface GitIdentitySetting {
  * `docker.image` is unset. Built by `agent/session-image/Dockerfile`.
  */
 export const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
+
+/**
+ * How long a Docker session may sit idle before the site stops its container,
+ * when `docker.idle-timeout-minutes` is unset. Longer than Cloudflare's ten
+ * minutes because a Docker volume survives the stop and a cold start is cheap.
+ */
+export const DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES = 30;
+
+
 
 export async function readSetting<T>(
   env: Env,

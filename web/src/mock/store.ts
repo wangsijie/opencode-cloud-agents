@@ -202,10 +202,15 @@ function coldWake(): SessionView['instance']['runtime']['lastWake'] {
   };
 }
 
-const IDLE_TIMEOUT_MS = 10 * 60_000;
+const CLOUDFLARE_IDLE_TIMEOUT_MS = 10 * 60_000;
+const DOCKER_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 function finishToIdle(session: MockSessionState): void {
-  const deadline = new Date(Date.now() + IDLE_TIMEOUT_MS).toISOString();
+  const timeoutMs =
+    session.view.provider === 'docker'
+      ? DOCKER_IDLE_TIMEOUT_MS
+      : CLOUDFLARE_IDLE_TIMEOUT_MS;
+  const deadline = new Date(Date.now() + timeoutMs).toISOString();
   setRuntime(session, {
     phase: 'working',
     status: 'idle',

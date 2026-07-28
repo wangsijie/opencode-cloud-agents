@@ -11,6 +11,7 @@ import type { RuntimeLifecycle } from './instances';
  * before forwarding a request to Sandbox.
  */
 
+/** Cloudflare default; Docker uses a longer default resolved at instance init. */
 export const LIFECYCLE_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 export const LIFECYCLE_BUSY_PROBE_INTERVAL_MS = 10 * 1000;
 export const LIFECYCLE_IDLE_PROBE_INTERVAL_MS = 60 * 1000;
@@ -37,6 +38,12 @@ export interface ExecutionSnapshot {
 
 export interface InitializeLifecycleInput {
   instanceId: string;
+  /**
+   * How long the instance may sit idle before an idle-stop. Captured at
+   * create so a later settings edit does not move a live deadline; omit to
+   * keep the Cloudflare default.
+   */
+  idleTimeoutMs?: number;
 }
 
 export type LifecyclePhase =
@@ -77,6 +84,8 @@ interface StoredLifecycleState {
   phase: LifecyclePhase;
   revision: number;
   runtimeEpoch?: string;
+  /** Per-instance idle window; absent on states written before this field. */
+  idleTimeoutMs?: number;
   idleCandidateSince?: number;
   idleConfirmations: number;
   idleSince?: number;
@@ -230,6 +239,9 @@ export class LifecycleCoordinator extends DurableObject<Env> {
       instanceId: input.instanceId,
       phase: 'sleeping',
       revision: 0,
+      ...(input.idleTimeoutMs !== undefined
+        ? { idleTimeoutMs: input.idleTimeoutMs }
+        : {}),
       idleConfirmations: 0,
       activeSessionCount: 0,
       retrySessionCount: 0,
@@ -834,7 +846,8 @@ export class LifecycleCoordinator extends DurableObject<Env> {
         idleConfirmations,
         idleSince: idleCandidateSince,
         idleDeadlineAt:
-          idleCandidateSince + LIFECYCLE_IDLE_TIMEOUT_MS,
+          idleCandidateSince +
+          (state.idleTimeoutMs ?? LIFECYCLE_IDLE_TIMEOUT_MS),
         nextProbeAt: now + LIFECYCLE_IDLE_PROBE_INTERVAL_MS
       };
       return;

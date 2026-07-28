@@ -12,7 +12,15 @@
  * there is one answer to that question.
  */
 import type { SessionProvider } from '../protocol/types.ts';
-import { DEFAULT_DOCKER_IMAGE, SETTING_KEYS, readSetting } from './settings.ts';
+import {
+  DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_DOCKER_IMAGE,
+  SETTING_KEYS,
+  readSetting
+} from './settings.ts';
+
+/** Matches `LIFECYCLE_IDLE_TIMEOUT_MS` in lifecycle.ts — keep in sync. */
+const CLOUDFLARE_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** What the Docker transport needs to reach the agent. */
 export interface DockerProviderConfig {
@@ -69,4 +77,30 @@ export async function listSessionProviders(
   return (await isDockerProviderConfigured(env))
     ? ['docker', 'cloudflare']
     : ['cloudflare'];
+}
+
+/**
+ * Idle-stop window for a new instance. Cloudflare keeps the hard-coded ten
+ * minutes; Docker reads `docker.idle-timeout-minutes` (default 30). Captured
+ * once at lifecycle init so a settings edit does not move a live deadline.
+ */
+export async function resolveLifecycleIdleTimeoutMs(
+  env: Env,
+  provider: SessionProvider
+): Promise<number> {
+  if (provider !== 'docker') {
+    return CLOUDFLARE_IDLE_TIMEOUT_MS;
+  }
+  const minutes = await readSetting<number>(
+    env,
+    SETTING_KEYS.dockerIdleTimeoutMinutes
+  );
+  const resolved =
+    typeof minutes === 'number' &&
+    Number.isInteger(minutes) &&
+    minutes >= 1 &&
+    minutes <= 1440
+      ? minutes
+      : DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES;
+  return resolved * 60 * 1000;
 }

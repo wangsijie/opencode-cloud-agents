@@ -414,6 +414,17 @@ function validateDockerImage(value: unknown): string[] {
   return [];
 }
 
+/** Whole minutes, 1–24h. Stored as a JSON number. */
+function validateDockerIdleTimeoutMinutes(value: unknown): string[] {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return ['Idle timeout must be a whole number of minutes'];
+  }
+  if (value < 1 || value > 1440) {
+    return ['Idle timeout must be between 1 and 1440 minutes'];
+  }
+  return [];
+}
+
 /**
  * Everything the settings API serves and accepts, except the admin password —
  * that one never travels through the generic read/write routes; it has its own
@@ -501,6 +512,14 @@ export const SETTING_DESCRIPTORS: readonly SettingDescriptor[] = [
     exposure: 'plain',
     required: false,
     validate: validateDockerImage
+  },
+  {
+    key: SETTING_KEYS.dockerIdleTimeoutMinutes,
+    group: 'docker',
+    label: 'Docker idle timeout (minutes)',
+    exposure: 'plain',
+    required: false,
+    validate: validateDockerIdleTimeoutMinutes
   }
 ];
 

@@ -36,6 +36,7 @@ import {
   workspaceDirectory,
   type RepoDefinition
 } from './repos';
+import { resolveLifecycleIdleTimeoutMs } from './sandbox-providers.ts';
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
 import type { SessionRecord, SessionStatePatch } from './sessions';
 
@@ -166,7 +167,8 @@ export async function createSession(
   const lifecycle = resolveLifecycle(env, id);
   await sandbox.initializeInstance(id, input.repo?.repoKey, input.repo, provider);
   try {
-    await lifecycle.initializeInstance({ instanceId: id });
+    const idleTimeoutMs = await resolveLifecycleIdleTimeoutMs(env, provider);
+    await lifecycle.initializeInstance({ instanceId: id, idleTimeoutMs });
     await env.DB.prepare(
       `INSERT INTO sessions (
          id, name, repo_key, repo_json, provider, lifecycle,

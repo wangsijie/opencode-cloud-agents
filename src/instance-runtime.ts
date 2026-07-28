@@ -7,8 +7,10 @@
  * structurally (as in [lifecycle.ts](lifecycle.ts)) so this module never has to
  * import the Sandbox class and create a module cycle with the Worker entry.
  */
+import type { SessionProvider } from '../protocol/types.ts';
 import type { InstanceRuntimeStatus } from './instances';
 import type { LifecycleStatus } from './lifecycle';
+import { resolveLifecycleIdleTimeoutMs } from './sandbox-providers.ts';
 import type { SessionAttachmentRef } from './sessions';
 
 /** How long an explicit wake stays attached to a queued lifecycle transition. */
@@ -108,12 +110,17 @@ export function resolveInstanceLifecycle(env: Env, instanceId: string) {
 export async function ensureLifecycleInitialized(
   env: Env,
   instanceId: string,
-  lifecycle = resolveInstanceLifecycle(env, instanceId)
+  lifecycle = resolveInstanceLifecycle(env, instanceId),
+  provider: SessionProvider = 'cloudflare'
 ): Promise<LifecycleStatus> {
   const status = await lifecycle.getLifecycleStatus();
-  return status.phase === 'uninitialized'
-    ? lifecycle.initializeInstance({ instanceId })
-    : status;
+  if (status.phase !== 'uninitialized') {
+    return status;
+  }
+  // Recovery path for a missing DO state: pass the session's provider so
+  // Docker keeps its longer idle window.
+  const idleTimeoutMs = await resolveLifecycleIdleTimeoutMs(env, provider);
+  return lifecycle.initializeInstance({ instanceId, idleTimeoutMs });
 }
 
 /**
@@ -124,9 +131,10 @@ export async function ensureLifecycleInitialized(
 export async function wakeInstanceRuntime(
   env: Env,
   instanceId: string,
-  lifecycle = resolveInstanceLifecycle(env, instanceId)
+  lifecycle = resolveInstanceLifecycle(env, instanceId),
+  provider: SessionProvider = 'cloudflare'
 ): Promise<{ runtimeEpoch: string; status: LifecycleStatus }> {
-  await ensureLifecycleInitialized(env, instanceId, lifecycle);
+  await ensureLifecycleInitialized(env, instanceId, lifecycle, provider);
   let result = await lifecycle.wake();
 
   // A wake racing with the final idle-stop barrier is queued by the

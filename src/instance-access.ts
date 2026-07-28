@@ -55,7 +55,12 @@ export async function wakeInstance(
   status: LifecycleStatus;
 }> {
   try {
-    return await wakeInstanceRuntime(env, record.id, lifecycle);
+    return await wakeInstanceRuntime(
+      env,
+      record.id,
+      lifecycle,
+      record.provider
+    );
   } catch (error) {
     if (error instanceof InstanceWakePendingError) {
       throw new HttpError(503, error.message);
@@ -186,7 +191,8 @@ export async function getInstanceView(
     const lifecycleStatus = await ensureLifecycleInitialized(
       env,
       record.id,
-      lifecycle
+      lifecycle,
+      record.provider
     );
     return {
       ...record,

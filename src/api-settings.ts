@@ -125,6 +125,7 @@ function exposedValue(key: string, value: unknown): unknown {
     case SETTING_KEYS.gitIdentity:
     case SETTING_KEYS.dockerAgentUrl:
     case SETTING_KEYS.dockerImage:
+    case SETTING_KEYS.dockerIdleTimeoutMinutes:
       return value;
     case SETTING_KEYS.sshKey: {
       const record = value as Partial<SshKeySetting> | undefined;

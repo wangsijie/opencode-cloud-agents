@@ -299,16 +299,37 @@ test('the docker image is a Docker reference', () => {
   assert.ok(image.validate('').length > 0)
 })
 
+test('the docker idle timeout is whole minutes in 1–1440', () => {
+  const idle = findDescriptor('docker.idle-timeout-minutes')
+  assert.deepEqual(idle.validate(30), [])
+  assert.deepEqual(idle.validate(1), [])
+  assert.deepEqual(idle.validate(1440), [])
+  assert.ok(idle.validate(0).length > 0)
+  assert.ok(idle.validate(1441).length > 0)
+  assert.ok(idle.validate(30.5).length > 0)
+  assert.ok(idle.validate('30').length > 0)
+  assert.ok(idle.validate(null).length > 0)
+})
+
 test('the docker provider settings are all optional', () => {
-  for (const key of ['docker.agent-url', 'docker.agent-token', 'docker.image']) {
+  for (const key of [
+    'docker.agent-url',
+    'docker.agent-token',
+    'docker.image',
+    'docker.idle-timeout-minutes'
+  ]) {
     const descriptor = findDescriptor(key)
     assert.equal(descriptor.group, 'docker')
     assert.equal(descriptor.required, false)
   }
-  // The token never reads back; the other two do, so they can be edited.
+  // The token never reads back; the other three do, so they can be edited.
   assert.equal(findDescriptor('docker.agent-token').exposure, 'secret')
   assert.equal(findDescriptor('docker.agent-url').exposure, 'plain')
   assert.equal(findDescriptor('docker.image').exposure, 'plain')
+  assert.equal(
+    findDescriptor('docker.idle-timeout-minutes').exposure,
+    'plain'
+  )
 })
 
 test('required settings are exactly the ones the gate blocks on', () => {
