@@ -15,7 +15,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 一套 HTTP 形态的 "Sandbox Host 协议",两个 Host 实现,站点侧一个 `HostClient` 按 session 的 provider 切换传输。通信选型结论:协议保持 HTTP(请求-响应 + SSE 全覆盖,Workers 对 gRPC 支持差、WS 需自建复用);CF 内部走 service binding(不出公网、零握手),远程走 HTTPS(Caddy HTTP/2);延迟靠协议内批量端点解决(唤醒 4~6 次往返)。
 
-关键决策备忘:provider 建 session 时选、存 sessions 表可混用;docker 用 named volume 持久化、无 R2 快照;两 provider 都保留 transcript 到 R2 镜像;不考虑版本偏移;`Sandbox` DO 保留类名与 storage(gate/identity/备份台账原地不动,快照句柄经协议显式传递——台账由我们自己管理、`restoreBackup(handle)` 接受显式句柄,已在源码验证 :111-113/:2450)。
+关键决策备忘:provider 建 session 时选、存 sessions 表可混用;docker 用 named volume 持久化、无 R2 快照(mini 磁盘丢了就是丢了,可接受);两 provider 都保留 transcript 到 R2 镜像(写入方始终是站点的 Sandbox DO,经协议 `proxy/` 读容器的 OpenCode API——agent 不碰 R2、无 R2 凭证;推论:停容器必须永远由站点发起,agent 不做任何自主生命周期决策,否则 `idle-stop` 前的完整导出时序不成立);R2 按所有权拆桶(见下);不考虑版本偏移;`Sandbox` DO 保留类名与 storage(gate/identity/备份台账原地不动,快照句柄经协议显式传递——台账由我们自己管理、`restoreBackup(handle)` 接受显式句柄,已在源码验证 :111-113/:2450)。
 
 ---
 
@@ -54,15 +54,26 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 **交付/验收**:Worker B 独立部署成功;从站点 Worker 加临时 debug 路由(或 wrangler tail + 内部调用)对 B 做冒烟:ensure → exec → 写读文件 → opencode/start → proxy → snapshot/restore → stop → delete。
 **依赖**:任务 1。
 
+## 任务 4.5:R2 按所有权拆桶(小 PR,排在任务 5 之前)
+
+**背景**:`opencode-cloud-backups` 现在塞了三种业务——`backups/`(SDK 容器快照 + `meta.json` 台账)、`transcripts/`(会话镜像)、prompt attachments(临时图片),而 `host/wrangler.jsonc` 绑的是同一个桶。任务 5 之后所有权彻底错位:`backups/` 只有 Worker B 写,其余只有 Worker A 写,但两边都持有对方数据的完整读写权。
+
+**方向**:`opencode-cloud-backups` 归 Worker B(快照),新建站点桶(`opencode-cloud-sessions`)装 `transcripts/` + attachments。**不能反过来**——`BACKUP_BUCKET_NAME` 是 SDK 读去做 presigned 上传的(`wrangler.jsonc:11`),改快照桶名要动 SDK 假设 + 存量句柄,风险白担;transcripts 是我们自己 `put`/`get`,换桶只是改绑定名。
+
+**内容**:建新桶;站点加 `SESSION_BUCKET` 绑定;`transcript-mirror.ts` 的读写点(`sandbox.ts:2058`、`api-sessions.ts:1113`)+ attachments 的读写清扫(`api-sessions.ts:327`、`session-agent.ts:414/563`)改用新绑定;存量 `transcripts/` 一次性 copy 到新桶(几百 KB 级,脚本跑一次即可;attachments 是临时数据,直接切不迁移)。此时站点仍保留 `BACKUP_BUCKET`(快照还没搬走),任务 5 再删。
+
+**交付/验收**:`pnpm test` + typecheck 绿;部署后睡眠 session 的历史仍可读(即 copy 生效)。未动继承与 containers,零风险。
+**依赖**:无(可与任务 4 并行)。
+
 ## 任务 5:站点切换到 HostClient(CF-only)⚠ 风险最高,单独 PR
 
 **内容**:
 - `src/host-client.ts`:唯一协议客户端,传输可插(service binding stub / fetch+baseUrl+bearer),含 `opencodeServerEnv(config)`、proxy URL 重写(剥 epoch header)。
 - `sandbox.ts` 去 `extends BaseSandbox` 改普通 `DurableObject`(类名/storage 不变):约 20 处 `persistenceState.container?.running` → 本地真值 `host:runtime` + 探针经 `GET /sessions/:id` 校准;5 处 `getTcpPort(4096)` → `host.proxyFetch`;`containerFetch` override 删除,SSE 改新编排方法 `streamOpencodeEvents`(`api-sessions.ts:934` 改调);凭证注入/provision/changes/publish 方法体抽 `src/runtime-ops.ts`(接 HostClient + 窄接口,批量化:一次 write-batch + 一次脚本 exec);wake/quiesce/purge 改走协议(snapshot 句柄进出台账);gate/epoch/drain 一行不动。
 - 解析点(`instance-access.ts:39`、`instance-runtime.ts:98`、`hub-store.ts:499`、`hub.ts:101`)改普通 DO stub。
-- 站点 wrangler.jsonc:删 containers,加 `services: [{binding:"SANDBOX_HOST", service:"opencode-sandbox-host"}]`;`pnpm run types`。
-**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs`、`test/runtime-ops.test.mjs`);部署后存量 CF session 全流程无回归:唤醒(台账句柄经 B 恢复)→ 对话 → 空闲睡眠 → mirror 读 → 再唤醒 → checkpoint → publish → 删除。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox" src/`。
-**依赖**:任务 2、4。
+- 站点 wrangler.jsonc:删 containers,加 `services: [{binding:"SANDBOX_HOST", service:"opencode-sandbox-host"}]`;**同时删站点的 `BACKUP_BUCKET` 绑定和 `BACKUP_BUCKET_NAME`**(快照已归 Worker B,留着就是残留权限);`pnpm run types`。
+**交付/验收**:`pnpm test` + typecheck 绿(新增 `test/host-client.test.mjs`、`test/runtime-ops.test.mjs`);部署后存量 CF session 全流程无回归:唤醒(台账句柄经 B 恢复)→ 对话 → 空闲睡眠 → mirror 读 → 再唤醒 → checkpoint → publish → 删除。收尾审计 `grep -n "persistenceState.container\|getTcpPort\|BaseSandbox\|BACKUP_BUCKET" src/`。
+**依赖**:任务 2、4、4.5。
 
 ## 任务 6:docker provider 接通(站点侧)
 
@@ -72,7 +83,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 
 ## 任务 7:Mac mini agent 实现(可与 5、6 并行)
 
-**内容**:`agent/server.mjs`(路由 + bearer 恒定时间比较)、`agent/docker.mjs`(docker CLI 包装,纯参数构造独立)、`agent/session-image/Dockerfile`(`node:22-bookworm-slim` + git/ssh/gh/opencode-ai@1.18.4/pnpm 同 pin,COPY `docker/ssh/*`,构建上下文 = 仓库根)、`agent/launchd/*.plist`、`agent/README.md`(node/docker/launchd/Caddy,`/proxy/` 不设空闲超时)。容器 `oc-session-<id>` / volume `oc-vol-<id>` / `-p 127.0.0.1:0:4096`(macOS 必须发布端口)。
+**内容**:`agent/server.mjs`(路由 + bearer 恒定时间比较)、`agent/docker.mjs`(docker CLI 包装,纯参数构造独立)、`agent/session-image/Dockerfile`(`node:22-bookworm-slim` + git/ssh/gh/opencode-ai@1.18.4/pnpm 同 pin,COPY `docker/ssh/*`,构建上下文 = 仓库根)、`agent/launchd/*.plist`、`agent/README.md`(node/docker/launchd/Caddy,`/proxy/` 不设空闲超时)。容器 `oc-session-<id>` / volume `oc-vol-<id>` / `-p 127.0.0.1:0:4096`(macOS 必须发布端口)。**agent 不做任何自主生命周期决策**:不加 idle reaper,restart policy 不设开机自启以外的东西——停容器永远等站点的 `POST /stop`,否则 `idle-stop` 前的 transcript 完整导出会漏掉最后一段对话(volume 还在,不丢数据,但睡眠期间看到的历史缺一截)。
 **交付/验收**:`test/agent-docker.test.mjs`(参数构造/截断/二进制判定);开发机对本地 Docker 跑通脚本化 e2e:ensure → exec → write-batch → opencode/start → proxy SSE → stop → delete(脚本进 agent/,不进 `pnpm test`)。
 **依赖**:任务 1(仅协议)。
 
@@ -95,6 +106,7 @@ Worker A(站点):web/API/D1/R2 + 编排 DO(Sandbox 纯状态机、Lifecycle、Se
 任务1(协议) ──→ 任务4(Worker B) ──→ 任务5(站点切换) ──→ 任务6(docker 接通) ──→ 任务9(e2e)
 任务2(数据) ──────────────────────↗            任务7(agent,可并行) ────↗
 任务3(settings) ────────────────────────────────↗  任务8(UI) ──────────↗
+任务4.5(拆桶,与 4 并行) ──────────↗
 ```
 
 每个任务一个 PR,任务 5 是唯一的高风险步骤(部署后需存量回归验证);其余均为增量、可随时中断。
