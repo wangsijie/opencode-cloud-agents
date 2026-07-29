@@ -196,8 +196,16 @@ export async function createSession(
       )
       .run();
   } catch (error) {
+    // The INSERT can fail after D1 applied it, so the row may exist and each
+    // compensation is best-effort. Dropping it here is what keeps an
+    // applied-but-threw INSERT from stranding an orphan the delete path can
+    // never purge (its Sandbox identity is gone by then).
     await sandbox.purgeInstance().catch(() => undefined);
     await lifecycle.markDeleted().catch(() => undefined);
+    await env.DB.prepare('DELETE FROM sessions WHERE id = ?1')
+      .bind(id)
+      .run()
+      .catch(() => undefined);
     throw error;
   }
   return record;

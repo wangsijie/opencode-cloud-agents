@@ -2075,14 +2075,22 @@ export class Sandbox extends DurableObject<Env> {
     // Nothing about a deleted instance is worth mirroring, and the stream would
     // otherwise hold a read open against a container being destroyed.
     this.stopLiveTranscriptEvents();
-    const deletingIdentity = this.instanceIdentity
-      ? { ...this.instanceIdentity, state: 'deleting' as const }
-      : undefined;
+    if (!this.instanceIdentity) {
+      // No identity means nothing on any host belongs to this object: it was
+      // never initialized, or an earlier purge ran to completion and wiped the
+      // storage with the identity in it. Converge instead of throwing — the
+      // delete that is retrying against the wiped object must be able to
+      // finish, and the sweep is idempotent.
+      await this.persistenceState.storage.deleteAll();
+      return { outcome: 'purged' };
+    }
+    const deletingIdentity: InstanceIdentity = {
+      ...this.instanceIdentity,
+      state: 'deleting'
+    };
     await this.persistenceState.storage.put({
       [PURGE_STORAGE_KEY]: true,
-      ...(deletingIdentity
-        ? { [IDENTITY_STORAGE_KEY]: deletingIdentity }
-        : {})
+      [IDENTITY_STORAGE_KEY]: deletingIdentity
     });
     this.instanceIdentity = deletingIdentity;
     await Promise.all([
