@@ -218,6 +218,33 @@ test('the working-tree read reports the branch, files and diff', async () => {
   assert.ok(changes.diff.includes('diff --git'))
 })
 
+test('new files are diffed against /dev/null without touching the index', async () => {
+  const status = Buffer.from('?? docs/new.md\0?? docs/it\x27s here.md\0').toString(
+    'base64'
+  )
+  const newDiff =
+    'diff --git a/docs/new.md b/docs/new.md\n--- /dev/null\n+++ b/docs/new.md\n@@ -0,0 +1 @@\n+hello\n'
+  const host = stubHost({
+    'rev-parse --abbrev-ref HEAD': { stdout: 'work\n' },
+    'status --porcelain': { stdout: status },
+    'diff --no-index': { stdout: newDiff }
+  })
+  const changes = await readSessionChanges(host, CHECKOUT)
+  assert.deepEqual(
+    changes.files.map((file) => file.status),
+    ['untracked', 'untracked']
+  )
+  assert.ok(changes.diff.includes('+++ b/docs/new.md'))
+
+  const commands = host.calls.exec.map((call) => call.command)
+  assert.ok(commands.some((command) => command.includes('status --porcelain=v1 -z -uall')))
+  const noIndex = commands.find((command) => command.includes('diff --no-index'))
+  assert.ok(noIndex.includes(`-- /dev/null 'docs/new.md'`))
+  // A quote in a path stays inside the quoting rather than ending it.
+  assert.ok(noIndex.includes(`'docs/it'\\''s here.md'`))
+  assert.ok(!commands.some((command) => /\badd\b/.test(command)))
+})
+
 test('a failed status read is an error, a failed diff is an empty diff', async () => {
   await assert.rejects(
     readSessionChanges(

@@ -32,8 +32,10 @@ import { repoOwnerFromCloneUrl, type RepoDefinition } from './repos.ts';
 import {
   decodeGitStatusOutput,
   limitDiff,
+  MAX_DIFF_LENGTH,
   parseGitStatus,
   shellQuote,
+  type ChangedFile,
   type SessionChanges,
   type SessionChangesHead
 } from './session-changes.ts';
@@ -42,6 +44,13 @@ import {
 export const REPO_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 export const REPO_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 export const GIT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+
+/**
+ * How many new files are diffed by content. A session that adds a hundred files
+ * has already outgrown a sidebar; past this the rest keep their place in the
+ * tree with the name and status only.
+ */
+export const MAX_NEW_FILE_DIFFS = 100;
 
 /** The part of a host these operations use: run a command, write files, look. */
 export interface RuntimeHost {
@@ -198,8 +207,11 @@ export async function provisionRepository(
  *
  * A git read and not an OpenCode one: the diff the user cares about is the
  * working tree, including edits an agent made through a shell rather than
- * through the edit tool. Untracked files are listed but not diffed — showing
- * their content would mean staging them, and a read must not move the index.
+ * through the edit tool — and including files the agent created, which
+ * `git diff HEAD` has nothing to say about. A session that only adds files is
+ * exactly the session whose changes are worth reading, so the new ones are
+ * diffed against `/dev/null` in a second pass rather than left as a file list
+ * with an apology under each name.
  */
 export async function readSessionChanges(
   host: RuntimeHost,
@@ -213,7 +225,10 @@ export async function readSessionChanges(
     host.exec(`git -C ${at} log -1 --format='%H%x09%s'`),
     // Wrapped in base64 because the NUL separators do not reliably survive the
     // exec transport; the worker decodes before parsing.
-    host.exec(`git -C ${at} status --porcelain=v1 -z | base64`),
+    // `-uall` names every file inside a new directory. Without it git collapses
+    // one to `docs/`, which is a row the viewer cannot diff and a path the user
+    // never wrote.
+    host.exec(`git -C ${at} status --porcelain=v1 -z -uall | base64`),
     host.exec(`git -C ${at} diff HEAD --no-color`),
     host.exec(`git -C ${at} branch --remotes --list 'origin/*'`)
   ]);
@@ -225,6 +240,7 @@ export async function readSessionChanges(
   }
 
   const branch = branchOut.stdout.trim();
+  const files = parseGitStatus(decodeGitStatusOutput(statusOut.stdout));
   const remoteBranches = new Set(
     remoteOut.success
       ? remoteOut.stdout
@@ -242,11 +258,14 @@ export async function readSessionChanges(
     ...(headOut.success && headOut.stdout.trim()
       ? { head: parseHeadLine(headOut.stdout) }
       : {}),
-    files: parseGitStatus(decodeGitStatusOutput(statusOut.stdout)),
+    files,
     // A diff that fails on a repository whose status read worked is an empty
     // diff as far as the user is concerned; the file list is the part that must
     // be right.
-    ...limitDiff(diffOut.success ? diffOut.stdout : ''),
+    ...limitDiff(
+      (diffOut.success ? diffOut.stdout : '') +
+        (await diffNewFiles(host, directory, files))
+    ),
     unpushedCommits: await countUnpushedCommits(
       host,
       directory,
@@ -255,6 +274,47 @@ export async function readSessionChanges(
       remoteBranches.has(branch)
     )
   };
+}
+
+/**
+ * Diff the files git does not know about yet, as additions against nothing.
+ *
+ * `--no-index` is what keeps this a read: staging the files with `add -N` would
+ * produce the same patch, but a panel that is opened to look at a session must
+ * not move that session's index. The output is the ordinary `diff --git` form
+ * with `--- /dev/null` on the old side, so the viewer splits and renders it
+ * exactly like the tracked half.
+ *
+ * Every path is one `git` in a single shell round trip. `--no-index` exits 1
+ * whenever the two sides differ, which for a new file is always, so each
+ * command swallows its status and the read is judged by its output.
+ */
+async function diffNewFiles(
+  host: RuntimeHost,
+  directory: string,
+  files: ChangedFile[]
+): Promise<string> {
+  const paths = files
+    .filter((file) => file.status === 'untracked')
+    .slice(0, MAX_NEW_FILE_DIFFS)
+    .map((file) => file.path);
+  if (paths.length === 0) {
+    return '';
+  }
+  const at = shellQuote(directory);
+  const script = paths
+    .map(
+      (path) =>
+        `git -C ${at} diff --no-index --no-color -- /dev/null ${shellQuote(path)} || true`
+    )
+    .join('\n');
+  // Bounded in the container rather than after the fact: a single generated
+  // file can be megabytes, and the budget is what the response may carry, not
+  // what the transport should have to.
+  const out = await host.exec(`{\n${script}\n} | head -c ${MAX_DIFF_LENGTH + 1}`, {
+    timeoutMs: GIT_COMMAND_TIMEOUT_MS
+  });
+  return out.success ? out.stdout : '';
 }
 
 /**

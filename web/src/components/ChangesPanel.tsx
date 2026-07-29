@@ -210,10 +210,13 @@ function FileDiffBody({
     [file, block]
   );
 
-  if (file.status === 'untracked') {
+  // A new file is diffed against nothing, so it has a block like any other. It
+  // only falls back to the note when the server left it out — too many new
+  // files, or a path git quoted.
+  if (file.status === 'untracked' && !block) {
     return (
       <p className="muted diff-file-note">
-        New file — not yet tracked, so there is no diff against HEAD.
+        New file — no diff was read for it.
       </p>
     );
   }

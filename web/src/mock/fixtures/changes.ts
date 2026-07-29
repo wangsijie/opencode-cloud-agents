@@ -92,6 +92,15 @@ const DOCS_BLOCK = gitRenamed('docs/auth.md', 'docs/authentication.md', [
 
 const LOGO_BLOCK = gitBinary('web/assets/logo.png');
 
+// A new file reaches the panel as an addition against nothing, which is what
+// the server's `--no-index` pass produces for anything git has not staged.
+const SCRATCHPAD_BLOCK = gitAdded('notes/scratchpad.md', [
+  '+# Scratchpad',
+  '+',
+  '+- bearer tokens land first, cookies come out after',
+  '+- ask about the 24h TTL on staging'
+]);
+
 const CONFLICT_BLOCK = gitModified('src/routes/login.ts', [
   " import { issueToken } from '../auth/tokens';",
   ' ',
@@ -136,7 +145,8 @@ export function idleChanges(): SessionChanges {
       LEGACY_BLOCK,
       DOCS_BLOCK,
       LOGO_BLOCK,
-      CONFLICT_BLOCK
+      CONFLICT_BLOCK,
+      SCRATCHPAD_BLOCK
     ].join('\n'),
     diffTruncated: false,
     unpushedCommits: 2
