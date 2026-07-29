@@ -543,18 +543,29 @@ body.resizing .resize-handle {
   align-items: center;
   min-height: 32px;
   /* The gap keeps two adjacent highlighted rows — the active one and the one
-     under the pointer — from reading as a single block. */
-  margin-bottom: 2px;
+     under the pointer — from reading as a single block. It is a transparent
+     border rather than a margin so the hit area stays continuous: a margin
+     belongs to no row, and a 2px strip of default cursor between every two
+     rows strobes against the link's pointer as the mouse travels the list.
+     `background-clip` keeps the highlight itself out of the gap. */
+  border-bottom: 2px solid transparent;
+  background-clip: padding-box;
+  /* The whole row is the link's affordance — the highlight covers it and a
+     press anywhere on it navigates — so the hand must not flicker off over
+     the padding and seams the link's own box does not reach. */
+  cursor: pointer;
   padding-right: 4px;
   border-radius: var(--radius-sm);
   font-size: 14px;
 }
 
 /* The link is a sibling of the menu button rather than its parent: a button
-   inside an anchor is not something HTML allows. */
+   inside an anchor is not something HTML allows. Stretching it to the row's
+   full height leaves no default-cursor sliver above or below it. */
 .row-link {
   display: flex;
   align-items: center;
+  align-self: stretch;
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
@@ -563,12 +574,14 @@ body.resizing .resize-handle {
   text-decoration: none;
 }
 
+/* `background-color`, never the shorthand: that would reset the row's
+   `background-clip: padding-box` and paint the highlight over the gap. */
 .session-row:hover {
-  background: var(--surface-raised);
+  background-color: var(--surface-raised);
 }
 
 .session-row.active {
-  background: var(--surface-raised);
+  background-color: var(--surface-raised);
   font-weight: 500;
 }
 
@@ -667,6 +680,8 @@ body.resizing .resize-handle {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  /* Sits inside the row, which now carries the link's hand. */
+  cursor: default;
 }
 
 .row-menu button {

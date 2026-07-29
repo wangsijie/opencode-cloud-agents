@@ -230,6 +230,19 @@ function Row({
       className={`session-row${active ? ' active' : ''}${menuOpen ? ' menu-open' : ''}${
         session.status === 'deleting' ? ' deleting' : ''
       }`}
+      onClick={(event) => {
+        // The row wears the link's cursor and highlight, so its padding and
+        // seams navigate too. Presses that landed on the link, the menu
+        // button or the open menu already have their own meaning.
+        if (!isPlainClick(event)) {
+          return;
+        }
+        if ((event.target as HTMLElement).closest('a, button, .row-menu')) {
+          return;
+        }
+        navigate(sessionPath(session.id));
+        onNavigate();
+      }}
     >
       <a
         className="row-link"
