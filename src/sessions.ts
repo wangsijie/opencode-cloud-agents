@@ -87,6 +87,12 @@ export interface SessionRecord {
    */
   cleanedAt?: string;
   /**
+   * When the agent last stopped — finished a turn, failed, or parked on a
+   * question — without the user having looked at the session since. Absent
+   * means read. Kept in D1 so the marker follows the user across devices.
+   */
+  unreadAt?: string;
+  /**
    * Set when a human named this session. OpenCode titles a conversation of its
    * own accord, and adopting that title is an improvement on the first line of
    * the opening prompt — but never on a name somebody chose.

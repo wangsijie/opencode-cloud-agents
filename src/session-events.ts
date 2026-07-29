@@ -120,6 +120,80 @@ export function frameBelongsToSession(
   }
 }
 
+/**
+ * What a session's event means for the unread marker.
+ *
+ * `stop` — the turn ended (done, failed, or aborted): the moment there is a
+ * result nobody may have seen. `ask` — the agent parked on a question or
+ * permission and is waiting on a human. `activity` — everything else the
+ * session emits while running, which must never mark unread on its own but
+ * proves a run happened before the stop that follows it.
+ */
+export type SessionEventKind = 'stop' | 'ask' | 'activity';
+
+const STOP_EVENT_TYPES = new Set(['session.idle', 'session.error']);
+
+const ASK_EVENT_TYPES = new Set([
+  'question.asked',
+  'question.v2.asked',
+  'permission.asked',
+  'permission.v2.asked'
+]);
+
+/**
+ * Classify one frame from the container's event stream, or undefined when it
+ * is not this session's (server-wide frames, subagent traffic, junk).
+ *
+ * `session.status` is split by its payload: busy/retry are the run itself,
+ * idle is another spelling of "the turn ended" — kept as `stop` so the marker
+ * still lands if a container version emits it without `session.idle`.
+ */
+export function classifySessionEvent(
+  frame: string,
+  opencodeSessionId: string
+): SessionEventKind | undefined {
+  const data = sseFrameData(frame);
+  if (data === undefined) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    return undefined;
+  }
+  if (eventSessionId(payload) !== opencodeSessionId) {
+    return undefined;
+  }
+  const type = (payload as { type?: unknown }).type;
+  if (typeof type !== 'string') {
+    return 'activity';
+  }
+  if (STOP_EVENT_TYPES.has(type)) {
+    return 'stop';
+  }
+  if (ASK_EVENT_TYPES.has(type)) {
+    return 'ask';
+  }
+  if (type === 'session.status') {
+    return sessionStatusIsIdle(payload) ? 'stop' : 'activity';
+  }
+  return 'activity';
+}
+
+/** Whether a `session.status` payload reports the idle state. */
+function sessionStatusIsIdle(payload: unknown): boolean {
+  const { properties } = payload as { properties?: unknown };
+  if (typeof properties !== 'object' || properties === null) {
+    return false;
+  }
+  const { status } = properties as { status?: unknown };
+  if (typeof status !== 'object' || status === null) {
+    return false;
+  }
+  return (status as { type?: unknown }).type === 'idle';
+}
+
 function sseResponse(body: BodyInit): Response {
   return new Response(body, {
     headers: {

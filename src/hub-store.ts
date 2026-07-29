@@ -267,6 +267,58 @@ export async function renameSession(
 }
 
 /**
+ * Mark a session unread: the agent stopped or asked something while nobody
+ * was necessarily watching.
+ *
+ * COALESCE keeps the earliest unread moment through a burst of stop events,
+ * which is also what lets `markSessionRead` compare-and-clear against the
+ * value the client saw. Deliberately does not touch `updated_at`: an unread
+ * marker is not activity, and bumping it would reorder the list and reset the
+ * cleanup clock.
+ */
+export async function markSessionUnread(
+  env: Env,
+  id: string,
+  at = new Date().toISOString()
+): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE sessions SET unread_at = COALESCE(unread_at, ?2) WHERE id = ?1'
+  )
+    .bind(id, at)
+    .run();
+}
+
+/**
+ * Clear the unread marker the client saw.
+ *
+ * The compare-and-clear means a marker set after the client's snapshot
+ * survives: the client clears exactly what it read, never a newer one. The
+ * session page re-marks on its next poll, so nothing sticks while the user is
+ * actually looking. Like `markSessionUnread`, never touches `updated_at`.
+ */
+export async function markSessionRead(
+  env: Env,
+  id: string,
+  seenAt: string
+): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE sessions SET unread_at = NULL WHERE id = ?1 AND unread_at = ?2'
+  )
+    .bind(id, seenAt)
+    .run();
+}
+
+/**
+ * Drop the unread marker unconditionally. For writes that prove the user is
+ * looking at the session — sending a prompt, answering a question.
+ */
+export async function clearSessionUnread(env: Env, id: string): Promise<void> {
+  await env.DB.prepare('UPDATE sessions SET unread_at = NULL WHERE id = ?1')
+    .bind(id)
+    .run();
+}
+
+/**
  * Queue an instance for deletion and wake the Hub's delete alarm.
  *
  * The compare-and-swap claims the row for a fresh operation unless one is

@@ -19,7 +19,7 @@
  * task that starts between two activity probes still resets the idle window.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { updateSession } from './hub-store';
+import { markSessionUnread, updateSession } from './hub-store';
 import {
   resolveInstanceLifecycle,
   resolveInstanceSandbox,
@@ -698,6 +698,19 @@ export class SessionAgent extends DurableObject<Env> {
     }
     await this.persist();
     await this.reportToHub();
+    if (patch.phase === 'failed' || patch.phase === 'lost') {
+      // A terminal dispatch failure is a stop the user has to come look at,
+      // and it never reaches the container's event stream — the run died
+      // before or outside the container — so the unread marker is set here.
+      await markSessionUnread(this.env, this.state.sessionId).catch(
+        (error: unknown) => {
+          console.warn('Failed to mark session unread', {
+            sessionId: state.sessionId,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      );
+    }
   }
 
   /**

@@ -98,6 +98,11 @@ export interface SessionView {
   lastError?: string;
   /** When the idle sweep removed this session's container; cleaned only. */
   cleanedAt?: string;
+  /**
+   * When the agent last stopped or asked something the user has not looked at.
+   * Absent means read. Server-side, so it follows the user across devices.
+   */
+  unreadAt?: string;
   instance: InstanceView;
   transcript?: TranscriptSummary;
 }
@@ -409,6 +414,16 @@ export const patchSession = (id: string, input: { title?: string }) =>
 
 export const getSession = (id: string) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`);
+
+/**
+ * Acknowledge the unread marker the client saw. `seenAt` is the session's
+ * `unreadAt` value; a marker set after that snapshot survives the clear.
+ */
+export const markSessionRead = (id: string, seenAt: string) =>
+  call<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/read`, {
+    method: 'POST',
+    body: JSON.stringify({ seenAt })
+  });
 
 /**
  * A session's messages, or a subagent's when `agentSessionId` is given.

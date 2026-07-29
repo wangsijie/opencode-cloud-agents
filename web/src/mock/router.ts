@@ -386,6 +386,8 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         prompt,
         body.attachments as MessageAttachment[] | undefined
       );
+      // Sending a message is proof the user has seen the session.
+      delete view.unreadAt;
       if (attached(view)) {
         respondWhileAttached(session, userId);
       } else {
@@ -460,9 +462,23 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
           ? rejectQuestionRequest(session, requestID)
           : Array.isArray(body.answers) &&
             answerQuestionRequest(session, requestID, body.answers as string[][]);
-      return done
-        ? json({ ok: true })
-        : json({ error: 'This question is no longer pending' }, 409);
+      if (done) {
+        // Answering or dismissing a question is proof the user has seen it.
+        delete view.unreadAt;
+        return json({ ok: true });
+      }
+      return json({ error: 'This question is no longer pending' }, 409);
+    }
+    if (sub === 'read' && method === 'POST') {
+      const seenAt = parseBody(init).seenAt;
+      if (typeof seenAt !== 'string' || seenAt.length === 0) {
+        return json({ error: 'Expected { seenAt }' }, 400);
+      }
+      // Compare-and-clear, like the Worker: only the marker the client saw goes.
+      if (view.unreadAt === seenAt) {
+        delete view.unreadAt;
+      }
+      return json({ ok: true });
     }
     if (sub === 'abort' && method === 'POST') {
       abortSessionRun(session);

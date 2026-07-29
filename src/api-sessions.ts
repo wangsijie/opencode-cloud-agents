@@ -186,6 +186,13 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
     return await readSessionFiles(url, env, record);
   }
 
+  if (action === 'read') {
+    if (request.method !== 'POST') {
+      return methodNotAllowed('POST');
+    }
+    return await acknowledgeSessionRead(request, env, record);
+  }
+
   if (request.method !== 'POST') {
     return methodNotAllowed('POST');
   }
@@ -634,7 +641,35 @@ async function sendSessionPrompt(
     promptId,
     ...(refs.length > 0 ? { attachments: refs } : {})
   });
+  // Sending a message is proof the user has seen where the conversation stands.
+  await hubStore.clearSessionUnread(env, record.id).catch(() => undefined);
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
+}
+
+/**
+ * Acknowledge that the user has looked at this session.
+ *
+ * The body names the `unreadAt` value the client saw, and only that marker is
+ * cleared: an agent stop that lands between the client's read and this write
+ * keeps the session unread, which is the truth.
+ */
+async function acknowledgeSessionRead(
+  request: Request,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  const seenAt = (value as { seenAt?: unknown } | null)?.seenAt;
+  if (typeof seenAt !== 'string' || seenAt.length === 0) {
+    throw new HttpError(400, 'Expected { seenAt }: the unreadAt value being acknowledged');
+  }
+  await hubStore.markSessionRead(env, record.id, seenAt);
+  return json({ ok: true });
 }
 
 /**
@@ -731,6 +766,8 @@ async function actOnQuestion(
     }
     throw error;
   }
+  // Answering or dismissing a question is proof the user has seen it.
+  await hubStore.clearSessionUnread(env, record.id).catch(() => undefined);
   return json({ ok: true });
 }
 

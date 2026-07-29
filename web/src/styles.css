@@ -610,12 +610,9 @@ body.resizing .resize-handle {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.row-dot.failed {
-  background: var(--danger);
-}
-
-.row-dot.lost {
-  background: var(--text-dim);
+/* Steady, unlike the running pulse: the agent stopped and is waiting to be read. */
+.row-dot.unread {
+  background: var(--accent);
 }
 
 .row-menu-button {

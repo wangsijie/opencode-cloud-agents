@@ -43,7 +43,7 @@ import {
   isWebSocketUpgrade,
   truncateOutput
 } from './http';
-import { updateSession } from './hub-store';
+import { markSessionUnread, updateSession } from './hub-store';
 import type {
   InstanceRuntimeStatus,
   WakeStageTimings,
@@ -82,7 +82,7 @@ import {
   type RepoDefinition
 } from './repos';
 import type { SessionChanges } from './session-changes';
-import { frameBelongsToSession, SseFrameBuffer } from './session-events';
+import { classifySessionEvent, SseFrameBuffer } from './session-events';
 import {
   walkSessionLineage,
   type AgentSessionLineage
@@ -397,6 +397,13 @@ export class Sandbox extends DurableObject<Env> {
   private liveEvents: LiveEventSubscription | undefined;
   /** Whether a debounced live export is already scheduled. */
   private liveMirrorPending = false;
+  /**
+   * Whether the event stream has shown the session actually running since the
+   * last stop. A stop only marks the session unread when it ends a run that was
+   * observed — a container that wakes and idles without doing anything said
+   * nothing worth reading.
+   */
+  private unreadRunObserved = false;
   private instanceActive = false;
   private activeOperations = 0;
   private operationDrainWaiters = new Set<() => void>();
@@ -1785,14 +1792,58 @@ export class Sandbox extends DurableObject<Env> {
         for (const frame of frames.push(
           decoder.decode(value, { stream: true })
         )) {
-          if (frameBelongsToSession(frame, target.opencodeSessionId)) {
-            this.noteLiveTranscriptEvent(subscription.runtimeEpoch);
+          const kind = classifySessionEvent(frame, target.opencodeSessionId);
+          if (kind === undefined) {
+            continue;
+          }
+          this.noteLiveTranscriptEvent(subscription.runtimeEpoch);
+          switch (kind) {
+            case 'activity':
+              this.unreadRunObserved = true;
+              break;
+            case 'ask':
+              // A parked question outlives the container only through this
+              // marker — pending questions live in container memory — so it is
+              // written the moment it is seen, regardless of what ran before.
+              this.noteSessionUnread();
+              break;
+            case 'stop':
+              if (this.unreadRunObserved) {
+                this.unreadRunObserved = false;
+                this.noteSessionUnread();
+              }
+              break;
           }
         }
       }
     } finally {
       await reader.cancel().catch(() => undefined);
     }
+  }
+
+  /**
+   * Persist the unread marker to D1 the moment the triggering event is seen.
+   *
+   * Detached and immediate — unlike the mirror there is no debounce, because
+   * the marker must survive a container that dies right after stopping, and
+   * writing an already-set marker is a no-op (`markSessionUnread` keeps the
+   * earliest moment).
+   */
+  private noteSessionUnread(): void {
+    const sessionId = this.instanceIdentity?.id;
+    if (!sessionId) {
+      return;
+    }
+    this.persistenceState.waitUntil(
+      markSessionUnread(this.persistenceEnv, sessionId).catch(
+        (error: unknown) => {
+          console.warn('Failed to mark session unread', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      )
+    );
   }
 
   /**

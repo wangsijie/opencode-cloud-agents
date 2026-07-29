@@ -36,6 +36,7 @@ function fullRow() {
     last_error: 'dispatch failed once',
     last_prompt_at: '2026-07-27T02:00:00.000Z',
     cleaned_at: null,
+    unread_at: '2026-07-27T03:30:00.000Z',
     created_at: '2026-07-27T01:00:00.000Z',
     updated_at: '2026-07-27T04:00:00.000Z'
   }
@@ -54,7 +55,8 @@ function minimalRow() {
     title_locked: 0,
     opencode_session_id: null,
     last_error: null,
-    last_prompt_at: null
+    last_prompt_at: null,
+    unread_at: null
   }
 }
 
@@ -86,6 +88,7 @@ test('a full row projects into both record shapes', () => {
     pendingPromptCount: 2,
     lastError: 'dispatch failed once',
     lastPromptAt: '2026-07-27T02:00:00.000Z',
+    unreadAt: '2026-07-27T03:30:00.000Z',
     titleLocked: true,
     createdAt: '2026-07-27T01:00:00.000Z',
     updatedAt: '2026-07-27T04:00:00.000Z'
@@ -106,6 +109,7 @@ test('NULL columns become absent optional fields, not undefined values', () => {
     'lastError',
     'lastPromptAt',
     'cleanedAt',
+    'unreadAt',
     'titleLocked'
   ]) {
     assert.ok(!(key in session), `${key} should be absent`)

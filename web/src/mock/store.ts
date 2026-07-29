@@ -211,6 +211,9 @@ function finishToIdle(session: MockSessionState): void {
       ? DOCKER_IDLE_TIMEOUT_MS
       : CLOUDFLARE_IDLE_TIMEOUT_MS;
   const deadline = new Date(Date.now() + timeoutMs).toISOString();
+  // A run just stopped — the Worker's event classifier marks unread here. The
+  // open session page acknowledges it within a poll; other sessions keep the dot.
+  session.view.unreadAt = session.view.unreadAt ?? new Date().toISOString();
   setRuntime(session, {
     phase: 'working',
     status: 'idle',

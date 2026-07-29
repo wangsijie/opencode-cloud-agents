@@ -113,6 +113,9 @@ export function buildFixtureSessions(): MockSessionState[] {
       phase: 'working',
       status: 'idle',
       lastActivityAt: minutesAgo(25),
+      // The agent finished this run and nobody has opened the session since:
+      // the sidebar shows the unread dot until this page is visited.
+      unreadAt: minutesAgo(25),
       instance: {
         id: 'ses_idle',
         lifecycle: 'ready',
@@ -168,6 +171,9 @@ export function buildFixtureSessions(): MockSessionState[] {
       phase: 'working',
       status: 'working',
       lastActivityAt: minutesAgo(3),
+      // Parked on a question: still busy underneath, but the ask marked it
+      // unread — the dot must outrank the running pulse.
+      unreadAt: minutesAgo(3),
       instance: {
         id: 'ses_question',
         lifecycle: 'ready',
@@ -345,6 +351,8 @@ export function buildFixtureSessions(): MockSessionState[] {
     phase: 'failed',
     status: 'failed',
     lastActivityAt: daysAgo(3),
+    // A terminal dispatch failure is a stop the user has to come look at.
+    unreadAt: daysAgo(3),
     lastError:
       'git clone failed: Permission denied (publickey). fatal: Could not read from remote repository.',
     instance: {

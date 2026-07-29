@@ -9,6 +9,7 @@ import {
 import {
   abortSession,
   getSession,
+  markSessionRead,
   patchSession,
   retrySession,
   sendMessage,
@@ -153,6 +154,31 @@ export function SessionPage({
       removeEventListener('visibilitychange', onVisible);
     };
   }, [refreshSession, waking]);
+
+  // Having this page open and visible is what "read" means. Each acknowledged
+  // marker is remembered so one unread value is posted once, not once per
+  // poll; a new marker landing while the page is open compares different and
+  // is acknowledged on the next poll. Clearing server-side is what removes the
+  // sidebar dot, hence the list refresh.
+  // Keyed to the polled record, not the marker value: a hidden tab skips the
+  // acknowledgement, and the next poll after it becomes visible must retry
+  // even though the marker itself has not changed.
+  const acknowledgedUnread = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const unreadAt = session?.unreadAt;
+    if (!unreadAt || document.hidden || acknowledgedUnread.current === unreadAt) {
+      return;
+    }
+    acknowledgedUnread.current = unreadAt;
+    markSessionRead(sessionId, unreadAt)
+      .then(() => onSessionsChanged())
+      .catch(() => {
+        // Retry on the next poll rather than looping on a dead network.
+        if (acknowledgedUnread.current === unreadAt) {
+          acknowledgedUnread.current = undefined;
+        }
+      });
+  }, [sessionId, session, onSessionsChanged]);
 
   // Optimistic bubbles disappear as the real messages arrive, whether that is
   // seconds later on a running container or a cold start later on a sleeping

@@ -3,11 +3,14 @@ import test from 'node:test'
 
 import {
   SseFrameBuffer,
+  classifySessionEvent,
   eventSessionId,
   frameBelongsToSession,
   sseFrame,
   sseFrameData
 } from '../src/session-events.ts'
+
+const frame = (payload) => 'data: ' + JSON.stringify(payload)
 
 test('frames are split on the blank line, in either newline style', () => {
   const buffer = new SseFrameBuffer()
@@ -90,6 +93,78 @@ test('a subagent is watched by pointing the same filter at its session', () => {
   // And the parent's stream never carries it, which is what keeps the two
   // transcripts from merging into one.
   assert.equal(frameBelongsToSession(child, 'ses_parent'), false)
+})
+
+test('a finished or failed turn classifies as a stop', () => {
+  assert.equal(
+    classifySessionEvent(
+      frame({ type: 'session.idle', properties: { sessionID: 'ses_1' } }),
+      'ses_1'
+    ),
+    'stop'
+  )
+  assert.equal(
+    classifySessionEvent(
+      frame({ type: 'session.error', properties: { sessionID: 'ses_1', error: {} } }),
+      'ses_1'
+    ),
+    'stop'
+  )
+})
+
+test('question and permission asks classify as an ask', () => {
+  for (const type of [
+    'question.asked',
+    'question.v2.asked',
+    'permission.asked',
+    'permission.v2.asked'
+  ]) {
+    assert.equal(
+      classifySessionEvent(
+        frame({ type, properties: { sessionID: 'ses_1' } }),
+        'ses_1'
+      ),
+      'ask',
+      type
+    )
+  }
+})
+
+test('streaming traffic is activity, never a stop', () => {
+  for (const type of [
+    'message.updated',
+    'message.part.updated',
+    'session.next.step.ended',
+    'some.future.event'
+  ]) {
+    assert.equal(
+      classifySessionEvent(
+        frame({ type, properties: { sessionID: 'ses_1' } }),
+        'ses_1'
+      ),
+      'activity',
+      type
+    )
+  }
+})
+
+test('session.status splits on its payload: busy is activity, idle a stop', () => {
+  const status = (type) =>
+    frame({ type: 'session.status', properties: { sessionID: 'ses_1', status: { type } } })
+  assert.equal(classifySessionEvent(status('busy'), 'ses_1'), 'activity')
+  assert.equal(classifySessionEvent(status('retry'), 'ses_1'), 'activity')
+  assert.equal(classifySessionEvent(status('idle'), 'ses_1'), 'stop')
+})
+
+test('frames from other sessions and junk classify as nothing at all', () => {
+  const other = frame({ type: 'session.idle', properties: { sessionID: 'ses_other' } })
+  assert.equal(classifySessionEvent(other, 'ses_1'), undefined)
+  // Server-wide events carry no sessionID; a subagent's stop must not mark
+  // the parent unread either — the id filter handles both.
+  const serverWide = frame({ type: 'server.connected', properties: {} })
+  assert.equal(classifySessionEvent(serverWide, 'ses_1'), undefined)
+  assert.equal(classifySessionEvent(': keep-alive', 'ses_1'), undefined)
+  assert.equal(classifySessionEvent('data: not json', 'ses_1'), undefined)
 })
 
 test('hub frames are serialized as named SSE events', () => {

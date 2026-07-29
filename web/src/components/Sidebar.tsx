@@ -219,8 +219,13 @@ function Row({
   onNavigate: () => void;
   run: (id: string, work: () => Promise<unknown>) => Promise<void>;
 }) {
-  const working = ['working', 'starting', 'queued'].includes(session.status);
-  const failed = session.status === 'failed' || session.status === 'error';
+  // One indicator, three states: unread (the agent stopped or asked something
+  // the user has not seen), running, or nothing. Unread outranks running — a
+  // session parked on a question still counts as busy underneath, and what
+  // matters is that it is waiting on a human. Instance trouble (failed, lost)
+  // is the session page header's job, not the list's.
+  const unread = Boolean(session.unreadAt);
+  const running = ['working', 'starting', 'queued'].includes(session.status);
   const canStop =
     session.instance.lifecycle === 'ready' &&
     RUNNING_CONTAINERS.includes(session.instance.runtime.container);
@@ -244,10 +249,10 @@ function Row({
           onNavigate();
         }}
       >
-        {working ? <i className="row-dot working" aria-hidden="true" /> : null}
-        {failed ? <i className="row-dot failed" aria-hidden="true" /> : null}
-        {session.status === 'lost' ? (
-          <i className="row-dot lost" aria-hidden="true" />
+        {unread ? (
+          <i className="row-dot unread" aria-hidden="true" />
+        ) : running ? (
+          <i className="row-dot working" aria-hidden="true" />
         ) : null}
         <span className="row-title">{session.displayTitle}</span>
         {/* A cleaned session is still listed — its history remains readable —
