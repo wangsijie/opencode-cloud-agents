@@ -39,6 +39,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.4
         version: 6.0.4(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0))
+      katex:
+        specifier: ^0.16.27
+        version: 0.16.47
       react:
         specifier: ^19.2.8
         version: 19.2.8
