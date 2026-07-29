@@ -7,6 +7,7 @@ import type { MessageDiff, MessagePart } from '../api';
 import { agentPath, isPlainClick, navigate } from '../router';
 import { ChevronRightIcon } from './icons';
 import { PatchView } from './PatchView';
+import { QuestionView } from './QuestionView';
 
 /*
  * Module-level so the references stay stable across renders — Streamdown
@@ -231,6 +232,12 @@ export function PartView({
     case 'reasoning':
       return <Reasoning text={part.text ?? ''} />;
     case 'tool':
+      // The agent stopping to ask is a message to the reader, not machinery:
+      // it renders as the questions themselves — and, while the call is still
+      // parked, as the form that answers them.
+      if (part.tool === 'question') {
+        return <QuestionView part={part} sessionId={sessionId} />;
+      }
       return <ToolCall part={part} sessionId={sessionId} />;
     case 'subtask':
       return <Subtask part={part} />;

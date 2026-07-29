@@ -4,6 +4,7 @@
  * | id            | covers                                                        |
  * | ------------- | ------------------------------------------------------------- |
  * | ses_working   | live streaming loop, Stop button, warm lastWake, growing usage |
+ * | ses_question  | agent parked on the question tool: live answer form + settled ask |
  * | ses_idle      | kitchen-sink transcript, subagents, idle countdown, cold wake |
  * | ses_sleeping  | mirror transcript, asleep composer + panels, wake-on-send     |
  * | ses_waking    | waking runtime badge over a mirror transcript                 |
@@ -26,6 +27,8 @@ import {
   grepScoutTranscript,
   idleLineages,
   idleTranscript,
+  QUESTION_CALL_ID,
+  questionTranscript,
   reviewerTranscript,
   shortTranscript,
   workingTranscript
@@ -150,6 +153,79 @@ export function buildFixtureSessions(): MockSessionState[] {
     },
     lineages: idleLineages(),
     changes: idleChanges(),
+    workspace: repoWorkspace()
+  };
+
+  const question: MockSessionState = {
+    ...bareState({
+      id: 'ses_question',
+      provider: 'cloudflare',
+      repoKey: 'wangsijie/opencode-cloud',
+      directory: '/workspace/opencode-cloud',
+      model: 'anthropic/claude-opus-4-5',
+      title: 'The sidebar hover highlight flickers when moving across titles.',
+      displayTitle: 'Fix the sidebar hover flicker',
+      phase: 'working',
+      status: 'working',
+      lastActivityAt: minutesAgo(3),
+      instance: {
+        id: 'ses_question',
+        lifecycle: 'ready',
+        runtime: {
+          container: 'healthy',
+          lifecycle: 'busy',
+          lastWake: { totalMs: 2_050, at: minutesAgo(25), cold: false }
+        }
+      },
+      transcript: {
+        mirroredAt: minutesAgo(3),
+        messageCount: 3,
+        lastMessageAt: minutesAgo(3),
+        usage: usage({
+          inputTokens: 96_000,
+          outputTokens: 4_200,
+          reasoningTokens: 900,
+          cacheReadTokens: 210_000,
+          cacheWriteTokens: 18_000,
+          cost: 1.63,
+          assistantMessages: 2
+        })
+      }
+    }),
+    transcript: questionTranscript(),
+    pendingQuestions: [
+      {
+        id: 'qreq_0001',
+        sessionID: 'ses_question',
+        questions: [
+          {
+            question: 'Which fix should I take?',
+            header: 'Approach',
+            options: [
+              {
+                label: 'Memoize the row component',
+                description: 'Smallest change; rows keep their props shallow'
+              },
+              {
+                label: 'Lift hover state out of the list',
+                description: 'CSS-only hover; more moving parts today'
+              }
+            ],
+            custom: true
+          },
+          {
+            question: 'Should I add a regression test for the flicker?',
+            header: 'Tests',
+            options: [
+              { label: 'Yes', description: 'A render-count assertion' },
+              { label: 'No', description: 'Manual verification is enough' }
+            ]
+          }
+        ],
+        tool: { messageID: 'msg_0003', callID: QUESTION_CALL_ID }
+      }
+    ],
+    changes: workingChanges(),
     workspace: repoWorkspace()
   };
 
@@ -587,6 +663,7 @@ export function buildFixtureSessions(): MockSessionState[] {
 
   return [
     working,
+    question,
     idle,
     sleeping,
     waking,

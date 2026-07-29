@@ -47,6 +47,14 @@ fires in practice: a model
 reading a file outside the checkout, and Grok does it often enough that it
 looked like a Grok bug.
 
+The `question` tool is the deliberate exception: it parks the same way, but the
+Hub can answer it. The transcript renders the part as a form
+(`web/src/components/QuestionView.tsx`), and `/api/sessions/:id/questions`
+forwards the reply or the dismissal to the container's own question endpoints.
+The pending request lives only in the OpenCode server's memory, so a question
+whose container slept cannot be answered after the wake — the card says so and
+the way forward is a normal message.
+
 ## Repository catalog
 
 GitHub is the only catalog. The Hub lists the account's pushable repositories

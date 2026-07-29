@@ -271,6 +271,8 @@ export interface MessagePart {
   state?: {
     status?: string;
     title?: string;
+    /** The call's own arguments — where a `question` part carries its questions. */
+    input?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
   };
   [key: string]: unknown;
@@ -487,6 +489,67 @@ export const sendMessage = (
 export const abortSession = (id: string) =>
   call<{ aborted: boolean }>(`/api/sessions/${encodeURIComponent(id)}/abort`, {
     method: 'POST'
+  });
+
+/** Mirrors OpenCode's `QuestionInfo`: one question and its choices. */
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface QuestionInfo {
+  question: string;
+  /** Very short label, worn as the question's tag. */
+  header: string;
+  options: QuestionOption[];
+  /** More than one option may be picked. */
+  multiple?: boolean;
+  /** A free-text answer is accepted alongside the options. */
+  custom?: boolean;
+}
+
+/**
+ * One pending ask from the agent, waiting on a human. `tool.callID` is what
+ * ties it to the `question` tool part in the transcript.
+ */
+export interface QuestionRequest {
+  id: string;
+  sessionID: string;
+  questions: QuestionInfo[];
+  tool?: { messageID: string; callID: string };
+}
+
+export interface PendingQuestions {
+  /** `sleeping` means no container, hence nothing answerable. */
+  state: 'live' | 'sleeping';
+  questions: QuestionRequest[];
+}
+
+/**
+ * The question requests currently waiting in this session's container.
+ *
+ * A passive read like the transcript: a sleeping session answers `sleeping`
+ * with an empty list rather than waking anything or erroring.
+ */
+export const fetchPendingQuestions = (id: string) =>
+  call<PendingQuestions>(`/api/sessions/${encodeURIComponent(id)}/questions`);
+
+/** One entry per question, each the chosen labels (or typed answers) in order. */
+export const answerQuestion = (
+  id: string,
+  requestID: string,
+  answers: string[][]
+) =>
+  call<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/questions`, {
+    method: 'POST',
+    body: JSON.stringify({ requestID, answers })
+  });
+
+/** Dismiss the ask; the parked tool call ends and the agent moves on without answers. */
+export const dismissQuestion = (id: string, requestID: string) =>
+  call<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/questions`, {
+    method: 'POST',
+    body: JSON.stringify({ requestID, reject: true })
   });
 /**
  * What the agent changed in the checkout.

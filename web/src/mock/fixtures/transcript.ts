@@ -468,6 +468,124 @@ export function workingTranscript(): SessionMessage[] {
   ];
 }
 
+/** The call id the pending question request is registered under. */
+export const QUESTION_CALL_ID = 'tool_question_0001';
+
+/**
+ * A session parked on the `question` tool: one earlier ask already answered
+ * (the settled rendering), and a live one waiting on the reader (the form).
+ */
+export function questionTranscript(): SessionMessage[] {
+  return [
+    {
+      info: { id: 'msg_0001', role: 'user', time: { created: msAgo(22 * 60_000) } },
+      parts: [
+        {
+          id: 'prt_0001',
+          messageID: 'msg_0001',
+          type: 'text',
+          text: 'The sidebar hover highlight flickers when moving across session titles. Please investigate and fix it.'
+        }
+      ]
+    },
+    {
+      info: {
+        id: 'msg_0002',
+        role: 'assistant',
+        modelID: 'anthropic/claude-opus-4-5',
+        parentID: 'msg_0001',
+        time: { created: msAgo(21 * 60_000), completed: msAgo(19 * 60_000) }
+      },
+      parts: [
+        {
+          id: 'prt_0010',
+          messageID: 'msg_0002',
+          type: 'tool',
+          tool: 'question',
+          callID: 'tool_question_0000',
+          state: {
+            status: 'completed',
+            title: 'Asked 1 question',
+            input: {
+              questions: [
+                {
+                  question: 'Which build should I reproduce this against?',
+                  header: 'Build',
+                  options: [
+                    { label: 'Deployed site', description: 'The production deployment' },
+                    { label: 'Local mock', description: 'pnpm dev:mock fixtures' }
+                  ]
+                }
+              ]
+            },
+            metadata: { answers: [['Local mock']] }
+          }
+        },
+        {
+          id: 'prt_0011',
+          messageID: 'msg_0002',
+          type: 'text',
+          text: 'Reproducing against the mock, I can trigger a re-render of the whole list on every `mouseenter`. Profiling to confirm before touching the memoization.'
+        }
+      ]
+    },
+    {
+      info: {
+        id: 'msg_0003',
+        role: 'assistant',
+        modelID: 'anthropic/claude-opus-4-5',
+        parentID: 'msg_0001',
+        time: { created: msAgo(3 * 60_000) }
+      },
+      parts: [
+        {
+          id: 'prt_0020',
+          messageID: 'msg_0003',
+          type: 'text',
+          text: 'I can stop the re-render two ways and they trade differently between memory and simplicity. Before I commit to one:'
+        },
+        {
+          id: 'prt_0021',
+          messageID: 'msg_0003',
+          type: 'tool',
+          tool: 'question',
+          callID: QUESTION_CALL_ID,
+          state: {
+            status: 'running',
+            input: {
+              questions: [
+                {
+                  question: 'Which fix should I take?',
+                  header: 'Approach',
+                  options: [
+                    {
+                      label: 'Memoize the row component',
+                      description: 'Smallest change; rows keep their props shallow'
+                    },
+                    {
+                      label: 'Lift hover state out of the list',
+                      description: 'CSS-only hover; more moving parts today'
+                    }
+                  ],
+                  custom: true
+                },
+                {
+                  question: 'Should I add a regression test for the flicker?',
+                  header: 'Tests',
+                  options: [
+                    { label: 'Yes', description: 'A render-count assertion' },
+                    { label: 'No', description: 'Manual verification is enough' }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ];
+}
+
 /** A short two-message exchange, reused by several mirror-state fixtures. */
 export function shortTranscript(topic: {
   prompt: string;

@@ -65,6 +65,22 @@ export interface AbortOpencodeSessionInput {
   directory: string;
 }
 
+export interface ListOpencodeQuestionsInput {
+  directory: string;
+}
+
+export interface ReplyOpencodeQuestionInput {
+  requestId: string;
+  directory: string;
+  /** One entry per question, each the selected option labels in order. */
+  answers: string[][];
+}
+
+export interface RejectOpencodeQuestionInput {
+  requestId: string;
+  directory: string;
+}
+
 export interface OpencodeSessionActivityInput {
   opencodeSessionId: string;
   directory: string;

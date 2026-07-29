@@ -16,11 +16,13 @@ import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
 import { minutesAgo } from './fixtures/util';
 import {
   abortSessionRun,
+  answerQuestionRequest,
   appendUserMessage,
   attached,
   bootAndRespond,
   createSessionState,
   deleteSessionState,
+  rejectQuestionRequest,
   respondWhileAttached,
   retryBoot,
   stopInstance,
@@ -441,6 +443,26 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       const child = url.searchParams.get('child') ?? '';
       const lineage = session.lineages[child];
       return lineage ? json({ lineage }) : notFound('No such subagent session');
+    }
+    if (sub === 'questions' && method === 'GET') {
+      return attached(view)
+        ? json({ state: 'live', questions: session.pendingQuestions ?? [] })
+        : json({ state: 'sleeping', questions: [] });
+    }
+    if (sub === 'questions' && method === 'POST') {
+      if (!attached(view)) {
+        return asleep('answer a question in');
+      }
+      const body = parseBody(init);
+      const requestID = typeof body.requestID === 'string' ? body.requestID : '';
+      const done =
+        body.reject === true
+          ? rejectQuestionRequest(session, requestID)
+          : Array.isArray(body.answers) &&
+            answerQuestionRequest(session, requestID, body.answers as string[][]);
+      return done
+        ? json({ ok: true })
+        : json({ error: 'This question is no longer pending' }, 409);
     }
     if (sub === 'abort' && method === 'POST') {
       abortSessionRun(session);

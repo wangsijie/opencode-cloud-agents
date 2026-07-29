@@ -24,6 +24,7 @@ import { ensureLifecycleInitialized } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
 import { loadModelCatalog, type ModelCatalog } from './model-catalog';
 import { isSafeRepoKey, workspaceDirectory } from './repos';
+import { normalizeQuestionAction } from './question-requests';
 import type { QueuePromptInput } from './session-agent';
 import {
   closedSessionEventStream,
@@ -166,6 +167,16 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       return methodNotAllowed('GET');
     }
     return await readAgentSession(env, record, child);
+  }
+
+  if (action === 'questions') {
+    if (request.method === 'GET') {
+      return await readPendingQuestions(env, record);
+    }
+    if (request.method === 'POST') {
+      return await actOnQuestion(request, env, record);
+    }
+    return methodNotAllowed('GET, POST');
   }
 
   if (action === 'files') {
@@ -624,6 +635,103 @@ async function sendSessionPrompt(
     ...(refs.length > 0 ? { attachments: refs } : {})
   });
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
+}
+
+/**
+ * The question requests currently waiting for a human in this session.
+ *
+ * A passive probe the UI attaches to every `question` tool part it shows as
+ * `running`, so it must never wake a container and must not turn history
+ * browsing into error banners: a session that is asleep — where no request can
+ * be pending, because requests live in the OpenCode server's memory — answers
+ * `sleeping` with an empty list rather than 409. The caller matches a request
+ * to its tool part by `tool.callID`.
+ */
+async function readPendingQuestions(
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  const asleep = json({ state: 'sleeping', questions: [] });
+  const instance = await hubStore.getInstance(env, record.instanceId);
+  if (!instance || instance.lifecycle !== 'ready') {
+    return asleep;
+  }
+  const runtimeEpoch = await resolveRunningRuntimeEpoch(env, record);
+  if (!runtimeEpoch) {
+    return asleep;
+  }
+  try {
+    const questions = await resolveSandbox(env, instance).listOpencodeQuestions(
+      runtimeEpoch,
+      { directory: sessionDirectory(record) }
+    );
+    return json({ state: 'live', questions });
+  } catch (error) {
+    // The runtime can stop between the epoch read and the list read; that race
+    // is a sleeping session, not a failure worth a banner.
+    if (await isRuntimeGoneError(env, record, runtimeEpoch)) {
+      return asleep;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Answer or dismiss one pending question request.
+ *
+ * Unlike the list this is an explicit act on a running conversation, so a
+ * sleeping session refuses with the usual 409 — there is nothing pending in a
+ * stopped container, and waking one would not bring the request back.
+ */
+async function actOnQuestion(
+  request: Request,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+  const input = normalizeQuestionAction(value);
+  if (!input) {
+    throw new HttpError(
+      400,
+      'Expected { requestID, answers } to answer or { requestID, reject: true } to dismiss'
+    );
+  }
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    input.kind === 'reject' ? 'dismiss a question in' : 'answer a question in'
+  );
+  const sandbox = resolveSandbox(env, instance);
+  const directory = sessionDirectory(record);
+  try {
+    if (input.kind === 'reject') {
+      await sandbox.rejectOpencodeQuestion(runtimeEpoch, {
+        requestId: input.requestId,
+        directory
+      });
+    } else {
+      await sandbox.replyOpencodeQuestion(runtimeEpoch, {
+        requestId: input.requestId,
+        directory,
+        answers: input.answers
+      });
+    }
+  } catch (error) {
+    // A request somebody else already answered — or one that died with its
+    // container — reports as not-found from OpenCode. That is a state, and the
+    // UI reacts by re-reading the transcript, not an internal failure.
+    const message = error instanceof Error ? error.message : String(error);
+    if (/QuestionNotFound/i.test(message)) {
+      throw new HttpError(409, 'This question is no longer pending');
+    }
+    throw error;
+  }
+  return json({ ok: true });
 }
 
 /** Stop the agent mid-run, leaving the conversation intact. */

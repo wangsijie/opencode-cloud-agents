@@ -583,6 +583,85 @@ export function retryBoot(session: MockSessionState): void {
   })();
 }
 
+/** The message and part a pending question request is parked on, if present. */
+function findQuestionPart(
+  session: MockSessionState,
+  requestID: string
+): { request: NonNullable<MockSessionState['pendingQuestions']>[number]; messageId: string; part: MessagePart } | undefined {
+  const request = session.pendingQuestions?.find((entry) => entry.id === requestID);
+  if (!request?.tool) {
+    return undefined;
+  }
+  const message = session.transcript.find(
+    (entry) => entry.info.id === request.tool!.messageID
+  );
+  const part = message?.parts.find(
+    (entry) => entry.callID === request.tool!.callID
+  );
+  return part ? { request, messageId: message!.info.id, part } : undefined;
+}
+
+/** After the ask settles, the agent picks the work back up and goes idle. */
+function continueAfterQuestion(session: MockSessionState): void {
+  const token = newRun(session.view.id);
+  void (async () => {
+    await sleep(800);
+    if (token.cancelled) {
+      return;
+    }
+    const script = REPLY_ROTATION[replyCursor++ % REPLY_ROTATION.length];
+    await streamReply(session, token, lastUserMessageId(session), script);
+    if (!token.cancelled) {
+      finishToIdle(session);
+    }
+  })();
+}
+
+/** Answer one pending question: the parked tool call completes with the answers. */
+export function answerQuestionRequest(
+  session: MockSessionState,
+  requestID: string,
+  answers: string[][]
+): boolean {
+  const found = findQuestionPart(session, requestID);
+  if (!found) {
+    return false;
+  }
+  session.pendingQuestions = session.pendingQuestions?.filter(
+    (entry) => entry.id !== requestID
+  );
+  const count = found.request.questions.length;
+  found.part.state = {
+    ...found.part.state,
+    status: 'completed',
+    title: `Asked ${count} question${count === 1 ? '' : 's'}`,
+    metadata: { ...found.part.state?.metadata, answers }
+  };
+  upsertPart(session, found.messageId, found.part);
+  touch(session);
+  continueAfterQuestion(session);
+  return true;
+}
+
+/** Dismiss one pending question: the parked tool call ends in error. */
+export function rejectQuestionRequest(
+  session: MockSessionState,
+  requestID: string
+): boolean {
+  const found = findQuestionPart(session, requestID);
+  if (!found) {
+    return false;
+  }
+  session.pendingQuestions = session.pendingQuestions?.filter(
+    (entry) => entry.id !== requestID
+  );
+  found.part.state = { ...found.part.state, status: 'error' };
+  upsertPart(session, found.messageId, found.part);
+  touch(session);
+  continueAfterQuestion(session);
+  return true;
+}
+
 /** Abort whatever is streaming; the composer's Stop button. */
 export function abortSessionRun(session: MockSessionState): void {
   cancelRun(session.view.id);

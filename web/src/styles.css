@@ -1693,6 +1693,138 @@ a.part-task:focus-visible {
   font-style: italic;
 }
 
+/* ---------- the agent asks, the reader answers ---------- */
+
+.part-question {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* Only a card that can still be answered asks for the eye. */
+.part-question.pending {
+  border-color: var(--border-strong);
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-text {
+  margin: 0;
+  font-size: 13px;
+}
+
+.question-tag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.question-option {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+button.question-option {
+  cursor: pointer;
+}
+
+button.question-option:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  background: var(--surface-raised);
+}
+
+button.question-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.question-option.selected,
+.question-option.chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.question-option.static,
+.question-option.unanswered {
+  color: var(--text-dim);
+}
+
+.question-option .option-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-custom {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.question-custom:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.question-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.question-actions .button {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.question-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.question-note.error {
+  color: var(--danger);
+}
+
 /* ---------- what a step changed ---------- */
 
 .part-patch {

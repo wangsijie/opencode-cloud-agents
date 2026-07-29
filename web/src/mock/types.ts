@@ -1,5 +1,6 @@
 import type {
   AgentSessionEntry,
+  QuestionRequest,
   SessionChanges,
   SessionMessage,
   SessionView
@@ -34,4 +35,6 @@ export interface MockSessionState {
   lineages: Record<string, AgentSessionEntry[]>;
   changes?: SessionChanges;
   workspace?: MockWorkspaceDir;
+  /** Question requests waiting on the reader, matched to parts by callID. */
+  pendingQuestions?: QuestionRequest[];
 }

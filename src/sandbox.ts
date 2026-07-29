@@ -21,7 +21,7 @@
  * `GET /sessions/:id` on the paths that can afford a round trip.
  */
 import { DurableObject } from 'cloudflare:workers';
-import type { Part } from '@opencode-ai/sdk/v2';
+import type { Part, QuestionRequest } from '@opencode-ai/sdk/v2';
 import type { SessionProvider, SnapshotHandle } from '../protocol/types.ts';
 import {
   createOpencodeClient,
@@ -56,9 +56,12 @@ import {
   type AbortOpencodeSessionInput,
   type CreateOpencodeSessionInput,
   type GetOpencodeSessionLineageInput,
+  type ListOpencodeQuestionsInput,
   type ListOpencodeSessionMessagesInput,
   type OpencodeSessionActivityInput,
-  type PromptOpencodeSessionInput
+  type PromptOpencodeSessionInput,
+  type RejectOpencodeQuestionInput,
+  type ReplyOpencodeQuestionInput
 } from './instance-runtime';
 import { loadContainerCredentials } from './container-credentials';
 import { loadOpencodeConfig } from './model-catalog';
@@ -1404,6 +1407,98 @@ export class Sandbox extends DurableObject<Env> {
       // running to abort. Anything else is not a confirmation, so it is not
       // reported as one.
       return result.data === true;
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * The question requests currently waiting for a human in this container.
+   *
+   * OpenCode's `question` tool parks its call on one of these until somebody
+   * replies, so this is a passive read like the transcript: it never wakes
+   * anything, and a container with no pending requests answers an empty list.
+   * All sessions in the container belong to this Hub session (the root and its
+   * subagents), so the list is returned unfiltered and the caller matches a
+   * request to its tool part by `tool.callID`.
+   */
+  async listOpencodeQuestions(
+    runtimeEpoch: string,
+    input: ListOpencodeQuestionsInput
+  ): Promise<QuestionRequest[]> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Reading pending OpenCode questions'
+      );
+      const result = await client.question.list({ directory: input.directory });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to read pending OpenCode questions: ${describeSdkFailure(result)}`
+        );
+      }
+      return result.data ?? [];
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Answer one pending question request, which resumes the parked tool call.
+   */
+  async replyOpencodeQuestion(
+    runtimeEpoch: string,
+    input: ReplyOpencodeQuestionInput
+  ): Promise<void> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Answering an OpenCode question'
+      );
+      const result = await client.question.reply({
+        requestID: input.requestId,
+        directory: input.directory,
+        answers: input.answers
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to answer the OpenCode question: ${describeSdkFailure(result)}`
+        );
+      }
+      // The answer un-parks the agent loop, so the transcript is about to move
+      // — the same certainty an accepted prompt gives the mirror.
+      this.transcriptDirty = true;
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /** Dismiss one pending question request; the parked tool call ends in error. */
+  async rejectOpencodeQuestion(
+    runtimeEpoch: string,
+    input: RejectOpencodeQuestionInput
+  ): Promise<void> {
+    await this.lifecycleReady;
+    this.beginActiveOperation();
+    try {
+      const client = this.createRuntimeClient(
+        runtimeEpoch,
+        'Dismissing an OpenCode question'
+      );
+      const result = await client.question.reject({
+        requestID: input.requestId,
+        directory: input.directory
+      });
+      if (result.error !== undefined || result.response.status >= 400) {
+        throw new Error(
+          `Failed to dismiss the OpenCode question: ${describeSdkFailure(result)}`
+        );
+      }
+      this.transcriptDirty = true;
     } finally {
       this.finishActiveOperation();
     }
