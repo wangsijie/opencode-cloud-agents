@@ -47,6 +47,7 @@ const SECTIONS: Section[] = [
   { id: 'env', label: 'Environment variables', key: 'container.env' },
   { id: 'skills', label: 'Skills', key: 'opencode.skills' },
   { id: 'agents-md', label: 'AGENTS.md', key: 'opencode.agents-md' },
+  { id: 'mcp-auth', label: 'MCP auth', key: 'opencode.mcp-auth' },
   { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
   { id: 'docker', label: 'Docker host', key: 'docker.agent-url' },
   { id: 'password', label: 'Admin password' }
@@ -226,6 +227,11 @@ export function SettingsPage({
                     setting={byKey.get('opencode.agents-md')}
                     onSaved={saved}
                   />
+                ) : active === 'mcp-auth' ? (
+                  <McpAuthSection
+                    setting={byKey.get('opencode.mcp-auth')}
+                    onSaved={saved}
+                  />
                 ) : active === 'git-identity' ? (
                   <GitIdentitySection
                     setting={byKey.get('git.identity')}
@@ -389,6 +395,29 @@ const CONFIG_TEMPLATE = {
         model: { name: 'Model name' }
       }
     }
+  },
+  // JSON has no comments, so the MCP examples ship disabled instead: flip
+  // `enabled` to true and set the token in Environment variables to use one.
+  mcp: {
+    linear: {
+      type: 'remote',
+      url: 'https://mcp.linear.app/mcp',
+      headers: { Authorization: 'Bearer {env:LINEAR_API_KEY}' },
+      oauth: false,
+      enabled: false
+    },
+    notion: {
+      type: 'local',
+      command: ['notion-mcp-server'],
+      environment: { NOTION_TOKEN: '{env:NOTION_TOKEN}' },
+      enabled: false
+    },
+    figma: {
+      type: 'local',
+      command: ['figma-developer-mcp', '--stdio'],
+      environment: { FIGMA_API_KEY: '{env:FIGMA_API_KEY}' },
+      enabled: false
+    }
   }
 };
 
@@ -415,6 +444,14 @@ function OpencodeConfigSection({
         providers, API keys, models, permissions. Every <code>permission</code>{' '}
         key must stay explicitly set — an omitted one hangs the session — and
         removing a model breaks sessions pinned to it.
+      </p>
+      <p className="muted">
+        MCP servers go under <code>mcp</code>: set <code>enabled</code> to{' '}
+        <code>true</code>, keep tokens in the Environment variables setting and
+        reference them as <code>{'{env:VAR}'}</code>. The images preinstall{' '}
+        <code>notion-mcp-server</code> and <code>figma-developer-mcp</code> for
+        the local examples; servers that only speak OAuth are covered by the
+        MCP auth section.
       </p>
       <textarea
         className="code-editor"
@@ -1034,6 +1071,92 @@ interface IdentityOverrideRow {
   owner: string;
   name: string;
   email: string;
+}
+
+function McpAuthSection({
+  setting,
+  onSaved
+}: {
+  setting?: SettingView;
+  onSaved: () => void;
+}) {
+  const [text, setText] = useState('');
+  const { busy, error, notice, run } = useSave();
+
+  return (
+    <section className="settings-section">
+      <h2>MCP auth</h2>
+      <p className="muted">
+        OAuth tokens for remote MCP servers that offer no API-key alternative
+        (Figma, for one). Run <code>opencode mcp auth &lt;name&gt;</code> on
+        your own machine, then paste the content of{' '}
+        <code>~/.local/share/opencode/mcp-auth.json</code> here.
+      </p>
+      <p className="muted">
+        Each session's workspace is seeded on its next wake and then keeps its
+        own copy — OpenCode refreshes the tokens in place, and an unchanged
+        setting never overwrites them. Saving again reseeds every session;
+        clearing removes the seeded tokens on the next wake.
+      </p>
+      <textarea
+        className="code-editor"
+        rows={10}
+        spellCheck={false}
+        aria-label="MCP auth JSON"
+        placeholder={configuredHint(setting)}
+        value={text}
+        disabled={busy}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <div className="actions">
+        <button
+          className="button primary"
+          disabled={busy || text.trim().length === 0}
+          onClick={() =>
+            void run(async () => {
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(text);
+              } catch (cause) {
+                throw new Error(
+                  `Not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`
+                );
+              }
+              await saveSetting('opencode.mcp-auth', parsed);
+              setText('');
+              onSaved();
+              return undefined;
+            })
+          }
+        >
+          Save MCP auth
+        </button>
+        {setting?.configured ? (
+          <button
+            className="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                if (
+                  !confirm(
+                    'Remove the stored MCP auth? Seeded tokens are deleted from each session on its next wake.'
+                  )
+                ) {
+                  return 'Not cleared';
+                }
+                await saveSetting('opencode.mcp-auth', null);
+                onSaved();
+                return 'Cleared';
+              })
+            }
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      <SectionStatus error={error} notice={notice} />
+    </section>
+  );
 }
 
 function GitIdentitySection({

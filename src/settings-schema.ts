@@ -310,6 +310,25 @@ function validateAgentsMd(value: unknown): string[] {
   return errors;
 }
 
+/**
+ * `opencode.mcp-auth` holds a pasted `mcp-auth.json` — the file the OpenCode
+ * CLI writes after `opencode mcp auth <name>`. Its internals are OpenCode's
+ * business and change with it, so the only shape enforced is the outer one:
+ * an object mapping server names to objects.
+ */
+function validateMcpAuth(value: unknown): string[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return ['The MCP auth setting must be a JSON object — paste the content of mcp-auth.json'];
+  }
+  const errors: string[] = [];
+  for (const [name, entry] of Object.entries(value)) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      errors.push(`The entry for "${name}" is not an object`);
+    }
+  }
+  return errors;
+}
+
 /** GitHub organization/user names: alphanumerics and hyphens, at most 39. */
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
@@ -478,6 +497,14 @@ export const SETTING_DESCRIPTORS: readonly SettingDescriptor[] = [
     exposure: 'plain',
     required: false,
     validate: validateAgentsMd
+  },
+  {
+    key: SETTING_KEYS.mcpAuth,
+    group: 'opencode',
+    label: 'MCP auth (mcp-auth.json)',
+    exposure: 'secret',
+    required: false,
+    validate: validateMcpAuth
   },
   {
     key: SETTING_KEYS.gitIdentity,

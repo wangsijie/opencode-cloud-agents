@@ -18,6 +18,8 @@ ARG OPENCODE_VERSION=1.18.4
 ARG GH_VERSION=2.93.0
 ARG WRANGLER_VERSION=4.112.0
 ARG PNPM_VERSION=11.17.0
+ARG NOTION_MCP_VERSION=2.5.1
+ARG FIGMA_MCP_VERSION=0.13.2
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -52,13 +54,19 @@ RUN case "$(dpkg --print-architecture)" in \
     && rm -f /tmp/gh.tar.gz \
     && test "$(gh --version | awk 'NR == 1 { print $3 }')" = "${GH_VERSION}"
 
+# The MCP servers are preinstalled because /root — and with it any npx cache —
+# is wiped on every boot; the config template calls their bins directly.
 RUN npm install --global \
         "opencode-ai@${OPENCODE_VERSION}" \
         "pnpm@${PNPM_VERSION}" \
         "wrangler@${WRANGLER_VERSION}" \
+        "@notionhq/notion-mcp-server@${NOTION_MCP_VERSION}" \
+        "figma-developer-mcp@${FIGMA_MCP_VERSION}" \
     && test "$(opencode --version)" = "${OPENCODE_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}" \
-    && test "$(wrangler --version)" = "${WRANGLER_VERSION}"
+    && test "$(wrangler --version)" = "${WRANGLER_VERSION}" \
+    && command -v notion-mcp-server \
+    && command -v figma-developer-mcp
 
 # The host key pin and client config are not secrets. Every credential — the SSH
 # key pair, the gh login, git identity and signing, environment variables and

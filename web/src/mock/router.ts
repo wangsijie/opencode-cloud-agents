@@ -168,7 +168,11 @@ function putSetting(key: string, body: Record<string, unknown>): Response {
   setting.updatedAt = new Date().toISOString();
   // Mirror the Worker's exposure rules: secrets store nothing readable,
   // partial settings store the public half only.
-  if (key === 'github.token' || key === 'docker.agent-token') {
+  if (
+    key === 'github.token' ||
+    key === 'docker.agent-token' ||
+    key === 'opencode.mcp-auth'
+  ) {
     delete setting.value;
   } else if (key === 'container.ssh-key') {
     setting.value = {

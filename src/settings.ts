@@ -16,6 +16,7 @@ export const SETTING_KEYS = {
   containerEnv: 'container.env',
   skills: 'opencode.skills',
   agentsMd: 'opencode.agents-md',
+  mcpAuth: 'opencode.mcp-auth',
   gitIdentity: 'git.identity',
   dockerAgentUrl: 'docker.agent-url',
   dockerAgentToken: 'docker.agent-token',

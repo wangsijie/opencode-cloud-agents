@@ -112,6 +112,14 @@ export function buildSettings(): SettingView[] {
       }
     },
     {
+      key: 'opencode.mcp-auth',
+      group: 'opencode',
+      label: 'MCP auth (mcp-auth.json)',
+      required: false,
+      configured: false
+      // Secret exposure: no value, ever.
+    },
+    {
       key: 'git.identity',
       group: 'git',
       label: 'Git identity',

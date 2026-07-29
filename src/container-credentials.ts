@@ -13,6 +13,7 @@
 import {
   SETTING_KEYS,
   readSetting,
+  readSettingRow,
   type AgentsMdSetting,
   type EnvVarSetting,
   type GitIdentitySetting,
@@ -26,6 +27,33 @@ export const CONTAINER_SKILLS_ROOT = '/root/.config/opencode/skills';
 /** Where OpenCode discovers global instructions inside the container. */
 export const CONTAINER_AGENTS_MD_PATH = '/root/.config/opencode/AGENTS.md';
 
+/**
+ * Where OpenCode keeps its MCP OAuth store: `$XDG_DATA_HOME/opencode`, and the
+ * server env pins XDG_DATA_HOME to `/workspace/.opencode-state/data`
+ * (OPENCODE_ENV in [sandbox.ts](sandbox.ts)). Unlike everything else this
+ * module writes, the store lives *inside* the snapshotted `/workspace` on
+ * purpose: OpenCode refreshes the tokens in place, and the refreshed lineage
+ * must survive restarts — reseeding from the settings value on every wake
+ * would clobber a rotated refresh token and break the grant.
+ */
+export const MCP_AUTH_DIR = '/workspace/.opencode-state/data/opencode';
+
+/** The MCP OAuth store OpenCode reads and refreshes. */
+export const MCP_AUTH_PATH = `${MCP_AUTH_DIR}/mcp-auth.json`;
+
+/**
+ * Which settings revision seeded this workspace's store. Lives next to the
+ * store so the pair travels through checkpoint and restore together.
+ */
+export const MCP_AUTH_MARKER = `${MCP_AUTH_DIR}/.mcp-auth.seeded`;
+
+/**
+ * Where the wake stages the pasted store before the guarded install. Under
+ * `/root` — outside the snapshot — so an unconsumed copy never outlives the
+ * boot.
+ */
+export const MCP_AUTH_STAGING = '/root/.mcp-auth.pending.json';
+
 export interface ContainerCredentialSettings {
   sshKey?: SshKeySetting;
   /** Shared with the Worker-side repo catalog; the container's gh CLI logs in with it. */
@@ -34,6 +62,13 @@ export interface ContainerCredentialSettings {
   env: EnvVarSetting[];
   skills: SkillSetting[];
   agentsMd?: AgentsMdSetting;
+  /**
+   * A pasted `mcp-auth.json` and the settings revision it came from. `content`
+   * is the stored JSON text verbatim; `token` is the row's `updatedAt`, which
+   * the wake compares against the workspace marker — a re-paste is the
+   * operator's "reseed every session" action.
+   */
+  mcpAuth?: { content: string; token: string };
 }
 
 export interface ContainerFile {
@@ -46,14 +81,15 @@ export interface ContainerFile {
 export async function loadContainerCredentials(
   env: Env
 ): Promise<ContainerCredentialSettings> {
-  const [sshKey, githubToken, gitIdentity, envVars, skills, agentsMd] =
+  const [sshKey, githubToken, gitIdentity, envVars, skills, agentsMd, mcpAuth] =
     await Promise.all([
       readSetting<SshKeySetting>(env, SETTING_KEYS.sshKey),
       readSetting<string>(env, SETTING_KEYS.githubToken),
       readSetting<GitIdentitySetting>(env, SETTING_KEYS.gitIdentity),
       readSetting<EnvVarSetting[]>(env, SETTING_KEYS.containerEnv),
       readSetting<SkillSetting[]>(env, SETTING_KEYS.skills),
-      readSetting<AgentsMdSetting>(env, SETTING_KEYS.agentsMd)
+      readSetting<AgentsMdSetting>(env, SETTING_KEYS.agentsMd),
+      readSettingRow(env, SETTING_KEYS.mcpAuth)
     ]);
   return {
     ...(sshKey ? { sshKey } : {}),
@@ -61,7 +97,10 @@ export async function loadContainerCredentials(
     ...(gitIdentity ? { gitIdentity } : {}),
     env: envVars ?? [],
     skills: skills ?? [],
-    ...(agentsMd ? { agentsMd } : {})
+    ...(agentsMd ? { agentsMd } : {}),
+    ...(mcpAuth
+      ? { mcpAuth: { content: mcpAuth.value, token: mcpAuth.updatedAt } }
+      : {})
   };
 }
 
@@ -122,6 +161,16 @@ export function credentialFiles(
       path: CONTAINER_AGENTS_MD_PATH,
       content: ensureTrailingNewline(agentsMd),
       mode: '644'
+    });
+  }
+  if (settings.mcpAuth) {
+    // Staged only; the guarded seed command decides whether it reaches the
+    // workspace store or is discarded. Writing through the batch keeps the
+    // token payload off every command line.
+    files.push({
+      path: MCP_AUTH_STAGING,
+      content: ensureTrailingNewline(settings.mcpAuth.content),
+      mode: '600'
     });
   }
   return files;
@@ -215,6 +264,37 @@ export function gitConfigCommands(
     );
   }
   return commands;
+}
+
+/**
+ * Install the staged MCP auth store, but only when the settings revision
+ * differs from what already seeded this workspace. A matching marker means
+ * OpenCode's own refreshed lineage is newer than the paste — overwriting it
+ * would resurrect an already-rotated refresh token — so the staged copy is
+ * discarded instead. Only the revision token appears on the command line,
+ * never the store itself.
+ */
+export function mcpAuthSeedCommand(token: string): string {
+  const marker = shellQuote(MCP_AUTH_MARKER);
+  const target = shellQuote(MCP_AUTH_PATH);
+  const staging = shellQuote(MCP_AUTH_STAGING);
+  return (
+    `if [ "$(cat ${marker} 2>/dev/null || true)" != ${shellQuote(token)} ]; ` +
+    `then mkdir -p ${shellQuote(MCP_AUTH_DIR)} && mv ${staging} ${target} && ` +
+    `chmod 600 ${target} && printf %s ${shellQuote(token)} > ${marker}; ` +
+    `else rm -f ${staging}; fi`
+  );
+}
+
+/**
+ * Remove a previously seeded MCP auth store once the setting is cleared. The
+ * marker gates the delete so a store OpenCode created on its own — one this
+ * Worker never seeded — is left alone.
+ */
+export function mcpAuthClearCommand(): string {
+  return `if [ -e ${shellQuote(MCP_AUTH_MARKER)} ]; then rm -f ${shellQuote(
+    MCP_AUTH_PATH
+  )} ${shellQuote(MCP_AUTH_MARKER)}; fi`;
 }
 
 /** The operator's extra variables, as the process env map the server start takes. */

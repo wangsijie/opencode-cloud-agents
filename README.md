@@ -548,6 +548,63 @@ written into it. A skill name may be either one global entry or per-repo
 entries with distinct repositories; saves mixing the two are refused, as both
 would target the same container path.
 
+### MCP servers
+
+MCP servers are part of the same `opencode.config` document, under `mcp` —
+OpenCode reads them straight from the delivered config, so no extra plumbing
+is involved. Tokens belong in the `container.env` setting and are referenced
+as `{env:VAR}`; the config template ships disabled entries for the common
+cases:
+
+```json
+{
+  "mcp": {
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "headers": { "Authorization": "Bearer {env:LINEAR_API_KEY}" },
+      "oauth": false,
+      "enabled": true
+    },
+    "notion": {
+      "type": "local",
+      "command": ["notion-mcp-server"],
+      "environment": { "NOTION_TOKEN": "{env:NOTION_TOKEN}" },
+      "enabled": true
+    },
+    "figma": {
+      "type": "local",
+      "command": ["figma-developer-mcp", "--stdio"],
+      "environment": { "FIGMA_API_KEY": "{env:FIGMA_API_KEY}" },
+      "enabled": true
+    }
+  }
+}
+```
+
+Linear's hosted server takes a plain API key in the `Authorization` header
+(`oauth: false` keeps OpenCode from attempting a browser flow no container can
+complete). Notion's hosted server is OAuth-only, but its official local server
+takes an internal integration token; Figma's hosted server is OAuth-only with
+no token alternative, so the community `figma-developer-mcp` takes a personal
+access token instead. Both local servers are preinstalled in the session
+images (`Dockerfile`, `agent/session-image/Dockerfile`) — `/root` is wiped on
+every boot, so an `npx` download would recur on every wake.
+
+For a server that only speaks OAuth (Figma's official one, say), the
+`opencode.mcp-auth` setting holds a pasted OAuth store: run
+`opencode mcp auth <name>` on your own machine, then paste
+`~/.local/share/opencode/mcp-auth.json` into the MCP auth section. On each
+session's next wake the store is seeded into the snapshotted workspace at
+`/workspace/.opencode-state/data/opencode/mcp-auth.json`, where OpenCode
+refreshes it in place. A marker records which settings revision seeded the
+workspace: an unchanged setting never overwrites the refreshed tokens (a
+rotated refresh token must not be resurrected), saving the setting again
+reseeds every session, and clearing it deletes the seeded store on the next
+wake. One limitation follows from snapshots: restoring an old checkpoint
+revives the tokens as of that checkpoint, and if the provider has rotated the
+refresh token since, the fix is a fresh paste.
+
 ## Verify and deploy
 
 Pushing to `master` deploys to production. `.github/workflows/deploy.yml` runs

@@ -331,3 +331,17 @@ test('a config without providers still carries itself', () => {
   const env = opencodeServerEnv({ model: 'a/b' })
   assert.deepEqual(Object.keys(env), ['OPENCODE_CONFIG_CONTENT'])
 })
+
+test('an mcp block rides the config through untouched', () => {
+  const mcp = {
+    linear: {
+      type: 'remote',
+      url: 'https://mcp.linear.app/mcp',
+      headers: { Authorization: 'Bearer {env:LINEAR_API_KEY}' },
+      oauth: false,
+      enabled: true
+    }
+  }
+  const env = opencodeServerEnv({ model: 'a/b', mcp })
+  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT).mcp, mcp)
+})

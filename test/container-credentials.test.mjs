@@ -4,9 +4,14 @@ import test from 'node:test'
 import {
   CONTAINER_AGENTS_MD_PATH,
   CONTAINER_SKILLS_ROOT,
+  MCP_AUTH_MARKER,
+  MCP_AUTH_PATH,
+  MCP_AUTH_STAGING,
   containerEnv,
   credentialFiles,
   gitConfigCommands,
+  mcpAuthClearCommand,
+  mcpAuthSeedCommand,
   resolveAgentsMd,
   resolveSkills
 } from '../src/container-credentials.ts'
@@ -177,6 +182,36 @@ test('identity values are shell-quoted', () => {
     gitIdentity: { name: "O'Brien; rm -rf /", email: 'x@example.com' }
   })
   assert.ok(commands[0].includes("'O'\\''Brien; rm -rf /'"))
+})
+
+test('a pasted MCP auth store is staged outside the snapshot, mode 600', () => {
+  const files = credentialFiles({
+    env: [],
+    skills: [],
+    mcpAuth: { content: '{"figma":{"access":"tok"}}', token: '2026-07-29T00:00:00Z' }
+  })
+  assert.equal(files.length, 1)
+  assert.equal(files[0].path, MCP_AUTH_STAGING)
+  assert.equal(files[0].mode, '600')
+  assert.equal(files[0].content, '{"figma":{"access":"tok"}}\n')
+})
+
+test('the seed command is guarded by the revision marker and never carries the store', () => {
+  const command = mcpAuthSeedCommand('2026-07-29T00:00:00Z')
+  assert.ok(command.includes(MCP_AUTH_MARKER))
+  assert.ok(command.includes(MCP_AUTH_PATH))
+  assert.ok(command.includes(MCP_AUTH_STAGING))
+  assert.ok(command.includes(`'2026-07-29T00:00:00Z'`))
+  // An unchanged revision discards the staged copy instead of installing it —
+  // OpenCode's refreshed tokens in the workspace must win.
+  assert.ok(command.includes(`else rm -f`))
+  assert.ok(!command.includes('access'))
+})
+
+test('the clear command removes only a store this Worker seeded', () => {
+  const command = mcpAuthClearCommand()
+  assert.ok(command.startsWith(`if [ -e '${MCP_AUTH_MARKER}' ]`))
+  assert.ok(command.includes(`rm -f '${MCP_AUTH_PATH}' '${MCP_AUTH_MARKER}'`))
 })
 
 test('the env list becomes the process env map', () => {

@@ -91,9 +91,45 @@ test('credentials are one removal, one batch and one config command', async () =
 test('no credentials at all still clears what a previous wake wrote', async () => {
   const host = stubHost()
   const env = await injectContainerCredentials(host, { env: [], skills: [] }, {})
-  assert.equal(host.calls.exec.length, 1)
+  assert.equal(host.calls.exec.length, 2)
+  assert.match(host.calls.exec[0].command, /^rm -rf/)
+  // No stored MCP auth: a store seeded by an earlier wake is removed, one
+  // OpenCode created on its own is left alone — the marker decides.
+  assert.match(
+    host.calls.exec[1].command,
+    /^if \[ -e '\/workspace\/\.opencode-state\/data\/opencode\/\.mcp-auth\.seeded' \]/
+  )
   assert.equal(host.calls.writeBatch.length, 0)
   assert.deepEqual(env, {})
+})
+
+test('a stored MCP auth store is staged in the batch and installed by the guarded script', async () => {
+  const host = stubHost()
+  await injectContainerCredentials(
+    host,
+    {
+      env: [],
+      skills: [],
+      mcpAuth: { content: '{"figma":{}}', token: '2026-07-29T00:00:00Z' }
+    },
+    {}
+  )
+
+  assert.equal(host.calls.writeBatch.length, 1)
+  const [staged] = host.calls.writeBatch[0]
+  assert.equal(staged.path, '/root/.mcp-auth.pending.json')
+  assert.equal(staged.mode, '600')
+
+  assert.equal(host.calls.exec.length, 2)
+  const script = host.calls.exec[1].command
+  assert.ok(script.includes(`!= '2026-07-29T00:00:00Z'`))
+  assert.ok(
+    script.includes(
+      `mv '/root/.mcp-auth.pending.json' '/workspace/.opencode-state/data/opencode/mcp-auth.json'`
+    )
+  )
+  // The store rides the batch, never a command line.
+  assert.ok(!script.includes('figma'))
 })
 
 test('a fresh workspace is cloned at the pinned default branch', async () => {

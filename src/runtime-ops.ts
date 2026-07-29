@@ -23,6 +23,8 @@ import {
   containerEnv,
   credentialFiles,
   gitConfigCommands,
+  mcpAuthClearCommand,
+  mcpAuthSeedCommand,
   type ContainerCredentialSettings
 } from './container-credentials.ts';
 import { truncateOutput } from './http.ts';
@@ -71,7 +73,10 @@ export interface RuntimeCheckout {
  * Three round trips regardless of how many skills are configured: the removal,
  * the batch (whose host creates parents and applies each `mode` — `writeFile`
  * promises nothing about permissions and OpenSSH refuses a private key others
- * could read), and the git configuration.
+ * could read), and one script for the git configuration plus the MCP auth
+ * seed. The seed is the one exception to "everything lives under `/root`": it
+ * installs the staged store into the snapshotted workspace, guarded so an
+ * unchanged setting never overwrites tokens OpenCode has refreshed there.
  *
  * Returns the operator's extra environment variables for the server start.
  */
@@ -107,9 +112,12 @@ export async function injectContainerCredentials(
     ? repoOwnerFromCloneUrl(checkout.repo.cloneUrl)
     : undefined;
   const commands = gitConfigCommands(settings, repoOwner);
-  if (commands.length > 0) {
-    await mustExec(host, commands.join(' && '));
-  }
+  commands.push(
+    settings.mcpAuth
+      ? mcpAuthSeedCommand(settings.mcpAuth.token)
+      : mcpAuthClearCommand()
+  );
+  await mustExec(host, commands.join(' && '));
   return containerEnv(settings);
 }
 

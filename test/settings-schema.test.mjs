@@ -332,6 +332,28 @@ test('the docker provider settings are all optional', () => {
   )
 })
 
+test('the MCP auth store is an optional write-only object of objects', () => {
+  const descriptor = findDescriptor('opencode.mcp-auth')
+  assert.equal(descriptor.group, 'opencode')
+  assert.equal(descriptor.required, false)
+  // OAuth access and refresh tokens: never read back.
+  assert.equal(descriptor.exposure, 'secret')
+
+  assert.deepEqual(descriptor.validate({}), [])
+  assert.deepEqual(
+    descriptor.validate({
+      figma: { access: 'a', refresh: 'r', expires: 123 }
+    }),
+    []
+  )
+  for (const bad of [null, [], 'text', 42]) {
+    assert.equal(descriptor.validate(bad).length, 1)
+  }
+  const errors = descriptor.validate({ figma: 'not-an-object' })
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /figma/)
+})
+
 test('required settings are exactly the ones the gate blocks on', () => {
   assert.deepEqual(
     SETTING_DESCRIPTORS.filter((descriptor) => descriptor.required).map(

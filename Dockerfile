@@ -4,6 +4,8 @@ ARG OPENCODE_VERSION=1.18.4
 ARG GH_VERSION=2.93.0
 ARG WRANGLER_VERSION=4.112.0
 ARG PNPM_VERSION=11.17.0
+ARG NOTION_MCP_VERSION=2.5.1
+ARG FIGMA_MCP_VERSION=0.13.2
 
 # The base image includes Git but not an SSH client. Ubuntu 22.04's gh package
 # is several years old, so install the current CLI from GitHub's official release.
@@ -28,13 +30,19 @@ RUN case "$(dpkg --print-architecture)" in \
 
 # Keep the Cloudflare runtime separate from the agent so OpenCode can be
 # upgraded independently of the Sandbox SDK release cadence.
+# The MCP servers are preinstalled because /root — and with it any npx cache —
+# is wiped on every boot; the config template calls their bins directly.
 RUN npm install --global \
         "opencode-ai@${OPENCODE_VERSION}" \
         "pnpm@${PNPM_VERSION}" \
         "wrangler@${WRANGLER_VERSION}" \
+        "@notionhq/notion-mcp-server@${NOTION_MCP_VERSION}" \
+        "figma-developer-mcp@${FIGMA_MCP_VERSION}" \
     && test "$(opencode --version)" = "${OPENCODE_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}" \
-    && test "$(wrangler --version)" = "${WRANGLER_VERSION}"
+    && test "$(wrangler --version)" = "${WRANGLER_VERSION}" \
+    && command -v notion-mcp-server \
+    && command -v figma-developer-mcp
 
 # The host key pin and client config are not secrets; every credential — the
 # SSH key pair, the gh login, git identity and signing, environment variables
