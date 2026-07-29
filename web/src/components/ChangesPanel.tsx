@@ -4,6 +4,11 @@ import { usePrefersDark } from '../usePrefersDark';
 import { FileDiff, type DiffMode } from './FileDiff';
 import { RefreshIcon, SplitDiffIcon, UnifiedDiffIcon } from './icons';
 
+/** How many times one request to read the diff may be tried before it stops. */
+const LOAD_ATTEMPTS = 3;
+/** Grows with the attempt: 1s, then 2s. */
+const RETRY_DELAY_MS = 1000;
+
 const STATUS_LABELS: Record<string, string> = {
   added: 'added',
   modified: 'modified',
@@ -250,27 +255,56 @@ export function ChangesPanel({
   const [mode, setMode] = useState<DiffMode>(readMode);
   const dark = usePrefersDark();
   const sectionRefs = useRef(new Map<string, HTMLElement>());
+  /** The session whose diff this mount has already asked for. */
+  const requested = useRef<string | undefined>(undefined);
 
+  // Reading a diff runs git in a container that is often still busy with the
+  // turn that produced it, so a first attempt can legitimately fail. A few
+  // spaced retries absorb that; an unbounded one would turn every failure into
+  // a request storm against the very container that could not answer.
   const load = useCallback(async () => {
     setLoading(true);
     setError(undefined);
-    try {
-      setChanges(await fetchChanges(sessionId));
-    } catch (cause) {
-      setChanges(undefined);
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
+    for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt += 1) {
+      try {
+        setChanges(await fetchChanges(sessionId));
+        setError(undefined);
+        setLoading(false);
+        return;
+      } catch (cause) {
+        setChanges(undefined);
+        setError(cause instanceof Error ? cause.message : String(cause));
+        if (attempt + 1 < LOAD_ATTEMPTS) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1))
+          );
+        }
+      }
     }
+    // The banner keeps the host's own message, and the refresh button is the
+    // retry from here on.
+    setLoading(false);
+  }, [sessionId]);
+
+  // Another session is another workspace: nothing read here survives the
+  // switch, including a failure that must not suppress the next read.
+  useEffect(() => {
+    setChanges(undefined);
+    setError(undefined);
+    requested.current = undefined;
   }, [sessionId]);
 
   // Choosing the tab is the request to read; a sleeping container has nothing
-  // to read and must not be woken by a panel being opened.
+  // to read and must not be woken by a panel being opened. One read per
+  // session — `changes` cannot be the guard, because a failed read leaves it
+  // empty and the effect would fire again the moment it settled.
   useEffect(() => {
-    if (attached && !changes && !loading) {
-      void load();
+    if (!attached || requested.current === sessionId) {
+      return;
     }
-  }, [attached, changes, loading, load]);
+    requested.current = sessionId;
+    void load();
+  }, [attached, sessionId, load]);
 
   const setDiffMode = useCallback((next: DiffMode) => {
     setMode(next);
