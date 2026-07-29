@@ -19,7 +19,10 @@
     "typecheck": "pnpm run types && tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p host"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.4"
+    "@opencode-ai/sdk": "1.18.4",
+    "katex": "^0.18.1",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "0.12.3",

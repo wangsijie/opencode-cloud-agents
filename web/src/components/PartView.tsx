@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import remarkBreaks from 'remark-breaks';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { code } from '@streamdown/code';
 import type { MessageDiff, MessagePart } from '../api';
@@ -15,7 +17,8 @@ import { PatchView } from './PatchView';
  * terminal, where a single newline is a line break, and plain markdown would
  * fold a 40-line answer into one paragraph.
  */
-const REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkBreaks];
+const REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkBreaks, remarkMath];
+const REHYPE_PLUGINS = [rehypeKatex];
 const STREAMDOWN_PLUGINS = { code };
 const CONTROLS = {
   code: { copy: true, download: false },
@@ -218,6 +221,7 @@ export function PartView({
         <div className="part-text">
           <Streamdown
             remarkPlugins={REMARK_PLUGINS}
+            rehypePlugins={REHYPE_PLUGINS}
             plugins={STREAMDOWN_PLUGINS}
             lineNumbers={false}
             controls={CONTROLS}
