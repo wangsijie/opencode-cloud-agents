@@ -1,0 +1,30 @@
+/*
+ * Tailwind entry that exists only to style Streamdown in the transcript.
+ *
+ * Preflight is deliberately not imported: the rest of the app is hand-written,
+ * unlayered CSS, and a global reset would restyle all of it. Only Streamdown's
+ * dist files are scanned for class names, so no utilities leak from app code.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+
+@source '../../node_modules/streamdown/dist/*.js';
+@source '../../node_modules/@streamdown/code/dist/*.js';
+@source '../../node_modules/@streamdown/math/dist/*.js';
+
+/*
+ * Streamdown styles itself with shadcn-style tokens. Mapping them onto the
+ * app palette (`inline` makes utilities reference these vars directly) means
+ * the existing prefers-color-scheme flip in styles.css themes it for free.
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-muted: var(--surface-sunken);
+  --color-muted-foreground: var(--text-dim);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-ink);
+  --color-border: var(--border);
+  --color-sidebar: var(--bg-sidebar);
+}

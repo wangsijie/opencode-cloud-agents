@@ -1,0 +1,54 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "opencode-sandbox-host",
+  "main": "index.ts",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // No route and no workers.dev subdomain: the site's service binding is the
+  // only way in, and that binding is also the authentication boundary — the
+  // protocol's bearer token exists for the remote Docker agent, not for this.
+  "workers_dev": false,
+  "vars": {
+    "BACKUP_BUCKET_NAME": "opencode-cloud-backups",
+    "PERSISTENCE_LOCAL_BUCKET": "false"
+  },
+  // Snapshots. The bucket is the site's: this worker writes archives into it
+  // and hands the handles back, while the ledger and the deletes stay there.
+  // `BACKUP_BUCKET_NAME` is read by the SDK when it presigns uploads.
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "opencode-cloud-backups"
+    }
+  ],
+  // The session image, built from the repository root so `docker/ssh/*` is in
+  // the build context. `rollout_active_grace_period` mirrors the site's: a
+  // rollout replaces every running container, and a container that dies
+  // without a checkpoint takes its conversation with it.
+  "containers": [
+    {
+      "class_name": "CloudflareSandboxHost",
+      "image": "../Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "standard-4",
+      "rollout_active_grace_period": 900
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "CloudflareSandboxHost",
+        "name": "SANDBOX_HOST"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["CloudflareSandboxHost"],
+      "tag": "v1"
+    }
+  ]
+}
