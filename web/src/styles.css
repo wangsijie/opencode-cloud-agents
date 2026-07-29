@@ -2190,8 +2190,6 @@ a.part-task:focus-visible {
 
 /* ---------- per-file diff cards ---------- */
 
-/* `clip` rather than `hidden`: hidden makes the card a scroll container, which
-   is where the sticky header would stick — that is, nowhere. */
 .diff-file {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2201,9 +2199,6 @@ a.part-task:focus-visible {
 }
 
 .diff-file-header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   gap: 8px;
   align-items: baseline;
