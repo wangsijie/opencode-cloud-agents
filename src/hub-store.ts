@@ -38,7 +38,11 @@ import {
 } from './repos';
 import { resolveLifecycleIdleTimeoutMs } from './sandbox-providers.ts';
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
-import type { SessionRecord, SessionStatePatch } from './sessions';
+import {
+  cleanupCutoff,
+  type SessionRecord,
+  type SessionStatePatch
+} from './sessions';
 
 const REPO_CATALOG_SETTING_KEY = 'repo-catalog';
 
@@ -352,6 +356,117 @@ export async function finishDelete(
     'DELETE FROM sessions WHERE id = ?1 AND delete_operation_id = ?2'
   )
     .bind(id, operationId)
+    .run();
+}
+
+/**
+ * Queue every session idle past the cleanup cutoff and wake the Hub alarm.
+ *
+ * Cleanup is deletion's quieter sibling: the container and its snapshots go,
+ * the row and the transcript mirror stay, so the conversation remains readable.
+ * Each claim is a compare-and-swap that re-checks eligibility, so a prompt
+ * landing between the scan and the claim keeps its session. Neither the claim
+ * nor its completion touches `updated_at` — cleanup is not activity, and
+ * bumping it would resurface a week-dead session at the top of the list.
+ */
+export async function sweepIdleSessions(
+  env: Env,
+  now = new Date()
+): Promise<number> {
+  const cutoff = cleanupCutoff(now);
+  const candidates = await env.DB.prepare(
+    `SELECT id FROM sessions
+     WHERE lifecycle IN ('ready', 'clean_failed')
+       AND pending_prompt_count = 0
+       AND phase NOT IN ('queued', 'starting', 'working')
+       AND updated_at < ?1
+       AND (last_prompt_at IS NULL OR last_prompt_at < ?1)`
+  )
+    .bind(cutoff)
+    .all<{ id: string }>();
+
+  let claimed = 0;
+  for (const { id } of candidates.results) {
+    const row = await env.DB.prepare(
+      `UPDATE sessions SET
+         lifecycle = 'cleaning',
+         delete_operation_id = ?2,
+         lifecycle_error = NULL
+       WHERE id = ?1
+         AND lifecycle IN ('ready', 'clean_failed')
+         AND pending_prompt_count = 0
+         AND phase NOT IN ('queued', 'starting', 'working')
+         AND updated_at < ?3
+         AND (last_prompt_at IS NULL OR last_prompt_at < ?3)
+       RETURNING id`
+    )
+      .bind(id, crypto.randomUUID(), cutoff)
+      .first<{ id: string }>();
+    if (!row) {
+      continue;
+    }
+    claimed += 1;
+    // Same as beginDelete: close admission and cancel wakes before the Hub
+    // alarm gets to the container. Idempotent, so a re-sweep is harmless.
+    await resolveLifecycle(env, id).beginDelete();
+  }
+  if (claimed > 0) {
+    await env.Hub.getByName(HUB_DURABLE_OBJECT_ID).poke();
+  }
+  return claimed;
+}
+
+/** The oldest queued cleanup, which the Hub alarm works on after deletions. */
+export async function nextPendingCleanup(
+  env: Env
+): Promise<InstanceRecord | undefined> {
+  const row = await env.DB.prepare(
+    `SELECT * FROM sessions
+     WHERE lifecycle = 'cleaning' AND delete_operation_id IS NOT NULL
+     ORDER BY updated_at ASC
+     LIMIT 1`
+  ).first<SessionRow>();
+  return row ? rowToInstance(row) : undefined;
+}
+
+export async function hasPendingCleanup(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS pending FROM sessions
+     WHERE lifecycle = 'cleaning' AND delete_operation_id IS NOT NULL
+     LIMIT 1`
+  ).first<{ pending: number }>();
+  return row !== null;
+}
+
+/** Fenced like finishDelete, but the row is kept and marked rather than gone. */
+export async function finishClean(
+  env: Env,
+  id: string,
+  operationId: string
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE sessions SET
+       lifecycle = 'cleaned',
+       delete_operation_id = NULL,
+       lifecycle_error = NULL,
+       cleaned_at = ?3
+     WHERE id = ?1 AND delete_operation_id = ?2`
+  )
+    .bind(id, operationId, new Date().toISOString())
+    .run();
+}
+
+export async function markCleanFailed(
+  env: Env,
+  id: string,
+  operationId: string,
+  error: string
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE sessions SET lifecycle = 'clean_failed', lifecycle_error = ?3
+     WHERE id = ?1 AND delete_operation_id = ?2`
+  )
+    .bind(id, operationId, error)
     .run();
 }
 

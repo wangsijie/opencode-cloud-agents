@@ -16,7 +16,8 @@ export type SessionStatus =
   | 'failed'
   | 'lost'
   | 'error'
-  | 'deleting';
+  | 'deleting'
+  | 'cleaned';
 
 /**
  * Mirrors `SessionProvider` in `protocol/types.ts`.
@@ -56,7 +57,13 @@ export interface InstanceRuntime {
 
 export interface InstanceView {
   id: string;
-  lifecycle: 'ready' | 'deleting' | 'delete_failed';
+  lifecycle:
+    | 'ready'
+    | 'deleting'
+    | 'delete_failed'
+    | 'cleaning'
+    | 'cleaned'
+    | 'clean_failed';
   runtime: InstanceRuntime;
 }
 
@@ -89,6 +96,8 @@ export interface SessionView {
   status: SessionStatus;
   lastActivityAt: string;
   lastError?: string;
+  /** When the idle sweep removed this session's container; cleaned only. */
+  cleanedAt?: string;
   instance: InstanceView;
   transcript?: TranscriptSummary;
 }

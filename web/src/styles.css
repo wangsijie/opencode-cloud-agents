@@ -1886,8 +1886,10 @@ a.part-task:focus-visible {
   background: var(--danger);
 }
 
-/* A lost session is over, not broken: it should read as inert, not as alarm. */
-.badge-lost .dot {
+/* A lost session is over, not broken: it should read as inert, not as alarm.
+   A cleaned one is the same kind of over — its container aged out. */
+.badge-lost .dot,
+.badge-cleaned .dot {
   background: var(--text-dim);
 }
 

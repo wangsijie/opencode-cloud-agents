@@ -1,9 +1,13 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   deferDelete,
+  finishClean,
   finishDelete,
+  hasPendingCleanup,
   hasPendingDeletion,
+  markCleanFailed,
   markDeleteFailed,
+  nextPendingCleanup,
   nextPendingDeletion
 } from './hub-store';
 import type { LifecycleCoordinator } from './lifecycle';
@@ -34,10 +38,10 @@ export class Hub extends DurableObject<Env> {
         await ctx.storage.deleteAll();
       }
       // A crash between the D1 claim and the poke would otherwise strand a
-      // queued deletion until the next delete request happens to arrive.
+      // queued deletion or cleanup until the next request happens to arrive.
       if (
         (await ctx.storage.getAlarm()) === null &&
-        (await hasPendingDeletion(env))
+        ((await hasPendingDeletion(env)) || (await hasPendingCleanup(env)))
       ) {
         await ctx.storage.setAlarm(Date.now());
       }
@@ -88,10 +92,62 @@ export class Hub extends DurableObject<Env> {
           await markDeleteFailed(this.env, record.id, operationId, message);
         }
       }
+    } else {
+      // Cleanups run only when no deletion is waiting: a delete is somebody
+      // asking, a cleanup is housekeeping. The flow mirrors deletion until the
+      // end, where the row is marked cleaned instead of removed — and the
+      // transcript mirror survives, which is what keeps the session readable.
+      await this.cleanNext();
     }
 
-    if (await hasPendingDeletion(this.env)) {
+    if (
+      (await hasPendingDeletion(this.env)) ||
+      (await hasPendingCleanup(this.env))
+    ) {
       await this.ctx.storage.setAlarm(Date.now());
+    }
+  }
+
+  private async cleanNext(): Promise<void> {
+    const record = await nextPendingCleanup(this.env);
+    if (!record) {
+      return;
+    }
+    const operationId = record.deleteOperationId!;
+    try {
+      // Clearing the agent first stops a queued dispatch from waking a
+      // container this alarm is about to remove — and makes the session
+      // structurally unresumable, which is what "cleaned" promises.
+      await this.env.SessionAgent.getByName(record.id).markDeleted();
+      const sandbox = resolveSandbox(this.env, record.id);
+      const lifecycle = resolveLifecycle(this.env, record.id);
+      await lifecycle.beginDelete();
+      const cleanResult = await withTimeout(
+        sandbox.cleanInstance(),
+        DELETE_ATTEMPT_TIMEOUT_MS,
+        `Timed out cleaning instance ${record.id}`
+      );
+      if (cleanResult.outcome === 'termination_pending') {
+        console.warn(`Container termination pending for ${record.id}`);
+        await deferDelete(
+          this.env,
+          record.id,
+          operationId,
+          'Container termination is still pending'
+        );
+      } else {
+        await lifecycle.markDeleted();
+        await finishClean(this.env, record.id, operationId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof DeleteAttemptTimeoutError) {
+        console.warn(`Clean attempt timed out for ${record.id}`);
+        await deferDelete(this.env, record.id, operationId, message);
+      } else {
+        console.error(`Failed to clean instance ${record.id}`, error);
+        await markCleanFailed(this.env, record.id, operationId, message);
+      }
     }
   }
 }

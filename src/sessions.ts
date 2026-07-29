@@ -11,7 +11,11 @@
  */
 import type { Message, Part } from '@opencode-ai/sdk/v2';
 import type { SessionProvider } from '../protocol/types.ts';
-import type { InstanceRuntimeStatus, InstanceView } from './instances';
+import type {
+  InstanceLifecycle,
+  InstanceRuntimeStatus,
+  InstanceView
+} from './instances';
 import {
   isOpencodePlaceholderTitle,
   type TranscriptMirrorSummary
@@ -78,6 +82,11 @@ export interface SessionRecord {
   lastError?: string;
   lastPromptAt?: string;
   /**
+   * When the idle sweep removed this session's container. Set only on cleaned
+   * sessions, which are read-only: the transcript mirror is all that remains.
+   */
+  cleanedAt?: string;
+  /**
    * Set when a human named this session. OpenCode titles a conversation of its
    * own accord, and adopting that title is an improvement on the first line of
    * the opening prompt — but never on a name somebody chose.
@@ -119,7 +128,8 @@ export type SessionStatus =
   | 'failed'
   | 'lost'
   | 'error'
-  | 'deleting';
+  | 'deleting'
+  | 'cleaned';
 
 export interface SessionView extends SessionRecord {
   instance: InstanceView;
@@ -162,11 +172,42 @@ export function deriveDisplayTitle(
   return transcript.opencodeTitle;
 }
 
+/** The lifecycle family of a session whose container has been cleaned away. */
+export function isCleanedLifecycle(
+  lifecycle: InstanceLifecycle
+): lifecycle is 'cleaning' | 'cleaned' | 'clean_failed' {
+  return (
+    lifecycle === 'cleaning' ||
+    lifecycle === 'cleaned' ||
+    lifecycle === 'clean_failed'
+  );
+}
+
+/** How long a session may sit untouched before its container is cleaned away. */
+export const CLEANUP_IDLE_DAYS = 7;
+
+/** The one answer every write path gives about a cleaned session. */
+export const CLEANED_SESSION_MESSAGE = `This session was cleaned up after ${CLEANUP_IDLE_DAYS} days of inactivity and is read-only`;
+
+/**
+ * The moment before which a session counts as idle enough to clean, as an
+ * ISO-8601 string — timestamps compare lexicographically everywhere in this
+ * codebase, so the cutoff is used directly in SQL comparisons.
+ */
+export function cleanupCutoff(now: Date): string {
+  return new Date(
+    now.getTime() - CLEANUP_IDLE_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+}
+
 /**
  * Fold the dispatch phase and the runtime lifecycle into one badge.
  *
  * Deletion and a lost conversation outrank everything: once either is true the
- * container's own state says nothing worth showing. A dispatch failure comes
+ * container's own state says nothing worth showing. A cleaned session comes
+ * right after deletion — its container no longer exists, so neither the phase
+ * nor the runtime says anything truer than "cleaned" — except when it is being
+ * deleted, which still wins. A dispatch failure comes
  * next, because it needs a human either
  * way. Below those, an unfinished dispatch (`queued`/`starting`) describes the
  * session better than the container does, because the container is only being
@@ -175,10 +216,14 @@ export function deriveDisplayTitle(
  */
 export function deriveSessionStatus(
   phase: SessionPhase,
-  runtime: InstanceRuntimeStatus
+  runtime: InstanceRuntimeStatus,
+  lifecycle: InstanceLifecycle = 'ready'
 ): SessionStatus {
   if (runtime.deleting) {
     return 'deleting';
+  }
+  if (isCleanedLifecycle(lifecycle)) {
+    return 'cleaned';
   }
   if (phase === 'lost') {
     return 'lost';

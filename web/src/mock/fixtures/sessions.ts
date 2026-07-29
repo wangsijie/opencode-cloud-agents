@@ -13,6 +13,7 @@
  * | ses_lost      | workspace-loss card, disabled composer                        |
  * | ses_error     | runtime error badge                                           |
  * | ses_deleting  | deleting row styling, sending disabled                        |
+ * | ses_cleaned   | idle-swept session: cleaned card, read-only composer, mirror  |
  * | ses_cjk       | CJK title and transcript                                      |
  * | ses_long      | long-title truncation + variant pill                          |
  * | ses_no_repo   | session started with no repository: /workspace, no Changes tab |
@@ -361,6 +362,48 @@ export function buildFixtureSessions(): MockSessionState[] {
     mirroredAt: daysAgo(10)
   };
 
+  // Swept by the 7-day idle cleanup: the container and workspace are gone, the
+  // row and the mirror remain. Read-only everywhere — banner card, disabled
+  // composer, cleaned copy in the Changes/Workspace panels, list tag.
+  const cleaned: MockSessionState = {
+    ...bareState({
+      id: 'ses_cleaned',
+      provider: 'cloudflare',
+      repoKey: 'wangsijie/opencode-cloud',
+      directory: '/workspace/opencode-cloud',
+      model: 'anthropic/claude-sonnet-4-5',
+      title: 'Tighten the CSP for the asset routes.',
+      displayTitle: 'Tighten the CSP for the asset routes',
+      phase: 'working',
+      status: 'cleaned',
+      lastActivityAt: daysAgo(9),
+      cleanedAt: daysAgo(1),
+      instance: {
+        id: 'ses_cleaned',
+        lifecycle: 'cleaned',
+        runtime: { container: 'stopped', lifecycle: 'sleeping' }
+      },
+      transcript: {
+        mirroredAt: daysAgo(9),
+        messageCount: 2,
+        lastMessageAt: daysAgo(9),
+        usage: usage({
+          inputTokens: 64_000,
+          outputTokens: 4_800,
+          cost: 0.58,
+          assistantMessages: 1
+        })
+      }
+    }),
+    transcript: shortTranscript({
+      prompt: 'Tighten the CSP on the asset routes without breaking the SPA.',
+      reply:
+        "Done — `script-src 'self'` plus a nonce for the shell; the report-only run showed no violations after a day.",
+      baseMinutesAgo: 9 * 24 * 60
+    }),
+    mirroredAt: daysAgo(9)
+  };
+
   const cjk: MockSessionState = {
     ...bareState({
       id: 'ses_cjk',
@@ -553,6 +596,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     lost,
     error,
     deleting,
+    cleaned,
     cjk,
     long,
     noRepo,

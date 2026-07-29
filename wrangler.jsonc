@@ -7,6 +7,12 @@
   "observability": {
     "enabled": true
   },
+  // The daily idle-session sweep. The cron only discovers and claims aged
+  // sessions; the actual container removal is drained serially by the Hub
+  // Durable Object's alarm, same as deletions (see hub.ts).
+  "triggers": {
+    "crons": ["23 3 * * *"]
+  },
   // The Hub SPA. `run_worker_first` keeps every route decision in the Worker:
   // the origin check runs on every request, `/` serves either the SPA or the
   // stock UI depending on its query, and `/assets/` still belongs to the

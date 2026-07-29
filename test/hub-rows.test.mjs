@@ -35,6 +35,7 @@ function fullRow() {
     pending_prompt_count: 2,
     last_error: 'dispatch failed once',
     last_prompt_at: '2026-07-27T02:00:00.000Z',
+    cleaned_at: null,
     created_at: '2026-07-27T01:00:00.000Z',
     updated_at: '2026-07-27T04:00:00.000Z'
   }
@@ -104,10 +105,21 @@ test('NULL columns become absent optional fields, not undefined values', () => {
     'opencodeSessionId',
     'lastError',
     'lastPromptAt',
+    'cleanedAt',
     'titleLocked'
   ]) {
     assert.ok(!(key in session), `${key} should be absent`)
   }
+})
+
+test('a cleaned row carries its lifecycle and timestamp into the records', () => {
+  const row = {
+    ...minimalRow(),
+    lifecycle: 'cleaned',
+    cleaned_at: '2026-07-28T03:23:00.000Z'
+  }
+  assert.equal(rowToInstance(row).lifecycle, 'cleaned')
+  assert.equal(rowToSession(row).cleanedAt, '2026-07-28T03:23:00.000Z')
 })
 
 test('the provider column reaches both record shapes', () => {

@@ -26,6 +26,8 @@ import type {
 } from './instances';
 import type { LifecycleStatus } from './lifecycle';
 import type { Sandbox } from './sandbox';
+import { CLEANED_SESSION_MESSAGE, isCleanedLifecycle } from './sessions';
+import type { TranscriptMirrorSummary } from './transcript-mirror';
 
 /**
  * Every container-bound call is a Durable Object RPC method on `Sandbox`.
@@ -139,6 +141,9 @@ export async function requireReadyInstance(
 ): Promise<InstanceRecord> {
   const instance = await requireInstance(env, id);
   if (instance.lifecycle !== 'ready') {
+    if (isCleanedLifecycle(instance.lifecycle)) {
+      throw new HttpError(409, CLEANED_SESSION_MESSAGE);
+    }
     throw new HttpError(
       409,
       instance.lifecycle === 'deleting'
@@ -175,10 +180,47 @@ export function unknownRuntimeStatus(
   };
 }
 
+/**
+ * The runtime of a cleaned instance, synthesized rather than asked for.
+ *
+ * The container no longer exists, so there is no host to ask — but the Sandbox
+ * object still holds the transcript summary, and carrying it here is what
+ * keeps the session list's message count and OpenCode title rendering.
+ */
+async function cleanedRuntimeStatus(
+  env: Env,
+  record: InstanceRecord
+): Promise<InstanceRuntimeStatus> {
+  let transcript: TranscriptMirrorSummary | undefined;
+  try {
+    transcript = await resolveSandbox(env, record).getTranscriptSummary();
+  } catch (error) {
+    console.warn(`Failed to read cleaned instance ${record.id} transcript`, error);
+  }
+  return {
+    container: 'stopped',
+    provider: record.provider,
+    deleting: false,
+    platformRunning: false,
+    lifecycle: 'sleeping',
+    persistence: {
+      hasBackup: false,
+      trackedBackupCount: 0
+    },
+    ...(transcript ? { transcript } : {})
+  };
+}
+
 export async function getInstanceView(
   env: Env,
   record: InstanceRecord
 ): Promise<InstanceView> {
+  if (isCleanedLifecycle(record.lifecycle)) {
+    return {
+      ...record,
+      runtime: await cleanedRuntimeStatus(env, record)
+    };
+  }
   if (record.lifecycle !== 'ready') {
     return {
       ...record,

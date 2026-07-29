@@ -143,7 +143,8 @@ export const STATUS_LABELS: Record<SessionStatus, string> = {
   failed: 'Failed to start',
   lost: 'Lost',
   error: 'Error',
-  deleting: 'Deleting'
+  deleting: 'Deleting',
+  cleaned: 'Cleaned'
 };
 
 /**

@@ -17,15 +17,22 @@ import { FileBrowser } from './FileBrowser';
  */
 export function WorkspacePanel({
   sessionId,
-  attached
+  attached,
+  cleaned = false
 }: {
   sessionId: string;
   attached: boolean;
+  /** The container was removed by the idle sweep; there are no files left. */
+  cleaned?: boolean;
 }) {
   return (
     <section className="workspace-panel">
       {attached ? (
         <FileBrowser sessionId={sessionId} />
+      ) : cleaned ? (
+        <p className="muted">
+          This session was cleaned up, so its workspace no longer exists.
+        </p>
       ) : (
         <p className="muted">
           This session is asleep. Send a message to wake the container, then you

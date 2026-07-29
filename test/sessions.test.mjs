@@ -2,14 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  CLEANUP_IDLE_DAYS,
   MAX_SESSION_ATTACHMENT_BYTES,
   MAX_SESSION_ATTACHMENTS,
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
+  cleanupCutoff,
   deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
   deriveSessionTitle,
+  isCleanedLifecycle,
   isSessionPhase,
   normalizeSessionAttachments,
   normalizeSessionPrompt,
@@ -96,6 +99,38 @@ test('a lost conversation outranks whatever the container is doing', () => {
   assert.equal(deriveSessionStatus('lost', runtime('error')), 'lost')
   // Deletion still wins: the session is about to stop existing either way.
   assert.equal(deriveSessionStatus('lost', runtime('idle', true)), 'deleting')
+})
+
+test('a cleaned lifecycle outranks everything except deletion', () => {
+  for (const lifecycle of ['cleaning', 'cleaned', 'clean_failed']) {
+    // Neither the phase nor the runtime says anything truer than "cleaned":
+    // the container behind them no longer exists.
+    assert.equal(deriveSessionStatus('working', runtime('sleeping'), lifecycle), 'cleaned')
+    assert.equal(deriveSessionStatus('failed', runtime('error'), lifecycle), 'cleaned')
+    assert.equal(deriveSessionStatus('lost', runtime('idle'), lifecycle), 'cleaned')
+    // Deleting a cleaned session still reads as deleting.
+    assert.equal(deriveSessionStatus('working', runtime('idle', true), lifecycle), 'deleting')
+  }
+  // The default lifecycle changes nothing for existing callers.
+  assert.equal(deriveSessionStatus('working', runtime('busy'), 'ready'), 'working')
+})
+
+test('the cleaned lifecycle family is a closed set', () => {
+  for (const lifecycle of ['cleaning', 'cleaned', 'clean_failed']) {
+    assert.ok(isCleanedLifecycle(lifecycle))
+  }
+  for (const lifecycle of ['ready', 'deleting', 'delete_failed']) {
+    assert.equal(isCleanedLifecycle(lifecycle), false)
+  }
+})
+
+test('the cleanup cutoff is exactly the idle window back from now', () => {
+  const now = new Date('2026-07-29T12:00:00.000Z')
+  assert.equal(
+    cleanupCutoff(now),
+    new Date(now.getTime() - CLEANUP_IDLE_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  )
+  assert.equal(cleanupCutoff(now), '2026-07-22T12:00:00.000Z')
 })
 
 test('last activity is the newest timestamp on the record', () => {

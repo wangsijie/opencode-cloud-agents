@@ -37,6 +37,7 @@ export function SessionDetails({
   attached: boolean;
   onClose: () => void;
 }) {
+  const cleaned = session.status === 'cleaned';
   const hasChanges = Boolean(session.repoKey);
   const [tab, setTab] = useState<Tab>(hasChanges ? 'changes' : 'workspace');
   const { width, handleProps } = useResizable({
@@ -104,10 +105,18 @@ export function SessionDetails({
       <div className="aside-body">
         {hasChanges && tab === 'changes' ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
-            <ChangesPanel sessionId={session.id} attached={attached} />
+            <ChangesPanel
+              sessionId={session.id}
+              attached={attached}
+              cleaned={cleaned}
+            />
           </Suspense>
         ) : (
-          <WorkspacePanel sessionId={session.id} attached={attached} />
+          <WorkspacePanel
+            sessionId={session.id}
+            attached={attached}
+            cleaned={cleaned}
+          />
         )}
       </div>
     </aside>

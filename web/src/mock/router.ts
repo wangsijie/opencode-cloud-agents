@@ -363,6 +363,15 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       if (view.phase === 'lost') {
         return json({ error: 'This session was lost and cannot be continued' }, 409);
       }
+      if (view.status === 'cleaned') {
+        return json(
+          {
+            error:
+              'This session was cleaned up after 7 days of inactivity and is read-only'
+          },
+          409
+        );
+      }
       if (view.status === 'deleting' || view.instance.lifecycle !== 'ready') {
         return json({ error: 'This session is being deleted' }, 409);
       }
@@ -434,6 +443,15 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       return json({ aborted: true });
     }
     if (sub === 'retry' && method === 'POST') {
+      if (view.status === 'cleaned') {
+        return json(
+          {
+            error:
+              'This session was cleaned up after 7 days of inactivity and is read-only'
+          },
+          409
+        );
+      }
       retryBoot(session);
       return json(view);
     }

@@ -164,8 +164,13 @@ export function SessionPage({
 
   const ready = session?.instance.lifecycle === 'ready';
   const lost = session?.phase === 'lost';
+  const cleaned = session?.status === 'cleaned';
   const canSend =
-    Boolean(session) && ready && session?.status !== 'deleting' && !lost;
+    Boolean(session) &&
+    ready &&
+    session?.status !== 'deleting' &&
+    !lost &&
+    !cleaned;
   // Keyed to the container, not the folded status. Sending a message puts the
   // session back through queued/starting while the agent is already generating,
   // and the badge reports that dispatch — but there is plainly something to
@@ -426,7 +431,7 @@ export function SessionPage({
                     back without the conversation, so there is nothing left to send
                     to. The history above is the mirror, and it stays readable.
                   */}
-                  {lost ? (
+                  {lost && !cleaned ? (
                     <section className="card">
                       <h2>This session was lost</h2>
                       <p className="muted">
@@ -460,7 +465,40 @@ export function SessionPage({
                     </section>
                   ) : null}
 
-                  {session?.phase === 'failed' ? (
+                  {/*
+                    Cleaned is retirement, not failure: the container aged out
+                    after a week of inactivity and was removed. The history
+                    above is the mirror, and it stays readable — but there is
+                    nothing left to send to.
+                  */}
+                  {cleaned ? (
+                    <section className="card">
+                      <h2>This session was cleaned up</h2>
+                      <p className="muted">
+                        It sat idle for over 7 days, so its container and
+                        workspace were removed. The history above is the
+                        preserved transcript; it stays readable but the session
+                        cannot be resumed.
+                      </p>
+                      <div className="actions">
+                        <a
+                          className="button"
+                          href="/"
+                          onClick={(event) => {
+                            if (!isPlainClick(event)) {
+                              return;
+                            }
+                            event.preventDefault();
+                            navigate('/');
+                          }}
+                        >
+                          Start a new session
+                        </a>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {session?.phase === 'failed' && !cleaned ? (
                     <section className="card error">
                       <h2>Failed to start</h2>
                       {session.lastError ? (
@@ -500,11 +538,13 @@ export function SessionPage({
                     className="prompt"
                     rows={2}
                     placeholder={
-                      lost
-                        ? 'This session was lost and cannot be continued'
-                        : attached
-                          ? 'Say something…'
-                          : 'Session is asleep — sending wakes it and continues'
+                      cleaned
+                        ? 'This session was cleaned up and is read-only'
+                        : lost
+                          ? 'This session was lost and cannot be continued'
+                          : attached
+                            ? 'Say something…'
+                            : 'Session is asleep — sending wakes it and continues'
                     }
                     value={prompt}
                     disabled={busy || !canSend}

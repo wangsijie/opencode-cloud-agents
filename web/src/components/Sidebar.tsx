@@ -250,6 +250,12 @@ function Row({
           <i className="row-dot lost" aria-hidden="true" />
         ) : null}
         <span className="row-title">{session.displayTitle}</span>
+        {/* A cleaned session is still listed — its history remains readable —
+            but the tag says up front that it is an archive, not a session to
+            continue. */}
+        {session.status === 'cleaned' ? (
+          <span className="row-tag">cleaned</span>
+        ) : null}
       </a>
       <button
         className="row-menu-button"

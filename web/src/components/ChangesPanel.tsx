@@ -236,10 +236,13 @@ function FileDiffBody({
  */
 export function ChangesPanel({
   sessionId,
-  attached
+  attached,
+  cleaned = false
 }: {
   sessionId: string;
   attached: boolean;
+  /** The container was removed by the idle sweep; there is no diff left. */
+  cleaned?: boolean;
 }) {
   const [changes, setChanges] = useState<SessionChanges>();
   const [error, setError] = useState<string>();
@@ -354,8 +357,9 @@ export function ChangesPanel({
 
       {!attached ? (
         <p className="muted">
-          This session is asleep. Send a message to wake the container, then the
-          changes show up here.
+          {cleaned
+            ? 'This session was cleaned up, so its workspace and changes no longer exist.'
+            : 'This session is asleep. Send a message to wake the container, then the changes show up here.'}
         </p>
       ) : loading && !changes ? (
         <p className="muted">Reading the workspace…</p>

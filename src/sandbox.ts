@@ -368,6 +368,7 @@ export class Sandbox extends DurableObject<Env> {
   private restoreInProgress: Promise<void> | undefined;
   private checkpointInProgress: Promise<StoredBackup> | undefined;
   private purgeInProgress: Promise<PurgeInstanceResult> | undefined;
+  private cleanInProgress: Promise<PurgeInstanceResult> | undefined;
   private purgeRequested = false;
   private instanceIdentity: InstanceIdentity | undefined;
   private runtimeGate: RuntimeGate | undefined;
@@ -1993,11 +1994,41 @@ export class Sandbox extends DurableObject<Env> {
   async purgeInstance(): Promise<PurgeInstanceResult> {
     await this.lifecycleReady;
     if (!this.purgeInProgress) {
-      this.purgeInProgress = this.doPurgeInstance().finally(() => {
+      this.purgeInProgress = this.doPurgeInstance({
+        keepTranscript: false
+      }).finally(() => {
         this.purgeInProgress = undefined;
       });
     }
     return this.purgeInProgress;
+  }
+
+  /**
+   * The idle sweep's ending: like {@link purgeInstance} it destroys the
+   * container, its workspace and every snapshot, but the transcript mirror and
+   * this object's storage stay — they are what keeps the cleaned session
+   * readable. A later real deletion still runs the full purge on top of this.
+   */
+  async cleanInstance(): Promise<PurgeInstanceResult> {
+    await this.lifecycleReady;
+    if (!this.cleanInProgress) {
+      this.cleanInProgress = this.doPurgeInstance({
+        keepTranscript: true
+      }).finally(() => {
+        this.cleanInProgress = undefined;
+      });
+    }
+    return this.cleanInProgress;
+  }
+
+  /**
+   * The stored transcript summary, without touching the host. The runtime
+   * status would ask the host how the container is doing — the wrong question
+   * about an instance whose container has been cleaned away.
+   */
+  async getTranscriptSummary(): Promise<TranscriptMirrorSummary | undefined> {
+    await this.lifecycleReady;
+    return this.transcriptMirror;
   }
 
   /**
@@ -2031,7 +2062,14 @@ export class Sandbox extends DurableObject<Env> {
     await this.persistenceState.storage.deleteAlarm();
   }
 
-  private async doPurgeInstance(): Promise<PurgeInstanceResult> {
+  private async doPurgeInstance(options: {
+    /**
+     * True for cleanup: the R2 transcript mirror and this object's storage
+     * survive so the session's history stays readable; only the container, its
+     * workspace and the snapshots go.
+     */
+    keepTranscript: boolean;
+  }): Promise<PurgeInstanceResult> {
     this.purgeRequested = true;
     this.instanceActive = false;
     // Nothing about a deleted instance is worth mirroring, and the stream would
@@ -2073,6 +2111,14 @@ export class Sandbox extends DurableObject<Env> {
     }
     await this.setHostRuntime({ running: false });
     await this.deleteBackupObjects(backups);
+    if (options.keepTranscript) {
+      // Cleanup keeps the mirror and this object's storage — the stored
+      // transcript summary is what the session list still renders — but the
+      // snapshots are gone, so the backup bookkeeping must say so too.
+      await this.persistenceState.storage.delete(BACKUP_STORAGE_KEY);
+      await this.replaceBackupHandleLedger([]);
+      return { outcome: 'purged' };
+    }
     if (this.instanceIdentity?.id) {
       // The transcript mirror is R2 state this instance owns — in the session
       // bucket rather than with the snapshots, but swept at the same moment so

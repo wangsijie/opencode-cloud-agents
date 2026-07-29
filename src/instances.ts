@@ -4,7 +4,19 @@ import type { TranscriptMirrorSummary } from './transcript-mirror';
 
 export const HUB_DURABLE_OBJECT_ID = 'opencode-hub';
 
-export type InstanceLifecycle = 'ready' | 'deleting' | 'delete_failed';
+export type InstanceLifecycle =
+  | 'ready'
+  | 'deleting'
+  | 'delete_failed'
+  /** Claimed by the idle sweep; the Hub alarm is removing the container. */
+  | 'cleaning'
+  /**
+   * The container and its snapshots are gone; the row and the transcript
+   * mirror remain. Terminal and read-only — a cleaned session cannot wake.
+   */
+  | 'cleaned'
+  /** A cleanup attempt failed; the next sweep retries it. */
+  | 'clean_failed';
 export type RuntimeLifecycle =
   | 'sleeping'
   | 'waking'

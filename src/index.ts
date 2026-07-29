@@ -24,7 +24,11 @@ import { handleSessionApi } from './api-sessions';
 import { handleSettingsApi } from './api-settings';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
-import { lastModelSelection, listRepoCatalog } from './hub-store';
+import {
+  lastModelSelection,
+  listRepoCatalog,
+  sweepIdleSessions
+} from './hub-store';
 import { LifecycleCoordinator } from './lifecycle';
 import {
   loadModelCatalog,
@@ -159,5 +163,21 @@ export default {
         { status: 500 }
       );
     }
+  },
+
+  // The daily idle-session sweep: claim every session untouched for 7 days and
+  // poke the Hub alarm, which removes the containers one at a time. The rows
+  // and their transcript mirrors stay — a cleaned session is read-only, not
+  // gone.
+  async scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<void> {
+    ctx.waitUntil(
+      sweepIdleSessions(env).catch((error) => {
+        console.error('Idle-session sweep failed', error);
+      })
+    );
   }
 };

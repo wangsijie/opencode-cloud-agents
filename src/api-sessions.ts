@@ -32,10 +32,12 @@ import {
 } from './session-events';
 import { isSafeOpencodeSessionId } from './session-lineage';
 import {
+  CLEANED_SESSION_MESSAGE,
   deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
   deriveSessionTitle,
+  isCleanedLifecycle,
   MAX_SESSION_TITLE_LENGTH,
   normalizeSessionAttachments,
   normalizeSessionPrompt,
@@ -187,6 +189,12 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       409,
       'This session was lost when its container restarted without a checkpoint. There is nothing left to retry into.'
     );
+  }
+  {
+    const instance = await hubStore.getInstance(env, record.instanceId);
+    if (instance && isCleanedLifecycle(instance.lifecycle)) {
+      throw new HttpError(409, CLEANED_SESSION_MESSAGE);
+    }
   }
   await resolveSessionAgent(env, record.id).retrySession();
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
@@ -528,7 +536,7 @@ async function getSessionView(
   return {
     ...record,
     instance: view,
-    status: deriveSessionStatus(record.phase, view.runtime),
+    status: deriveSessionStatus(record.phase, view.runtime, view.lifecycle),
     lastActivityAt: deriveLastActivityAt(record),
     displayTitle: deriveDisplayTitle(record, transcript),
     ...(transcript ? { transcript } : {})
@@ -598,6 +606,9 @@ async function sendSessionPrompt(
     );
   }
   const instance = await hubStore.getInstance(env, record.instanceId);
+  if (instance && isCleanedLifecycle(instance.lifecycle)) {
+    throw new HttpError(409, CLEANED_SESSION_MESSAGE);
+  }
   if (!instance || instance.lifecycle !== 'ready') {
     // A container being deleted is the one state no amount of waking fixes.
     throw new HttpError(409, 'This session is not ready to receive messages');
@@ -740,6 +751,9 @@ async function requireAwakeRuntime(
   intent: string
 ): Promise<{ instance: InstanceRecord; runtimeEpoch: string }> {
   const instance = await hubStore.getInstance(env, record.instanceId);
+  if (instance && isCleanedLifecycle(instance.lifecycle)) {
+    throw new HttpError(409, CLEANED_SESSION_MESSAGE);
+  }
   if (!instance || instance.lifecycle !== 'ready') {
     throw new HttpError(409, `This session is not ready to ${intent}`);
   }
