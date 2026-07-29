@@ -2,6 +2,7 @@ import { useState } from 'react';
 import remarkBreaks from 'remark-breaks';
 import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { code } from '@streamdown/code';
+import { math } from '@streamdown/math';
 import type { MessageDiff, MessagePart } from '../api';
 import { agentPath, isPlainClick, navigate } from '../router';
 import { ChevronRightIcon } from './icons';
@@ -16,7 +17,7 @@ import { PatchView } from './PatchView';
  * fold a 40-line answer into one paragraph.
  */
 const REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkBreaks];
-const STREAMDOWN_PLUGINS = { code };
+const STREAMDOWN_PLUGINS = { code, math };
 const CONTROLS = {
   code: { copy: true, download: false },
   table: { copy: true, download: false, fullscreen: false },

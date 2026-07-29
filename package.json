@@ -25,6 +25,7 @@
     "@cloudflare/sandbox": "0.12.3",
     "@git-diff-view/react": "^0.1.7",
     "@streamdown/code": "^1.1.1",
+    "@streamdown/math": "^1.0.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.17",
