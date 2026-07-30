@@ -20,6 +20,7 @@ ARG WRANGLER_VERSION=4.112.0
 ARG PNPM_VERSION=11.17.0
 ARG NOTION_MCP_VERSION=2.5.1
 ARG FIGMA_MCP_VERSION=0.13.2
+ARG RCLONE_VERSION=1.74.4
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -53,6 +54,24 @@ RUN case "$(dpkg --print-architecture)" in \
         "gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh" \
     && rm -f /tmp/gh.tar.gz \
     && test "$(gh --version | awk 'NR == 1 { print $3 }')" = "${GH_VERSION}"
+
+# rclone gives sessions Google Drive access. The image carries only the binary:
+# the whole remote definition — service-account key included — arrives as
+# RCLONE_CONFIG_* variables from the settings table's container env. rclone
+# reads every RCLONE_* variable as a flag, so the verify step must hide the
+# build ARG, which it would otherwise parse as --version.
+RUN case "$(dpkg --print-architecture)" in \
+        amd64) RCLONE_ARCH=amd64; RCLONE_SHA256=a9da2eaa70428c6dcc5acbb0b7eac0faec4c61643e0b468d9fe09ddf79b7e929 ;; \
+        arm64) RCLONE_ARCH=arm64; RCLONE_SHA256=db39280cd0b680ef2ab2e9800882936358c33b959622512e6898ebbeaf0b7aea ;; \
+        *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --silent --show-error \
+        "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}.deb" \
+        --output /tmp/rclone.deb \
+    && echo "${RCLONE_SHA256}  /tmp/rclone.deb" | sha256sum --check --status \
+    && dpkg --install /tmp/rclone.deb \
+    && rm -f /tmp/rclone.deb \
+    && test "$(env -u RCLONE_VERSION rclone version | awk 'NR == 1 { print $2 }')" = "v${RCLONE_VERSION}"
 
 # The MCP servers are preinstalled because /root — and with it any npx cache —
 # is wiped on every boot; the config template calls their bins directly.
