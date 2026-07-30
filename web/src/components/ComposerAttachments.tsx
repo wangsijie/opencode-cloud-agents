@@ -1,5 +1,9 @@
 import { useRef, useState, type ClipboardEvent } from 'react';
-import type { MessageAttachment } from '../api';
+import {
+  deleteAttachmentUpload,
+  uploadAttachment,
+  type MessageAttachment
+} from '../api';
 import { CloseIcon, PlusIcon } from './icons';
 
 /**
@@ -7,9 +11,13 @@ import { CloseIcon, PlusIcon } from './icons';
  *
  * Everything about picking, pasting, previewing and removing images before a
  * send lives here so the session page and the new-session page stay one
- * behaviour. The limits mirror the server's (`normalizeSessionAttachments`);
- * checking them here turns a rejected request into an inline message before
- * anything is uploaded.
+ * behaviour. The limits mirror the server's; checking them here turns a rejected
+ * request into an inline message before anything is uploaded.
+ *
+ * Each image is uploaded as it arrives, not when the message is sent. The wait
+ * is then spent while the user is still typing, the send itself carries nothing
+ * but keys, and an upload that fails fails on its own chip — with a retry —
+ * rather than taking a whole message with it.
  */
 
 const ATTACHMENT_MIME_TYPES = [
@@ -29,15 +37,60 @@ export interface ComposerAttachment {
   mime: string;
   filename: string;
   size: number;
-  /** FileReader result — both the chip preview and the payload source. */
-  dataUrl: string;
+  /** FileReader result — the chip preview and the optimistic bubble thumbnail. */
+  dataUrl?: string;
+  /** Where this image is on its way into R2. */
+  status: 'uploading' | 'ready' | 'failed';
+  /** The R2 key a prompt names. Present once `status` is `ready`. */
+  key?: string;
+  /** Why the upload failed, shown on the chip next to its retry control. */
+  error?: string;
+  /** Kept for retrying a failed upload without re-picking the file. */
+  file: File;
 }
 
 export function useComposerAttachments(onError: (message: string) => void) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  // Files still being read; sending mid-read would silently drop them.
-  const [readingCount, setReadingCount] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  function patch(id: string, changes: Partial<ComposerAttachment>) {
+    setAttachments((entries) =>
+      entries.map((entry) =>
+        entry.id === id ? { ...entry, ...changes } : entry
+      )
+    );
+  }
+
+  /**
+   * Send one file to the Hub, marking the chip along the way.
+   *
+   * A missing chip when the answer comes back means the user removed it
+   * mid-upload; the object is deleted rather than adopted, since nothing holds
+   * its key any more.
+   */
+  function upload(id: string, file: File) {
+    patch(id, { status: 'uploading', error: undefined });
+    uploadAttachment(file)
+      .then((stored) => {
+        setAttachments((entries) => {
+          if (!entries.some((entry) => entry.id === id)) {
+            void deleteAttachmentUpload(stored.key).catch(() => undefined);
+            return entries;
+          }
+          return entries.map((entry) =>
+            entry.id === id
+              ? { ...entry, status: 'ready' as const, key: stored.key }
+              : entry
+          );
+        });
+      })
+      .catch((cause: unknown) => {
+        patch(id, {
+          status: 'failed',
+          error: cause instanceof Error ? cause.message : String(cause)
+        });
+      });
+  }
 
   function addFiles(files: File[]) {
     // Snapshot-based checks would go stale across async FileReader completions,
@@ -66,24 +119,23 @@ export function useComposerAttachments(onError: (message: string) => void) {
       accepted += 1;
       acceptedBytes += file.size;
       const id = crypto.randomUUID();
+      setAttachments((entries) => [
+        ...entries,
+        {
+          id,
+          mime: file.type,
+          filename: file.name || 'image',
+          size: file.size,
+          status: 'uploading',
+          file
+        }
+      ]);
+      // The upload and the preview read run in parallel: neither waits on the
+      // other, and the chip renders as soon as either lands.
+      upload(id, file);
       const reader = new FileReader();
-      setReadingCount((count) => count + 1);
       reader.onload = () => {
-        setAttachments((entries) => [
-          ...entries,
-          {
-            id,
-            mime: file.type,
-            filename: file.name || 'image',
-            size: file.size,
-            dataUrl: reader.result as string
-          }
-        ]);
-        setReadingCount((count) => count - 1);
-      };
-      reader.onerror = () => {
-        onError(`Could not read ${file.name || 'the image'}`);
-        setReadingCount((count) => count - 1);
+        patch(id, { dataUrl: reader.result as string });
       };
       reader.readAsDataURL(file);
     }
@@ -107,15 +159,35 @@ export function useComposerAttachments(onError: (message: string) => void) {
 
   return {
     attachments,
-    /** True while any picked file is still being read into a preview. */
-    reading: readingCount > 0,
+    /**
+     * True while any image is not yet safely in R2 — still uploading, or failed
+     * and waiting on a retry or a removal. The send gate: a message sent now
+     * would silently go out without the image the user attached.
+     */
+    reading: attachments.some((entry) => entry.status !== 'ready'),
     fileInput,
     addFiles,
     onPaste,
-    remove: (id: string) =>
-      setAttachments((entries) => entries.filter((entry) => entry.id !== id)),
+    /** Re-run one failed upload. The file is still in hand; nothing re-picks. */
+    retry: (id: string) => {
+      const entry = attachments.find((candidate) => candidate.id === id);
+      if (entry && entry.status === 'failed') {
+        upload(id, entry.file);
+      }
+    },
+    remove: (id: string) => {
+      const entry = attachments.find((candidate) => candidate.id === id);
+      if (entry?.key) {
+        void deleteAttachmentUpload(entry.key).catch(() => undefined);
+      }
+      setAttachments((entries) => entries.filter((item) => item.id !== id));
+    },
     clear: () => setAttachments([]),
-    /** Put a send's snapshot back after a failure, like the prompt text. */
+    /**
+     * Put a send's snapshot back after a failure, like the prompt text. The
+     * uploads are still in R2 — keys only die on delivery — so the restored
+     * chips are ready to send again as they stand.
+     */
     restore: (entries: ComposerAttachment[]) =>
       setAttachments((current) => (current.length > 0 ? current : entries))
   };
@@ -123,15 +195,19 @@ export function useComposerAttachments(onError: (message: string) => void) {
 
 export type ComposerAttachmentsApi = ReturnType<typeof useComposerAttachments>;
 
-/** The request payload for a snapshot of attachments. */
+/**
+ * The request payload for a snapshot of attachments: the upload keys, nothing
+ * else. The bytes went up when the images were picked. Callers only reach this
+ * behind the `reading` gate, so every entry has its key by now.
+ */
 export function toAttachmentPayload(
   attachments: ComposerAttachment[]
 ): MessageAttachment[] {
-  return attachments.map((entry) => ({
-    mime: entry.mime,
-    filename: entry.filename,
-    data: entry.dataUrl.slice(entry.dataUrl.indexOf(',') + 1)
-  }));
+  return attachments
+    .filter((entry): entry is ComposerAttachment & { key: string } =>
+      typeof entry.key === 'string'
+    )
+    .map((entry) => ({ key: entry.key }));
 }
 
 /** The "+" button and its hidden file input. */
@@ -170,7 +246,13 @@ export function AttachButton({
   );
 }
 
-/** Preview thumbnails above the textarea, each with a remove control. */
+/**
+ * Preview thumbnails above the textarea, each with a remove control.
+ *
+ * A chip wears its upload state: dimmed while the bytes are on their way up,
+ * and a retry control when they never arrived — the failure belongs to that
+ * image, not to the message around it.
+ */
 export function AttachmentChips({ api }: { api: ComposerAttachmentsApi }) {
   if (api.attachments.length === 0) {
     return null;
@@ -178,8 +260,34 @@ export function AttachmentChips({ api }: { api: ComposerAttachmentsApi }) {
   return (
     <div className="attachment-chips">
       {api.attachments.map((entry) => (
-        <div key={entry.id} className="attachment-chip">
-          <img src={entry.dataUrl} alt={entry.filename} />
+        <div
+          key={entry.id}
+          className={`attachment-chip${
+            entry.status === 'uploading' ? ' uploading' : ''
+          }${entry.status === 'failed' ? ' failed' : ''}`}
+        >
+          {entry.dataUrl ? (
+            <img src={entry.dataUrl} alt={entry.filename} />
+          ) : (
+            <span className="attachment-placeholder" aria-hidden="true" />
+          )}
+          {entry.status === 'failed' ? (
+            <button
+              type="button"
+              className="attachment-retry"
+              aria-label={`Upload of ${entry.filename} failed${
+                entry.error ? `: ${entry.error}` : ''
+              }. Retry`}
+              title={
+                entry.error
+                  ? `Upload failed: ${entry.error} — click to retry`
+                  : 'Upload failed — click to retry'
+              }
+              onClick={() => api.retry(entry.id)}
+            >
+              ↻
+            </button>
+          ) : null}
           <button
             type="button"
             className="attachment-remove"

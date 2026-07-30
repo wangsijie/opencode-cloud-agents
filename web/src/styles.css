@@ -975,6 +975,53 @@ summary:focus-visible {
   height: 12px;
 }
 
+/* The bytes are still on their way to R2; the chip is visible but not ready. */
+.attachment-chip.uploading img,
+.attachment-chip.uploading .attachment-placeholder {
+  opacity: 0.45;
+}
+
+.attachment-chip.failed img,
+.attachment-chip.failed .attachment-placeholder {
+  opacity: 0.35;
+  border-color: var(--danger);
+}
+
+/* Stands in for the thumbnail while the preview read is still running. */
+.attachment-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+}
+
+/* Sits over the middle of a failed chip: the failure is the chip's state,
+   and clicking it is the retry. */
+.attachment-retry {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachment-retry:hover {
+  color: var(--text);
+}
+
 /* An image sent with a message, rendered from its data URL. */
 .part-image {
   display: block;

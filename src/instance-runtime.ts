@@ -10,6 +10,7 @@
 import type { SessionProvider } from '../protocol/types.ts';
 import type { InstanceRuntimeStatus } from './instances';
 import type { LifecycleStatus } from './lifecycle';
+import type { RepoDefinition } from './repos';
 import { resolveLifecycleIdleTimeoutMs } from './sandbox-providers.ts';
 import type { SessionAttachmentRef } from './sessions';
 
@@ -88,6 +89,17 @@ export interface OpencodeSessionActivityInput {
 
 /** The subset of Sandbox RPC the session dispatcher depends on. */
 export interface InstanceSandboxRpc {
+  /**
+   * Tell the Sandbox what it runs. Idempotent, and refused once the instance is
+   * being deleted — which is what stops a session created and deleted inside
+   * the same second from resurrecting its container from the dispatch path.
+   */
+  initializeInstance(
+    id: string,
+    repoKey?: string,
+    repo?: RepoDefinition,
+    provider?: SessionProvider
+  ): Promise<void>;
   getInstanceRuntimeStatus(): Promise<InstanceRuntimeStatus>;
   createOpencodeSession(
     runtimeEpoch: string,

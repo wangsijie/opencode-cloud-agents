@@ -368,16 +368,11 @@ export const MAX_SESSION_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_SESSION_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024;
 const MAX_SESSION_ATTACHMENT_FILENAME_LENGTH = 128;
 
-/** An image as submitted by the browser: bytes still base64-encoded. */
-export interface SessionAttachmentInput {
-  mime: (typeof SESSION_ATTACHMENT_MIME_TYPES)[number];
-  filename?: string;
-  /** Raw base64 without a `data:` prefix. */
-  data: string;
-}
+export type SessionAttachmentMime =
+  (typeof SESSION_ATTACHMENT_MIME_TYPES)[number];
 
 /**
- * An image after staging: bytes live in R2 and only this reference travels
+ * An image after upload: the bytes live in R2 and only this reference travels
  * through the SessionAgent queue and Sandbox RPC, both of which have size
  * limits far below one image.
  */
@@ -385,19 +380,24 @@ export interface SessionAttachmentRef {
   key: string;
   mime: string;
   filename?: string;
-  /** Decoded size in bytes. */
   size: number;
 }
 
-const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
-
-/** Decoded byte count of a base64 string, computed without decoding it. */
-function base64DecodedSize(data: string): number {
-  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
-  return (data.length / 4) * 3 - padding;
+export function isSessionAttachmentMime(
+  value: unknown
+): value is SessionAttachmentMime {
+  return SESSION_ATTACHMENT_MIME_TYPES.some((allowed) => allowed === value);
 }
 
-function normalizeAttachmentFilename(value: unknown): string | undefined {
+/**
+ * Reduce a submitted filename to something safe to store as metadata.
+ *
+ * Only the basename survives, so a path — or an attempt at one — cannot ride
+ * along inside a name that is later shown in a transcript.
+ */
+export function normalizeAttachmentFilename(
+  value: unknown
+): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
@@ -405,66 +405,78 @@ function normalizeAttachmentFilename(value: unknown): string | undefined {
     Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\')) + 1
   );
   const filename = basename
+    // Control characters would travel into an R2 metadata header.
+    .replace(/[\u0000-\u001f\u007f]/g, '')
     .trim()
     .slice(0, MAX_SESSION_ATTACHMENT_FILENAME_LENGTH);
   return filename || undefined;
 }
 
 /**
- * Normalize submitted image attachments. Absent input means no attachments;
- * anything malformed or over the size/count limits rejects the whole request
- * (undefined) rather than silently dropping images the user meant to send.
+ * The keys a client may name when it attaches images to a prompt.
+ *
+ * Uploads are the one part of a message that is durable before the message
+ * exists, so they live in a namespace of their own rather than under the
+ * session they will belong to — the browser uploads them while the user is
+ * still typing, before there is a session id to file them under.
  */
-export function normalizeSessionAttachments(
+export function attachmentUploadKey(uploadId: string): string {
+  return `uploads/${uploadId}`;
+}
+
+export const UPLOADS_PREFIX = 'uploads/';
+
+/**
+ * Whether a key is one this Hub minted for an upload.
+ *
+ * The security boundary of the claim path: a client hands back keys, and
+ * without this a key could name any object in the bucket — a transcript mirror,
+ * or another session's undelivered image. Anchored on both ends, and the id is
+ * a UUID because that is what `attachmentUploadKey` is ever given.
+ */
+const UPLOAD_KEY_PATTERN =
+  /^uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function isAttachmentUploadKey(value: unknown): value is string {
+  return typeof value === 'string' && UPLOAD_KEY_PATTERN.test(value);
+}
+
+/**
+ * Read the `attachments` field of a prompt request: a list of upload keys.
+ *
+ * Shape only — whether the keys name objects that exist, and what they weigh,
+ * is R2's answer (see `claimAttachmentUploads`). Absent means no attachments;
+ * anything malformed rejects the whole request rather than silently dropping an
+ * image the user meant to send.
+ */
+export function normalizeAttachmentKeys(
   value: unknown
-): SessionAttachmentInput[] | undefined {
+): string[] | undefined {
   if (value === undefined || value === null) {
     return [];
   }
   if (!Array.isArray(value) || value.length > MAX_SESSION_ATTACHMENTS) {
     return undefined;
   }
-  const attachments: SessionAttachmentInput[] = [];
-  let totalBytes = 0;
+  const keys: string[] = [];
   for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null) {
+    const key =
+      typeof entry === 'object' && entry !== null
+        ? (entry as { key?: unknown }).key
+        : entry;
+    if (!isAttachmentUploadKey(key)) {
       return undefined;
     }
-    const { mime, filename, data } = entry as {
-      mime?: unknown;
-      filename?: unknown;
-      data?: unknown;
-    };
-    if (!SESSION_ATTACHMENT_MIME_TYPES.some((allowed) => allowed === mime)) {
+    if (keys.includes(key)) {
+      // The same upload twice would be delivered twice and deleted once.
       return undefined;
     }
-    if (
-      typeof data !== 'string' ||
-      data.length === 0 ||
-      data.length % 4 !== 0 ||
-      !BASE64_PATTERN.test(data)
-    ) {
-      return undefined;
-    }
-    const size = base64DecodedSize(data);
-    if (size === 0 || size > MAX_SESSION_ATTACHMENT_BYTES) {
-      return undefined;
-    }
-    totalBytes += size;
-    if (totalBytes > MAX_SESSION_ATTACHMENT_TOTAL_BYTES) {
-      return undefined;
-    }
-    const cleanFilename = normalizeAttachmentFilename(filename);
-    attachments.push({
-      mime: mime as SessionAttachmentInput['mime'],
-      ...(cleanFilename ? { filename: cleanFilename } : {}),
-      data
-    });
+    keys.push(key);
   }
-  return attachments;
+  return keys;
 }
 
-/** R2 key for one staged prompt attachment. */
+/** Legacy R2 key for an attachment staged under its session. */
 export function promptAttachmentKey(
   sessionId: string,
   promptId: string,

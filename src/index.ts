@@ -22,6 +22,7 @@ import {
 import { handleHubApi } from './api-instances';
 import { handleSessionApi } from './api-sessions';
 import { handleSettingsApi } from './api-settings';
+import { handleUploadsApi, sweepOrphanUploads } from './api-uploads';
 import { acceptsHtml, HttpError, json, methodNotAllowed } from './http';
 import { Hub } from './hub';
 import {
@@ -112,6 +113,10 @@ export default {
         return await handleSessionApi(request, env);
       }
 
+      if (url.pathname === '/api/uploads' || url.pathname.startsWith('/api/uploads/')) {
+        return await handleUploadsApi(request, env, url);
+      }
+
       if (url.pathname === '/api/catalog' && request.method === 'GET') {
         // The repository list is GitHub's answer, stored by the Hub. This never
         // waits on GitHub once something is stored: `reposStale` tells the
@@ -165,10 +170,11 @@ export default {
     }
   },
 
-  // The daily idle-session sweep: claim every session untouched for 7 days and
-  // poke the Hub alarm, which removes the containers one at a time. The rows
-  // and their transcript mirrors stay — a cleaned session is read-only, not
-  // gone.
+  // The daily sweeps. Sessions untouched for 7 days are claimed and the Hub
+  // alarm removes the containers one at a time; the rows and their transcript
+  // mirrors stay, because a cleaned session is read-only rather than gone.
+  // Uploads nobody ever sent are deleted outright — an image picked in a
+  // composer that was then closed has no session to belong to.
   async scheduled(
     _controller: ScheduledController,
     env: Env,
@@ -177,6 +183,11 @@ export default {
     ctx.waitUntil(
       sweepIdleSessions(env).catch((error) => {
         console.error('Idle-session sweep failed', error);
+      })
+    );
+    ctx.waitUntil(
+      sweepOrphanUploads(env).catch((error) => {
+        console.error('Orphan-upload sweep failed', error);
       })
     );
   }

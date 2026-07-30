@@ -479,12 +479,48 @@ export const fetchAgentSession = (id: string, agentSessionId: string) =>
     `/api/sessions/${encodeURIComponent(id)}/agent-session${childQuery(agentSessionId)}`
   );
 
-/** An image going out with a prompt: base64 bytes without a `data:` prefix. */
+/**
+ * An image going out with a prompt.
+ *
+ * Only the key: the bytes were uploaded when the image was picked, so a send is
+ * a small request whatever it carries. The Worker reads the type and size back
+ * from storage rather than believing anything said here.
+ */
 export interface MessageAttachment {
+  key: string;
+}
+
+/** What the Hub stored for one uploaded image. */
+export interface AttachmentUpload {
+  key: string;
   mime: string;
   filename?: string;
-  data: string;
+  size: number;
 }
+
+/**
+ * Put one image in R2 and get the key a prompt can name.
+ *
+ * The composer calls this the moment a file is picked or pasted, so the wait is
+ * spent while the user is still typing rather than after they press Enter — and
+ * a failure belongs to that one image instead of to the whole message.
+ */
+export const uploadAttachment = (file: File) =>
+  call<AttachmentUpload>('/api/uploads', {
+    method: 'POST',
+    body: file,
+    headers: {
+      'content-type': file.type,
+      ...(file.name ? { 'x-upload-filename': file.name } : {})
+    }
+  });
+
+/** Drop an upload the user removed before sending. Best-effort. */
+export const deleteAttachmentUpload = (key: string) =>
+  call<{ deleted: boolean }>(
+    `/api/uploads/${encodeURIComponent(key.replace(/^uploads\//, ''))}`,
+    { method: 'DELETE' }
+  );
 
 export const sendMessage = (
   id: string,

@@ -28,9 +28,22 @@ export const store = {
   sessions: new Map<string, MockSessionState>(),
   settings: buildSettings(),
   catalog: buildCatalog(),
+  /**
+   * Uploaded images by key, standing in for R2: the composer uploads when a
+   * file is picked and a prompt later names the keys.
+   */
+  uploads: new Map<string, MockUpload>(),
   /** The opencode.config save warning is shown once, then considered read. */
   configWarningPending: true
 };
+
+export interface MockUpload {
+  mime: string;
+  filename?: string;
+  /** What the transcript renders, in place of a real R2 read. */
+  dataUrl: string;
+  size: number;
+}
 
 for (const session of buildFixtureSessions()) {
   store.sessions.set(session.view.id, session);
@@ -445,13 +458,21 @@ export function appendUserMessage(
     { id: nextPartId(), messageID: messageId, type: 'text', text: prompt }
   ];
   for (const attachment of attachments ?? []) {
+    // The key names an earlier upload, exactly as the Worker resolves it from
+    // R2. Delivery consumes the upload, like the dispatch path deleting the
+    // staged object.
+    const upload = store.uploads.get(attachment.key);
+    if (!upload) {
+      continue;
+    }
+    store.uploads.delete(attachment.key);
     parts.push({
       id: nextPartId(),
       messageID: messageId,
       type: 'file',
-      mime: attachment.mime,
-      ...(attachment.filename ? { filename: attachment.filename } : {}),
-      url: `data:${attachment.mime};base64,${attachment.data}`
+      mime: upload.mime,
+      ...(upload.filename ? { filename: upload.filename } : {}),
+      url: upload.dataUrl
     });
   }
   session.transcript.push({ info, parts });

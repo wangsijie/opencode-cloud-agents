@@ -36,7 +36,6 @@ import {
   workspaceDirectory,
   type RepoDefinition
 } from './repos';
-import { resolveLifecycleIdleTimeoutMs } from './sandbox-providers.ts';
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
 import {
   cleanupCutoff,
@@ -117,16 +116,34 @@ async function getRow(env: Env, id: string): Promise<SessionRow | null> {
 }
 
 /**
- * Create a session and the instance that runs it in one step. The session id
- * is the instance id: one session always owns exactly one container.
+ * Everything a new session is, before any of it is durable.
  *
- * The record starts with the opening prompt already counted as pending; the
- * caller then hands it to the session's SessionAgent for dispatch. The row is
- * only written once the Sandbox and the LifecycleCoordinator have both
- * initialized, so the registry never names a container that does not exist.
+ * The session id is the instance id: one session always owns exactly one
+ * container. Nothing here touches storage — creating a session is one write, to
+ * the session's SessionAgent, and the agent replays this shape into the
+ * registry and the Sandbox from its own alarm (see `insertSessionRow`).
  */
-export async function createSession(
-  env: Env,
+export interface NewSession {
+  record: SessionRecord;
+  /** The instance's display name, minted with the id and pinned on the row. */
+  name: string;
+  /**
+   * The catalog entry the Sandbox needs to clone: the whole definition, not
+   * just the key, because nothing downstream can look one up. Absent for a
+   * session that works in `/workspace` without a checkout.
+   */
+  repo?: RepoDefinition;
+}
+
+/**
+ * Mint a session, with the opening prompt already counted as pending.
+ *
+ * Pure: the caller hands the result to the SessionAgent, which is where a
+ * session first becomes durable. That is what keeps creation to a single write
+ * — a request that dies halfway through can leave a session unqueued, but never
+ * a half-created one.
+ */
+export function buildNewSession(
   input: {
     /** Absent for a session that works in `/workspace` without a checkout. */
     repo?: RepoDefinition;
@@ -138,8 +155,9 @@ export async function createSession(
   },
   // Loaded by the route that already validated the request against it, so the
   // same catalog answers both checks.
-  catalog: ModelCatalog
-): Promise<SessionRecord> {
+  catalog: ModelCatalog,
+  now = new Date().toISOString()
+): NewSession {
   if (input.repo !== undefined && !isSafeRepoDefinition(input.repo)) {
     throw new Error('Unknown repository');
   }
@@ -147,68 +165,69 @@ export async function createSession(
     throw new Error(`Unknown model: ${String(input.model)}`);
   }
 
-  const now = new Date().toISOString();
   const id = `inst-${crypto.randomUUID()}`;
-  const provider = input.provider ?? 'cloudflare';
-  const record: SessionRecord = {
-    id,
-    instanceId: id,
-    ...(input.repo ? { repoKey: input.repo.repoKey } : {}),
-    // Pinned with the instance, so nothing this session does later depends on
-    // the catalog still containing the repository it started from.
-    directory: workspaceDirectory(input.repo?.repoKey),
-    provider,
-    model: input.model,
-    ...(input.variant ? { variant: input.variant } : {}),
-    title: input.title,
-    phase: 'queued',
-    pendingPromptCount: 1,
-    createdAt: now,
-    updatedAt: now
+  return {
+    name: randomInstanceName(),
+    ...(input.repo ? { repo: input.repo } : {}),
+    record: {
+      id,
+      instanceId: id,
+      ...(input.repo ? { repoKey: input.repo.repoKey } : {}),
+      // Pinned with the instance, so nothing this session does later depends on
+      // the catalog still containing the repository it started from.
+      directory: workspaceDirectory(input.repo?.repoKey),
+      provider: input.provider ?? 'cloudflare',
+      model: input.model,
+      ...(input.variant ? { variant: input.variant } : {}),
+      title: input.title,
+      phase: 'queued',
+      pendingPromptCount: 1,
+      createdAt: now,
+      updatedAt: now
+    }
   };
+}
 
-  const sandbox = resolveSandbox(env, id);
-  const lifecycle = resolveLifecycle(env, id);
-  await sandbox.initializeInstance(id, input.repo?.repoKey, input.repo, provider);
-  try {
-    const idleTimeoutMs = await resolveLifecycleIdleTimeoutMs(env, provider);
-    await lifecycle.initializeInstance({ instanceId: id, idleTimeoutMs });
-    await env.DB.prepare(
-      `INSERT INTO sessions (
-         id, name, repo_key, repo_json, provider, lifecycle,
-         directory, model, variant, title, phase, pending_prompt_count,
-         created_at, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7, ?8, ?9, 'queued', 1, ?10, ?10)`
+/**
+ * Put a session in the registry, so the list and every id-addressed route can
+ * find it.
+ *
+ * The SessionAgent owns this call and makes it before its first dispatch step,
+ * because the row is what its own state reports mirror into. It is idempotent —
+ * the agent's alarm and a read that arrives before the alarm can both make it,
+ * and either may be a retry after a partial failure — so an existing row is
+ * left exactly as it is rather than reset to these creation values.
+ */
+export async function insertSessionRow(
+  env: Env,
+  session: NewSession
+): Promise<void> {
+  const { record, repo } = session;
+  await env.DB.prepare(
+    `INSERT INTO sessions (
+       id, name, repo_key, repo_json, provider, lifecycle,
+       directory, model, variant, title, phase, pending_prompt_count,
+       created_at, updated_at
+     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+     ON CONFLICT (id) DO NOTHING`
+  )
+    .bind(
+      record.id,
+      session.name,
+      // The column is NOT NULL, so "no repository" is the empty key; the row
+      // projection turns it back into an absent field.
+      repo?.repoKey ?? '',
+      repo ? JSON.stringify(repo) : null,
+      record.provider,
+      record.directory ?? workspaceDirectory(record.repoKey),
+      record.model,
+      record.variant ?? null,
+      record.title,
+      record.phase,
+      record.pendingPromptCount,
+      record.createdAt
     )
-      .bind(
-        id,
-        randomInstanceName(),
-        // The column is NOT NULL, so "no repository" is the empty key; the row
-        // projection turns it back into an absent field.
-        input.repo?.repoKey ?? '',
-        input.repo ? JSON.stringify(input.repo) : null,
-        provider,
-        record.directory,
-        input.model,
-        input.variant ?? null,
-        input.title,
-        now
-      )
-      .run();
-  } catch (error) {
-    // The INSERT can fail after D1 applied it, so the row may exist and each
-    // compensation is best-effort. Dropping it here is what keeps an
-    // applied-but-threw INSERT from stranding an orphan the delete path can
-    // never purge (its Sandbox identity is gone by then).
-    await sandbox.purgeInstance().catch(() => undefined);
-    await lifecycle.markDeleted().catch(() => undefined);
-    await env.DB.prepare('DELETE FROM sessions WHERE id = ?1')
-      .bind(id)
-      .run()
-      .catch(() => undefined);
-    throw error;
-  }
-  return record;
+    .run();
 }
 
 /**
@@ -676,10 +695,6 @@ async function repoLastUse(env: Env): Promise<Map<string, string>> {
      GROUP BY repo_key`
   ).all<{ repo_key: string; last_used: string }>();
   return new Map(result.results.map((row) => [row.repo_key, row.last_used]));
-}
-
-function resolveSandbox(env: Env, id: string) {
-  return env.Sandbox.getByName(id);
 }
 
 function resolveLifecycle(env: Env, id: string) {

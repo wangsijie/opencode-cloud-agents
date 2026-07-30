@@ -304,7 +304,10 @@ is the case worth reporting. Verified 2026-07-28 against both hosts.
 ## Two buckets, split by who writes them
 
 `opencode-cloud-sessions` (`SESSION_BUCKET`) is the site's: transcript mirrors
-under `transcripts/` and staged prompt attachments under `prompt-attachments/`.
+under `transcripts/`, composer image uploads under `uploads/` (put there when
+the image is picked, before any session or prompt names them; the daily cron
+sweeps the unsent ones), and — from sessions created before uploads were their
+own request — staged prompt attachments under `prompt-attachments/`.
 `opencode-cloud-backups` (`BACKUP_BUCKET`) is the container snapshots under
 `backups/`, written only by the sandbox host Worker — the site no longer sets
 `BACKUP_BUCKET_NAME`, which is the variable the sandbox SDK reads to presign

@@ -19,7 +19,13 @@
  * task that starts between two activity probes still resets the idle window.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { markSessionUnread, updateSession } from './hub-store';
+import type { SessionProvider } from '../protocol/types.ts';
+import {
+  insertSessionRow,
+  markSessionUnread,
+  updateSession,
+  type NewSession
+} from './hub-store';
 import {
   resolveInstanceLifecycle,
   resolveInstanceSandbox,
@@ -28,16 +34,23 @@ import {
   type OpencodeSessionActivityInput
 } from './instance-runtime';
 import { loadModelCatalog } from './model-catalog';
-import { WORKSPACE_ROOT } from './repos';
+import { WORKSPACE_ROOT, type RepoDefinition } from './repos';
 import {
   promptAttachmentPrefix,
   type SessionAttachmentRef,
   type SessionPhase,
+  type SessionRecord,
   type SessionStatePatch
 } from './sessions';
 
 const STATE_KEY = 'session-agent:state';
-const SCHEMA_VERSION = 1;
+/**
+ * 2 added the creation intent — instance name, provider, repository definition
+ * — so this object can register its own session. A version 1 state belongs to a
+ * session the create request had already registered, which is what
+ * `migrateState` records by marking it registered.
+ */
+const SCHEMA_VERSION = 2;
 
 /**
  * Automatic retries cover transient wake failures (cold start, a racing idle
@@ -109,8 +122,27 @@ interface StoredSessionAgentState {
   schemaVersion: number;
   sessionId: string;
   instanceId: string;
+  /**
+   * The instance's display name, minted by the create request. Held here
+   * because this object writes the registry row, and the name has to survive a
+   * retry of that write unchanged.
+   */
+  instanceName: string;
+  /** Which sandbox host runs the container. */
+  provider: SessionProvider;
   /** Absent when the session was created without a repository. */
   repoKey?: string;
+  /**
+   * The catalog entry the Sandbox clones. Pinned here for the same reason it is
+   * pinned on the row: nothing downstream can look a repository up, and the
+   * catalog may not contain it any more by the time this session wakes.
+   */
+  repo?: RepoDefinition;
+  /**
+   * Set once the registry row exists and the Sandbox has been told what it
+   * runs. Until then this object is the only place the session exists.
+   */
+  registered?: true;
   /** Absolute container path the OpenCode session is bound to. */
   directory: string;
   model: string;
@@ -132,15 +164,27 @@ interface StoredSessionAgentState {
   updatedAt: string;
 }
 
+/**
+ * The whole of a new session: what it is, and the prompt it starts with.
+ *
+ * This is the only write the create request makes, so it has to carry
+ * everything the registry row and the Sandbox need — not just what dispatch
+ * needs.
+ */
 export interface StartSessionInput {
   sessionId: string;
   instanceId: string;
+  instanceName: string;
+  provider: SessionProvider;
   /** Absent when the session was created without a repository. */
   repoKey?: string;
+  /** The catalog entry to clone; absent alongside `repoKey`. */
+  repo?: RepoDefinition;
   directory: string;
   model: string;
   variant?: string;
   title: string;
+  createdAt: string;
   prompt: string;
   promptId?: string;
   attachments?: SessionAttachmentRef[];
@@ -189,16 +233,16 @@ export class SessionAgent extends DurableObject<Env> {
   private readonly ready: Promise<void>;
   private state: StoredSessionAgentState | undefined;
   private advanceInProgress: Promise<void> | undefined;
+  private registerInProgress: Promise<void> | undefined;
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.agentState = ctx;
     this.ready = ctx.blockConcurrencyWhile(async () => {
-      this.state = await ctx.storage.get<StoredSessionAgentState>(STATE_KEY);
-      if (this.state && this.state.schemaVersion !== SCHEMA_VERSION) {
-        throw new Error(
-          `Unsupported session agent schema: ${String(this.state.schemaVersion)}`
-        );
+      const stored = await ctx.storage.get<StoredSessionAgentState>(STATE_KEY);
+      this.state = stored ? migrateState(stored) : undefined;
+      if (this.state && this.state !== stored) {
+        await ctx.storage.put(STATE_KEY, this.state);
       }
       if (
         this.state &&
@@ -211,8 +255,14 @@ export class SessionAgent extends DurableObject<Env> {
   }
 
   /**
-   * Record the session and queue its opening prompt. This returns as soon as
-   * the work is durable; the alarm performs the wake and dispatch.
+   * Bring a session into existence and queue its opening prompt.
+   *
+   * One storage write, and everything else — the registry row, the Sandbox's
+   * identity, the wake, the clone, the first dispatch — happens on the alarm.
+   * That is deliberate: the create request cannot be cancelled halfway into a
+   * half-made session, because there is no halfway. Either this write lands, in
+   * which case the session is real and will run without anybody's browser
+   * staying open, or it does not, and nothing was created at all.
    */
   async startSession(input: StartSessionInput): Promise<SessionAgentSnapshot> {
     await this.ready;
@@ -241,7 +291,10 @@ export class SessionAgent extends DurableObject<Env> {
       schemaVersion: SCHEMA_VERSION,
       sessionId: input.sessionId,
       instanceId: input.instanceId,
+      instanceName: input.instanceName,
+      provider: input.provider,
       ...(input.repoKey ? { repoKey: input.repoKey } : {}),
+      ...(input.repo ? { repo: input.repo } : {}),
       directory: input.directory,
       model: input.model,
       ...(variant ? { variant } : {}),
@@ -260,12 +313,69 @@ export class SessionAgent extends DurableObject<Env> {
         }
       ],
       attempt: 0,
-      createdAt: now,
+      createdAt: input.createdAt,
       updatedAt: now
     };
     await this.persist();
     await this.agentState.storage.setAlarm(Date.now());
     return this.snapshot();
+  }
+
+  /**
+   * Put this session in the registry, if it is not there already.
+   *
+   * Normally the alarm does this on its way into the first dispatch. It is also
+   * reachable from a route, because the session id is handed to the client
+   * before the alarm has run: a page that opens the new session immediately
+   * would otherwise read a 404 for as long as the alarm took to fire. Whoever
+   * gets here first does the work; the other waits on the same promise.
+   */
+  async ensureRegistered(): Promise<boolean> {
+    await this.ready;
+    if (!this.state) {
+      return false;
+    }
+    await this.registerOnce();
+    return true;
+  }
+
+  /** `register`, with concurrent callers folded onto one attempt. */
+  private async registerOnce(): Promise<void> {
+    if (!this.registerInProgress) {
+      this.registerInProgress = this.register().finally(() => {
+        this.registerInProgress = undefined;
+      });
+    }
+    await this.registerInProgress;
+  }
+
+  /**
+   * The two writes that make a session findable from outside this object: the
+   * registry row every id-addressed route reads, and the Sandbox's identity,
+   * which is what tells the container which repository it runs.
+   *
+   * The row goes first because it is what this object's own state reports
+   * mirror into — an update against a missing row is silently dropped. Both
+   * calls are idempotent, so a partial failure is repaired by the next attempt
+   * rather than compensated for here.
+   */
+  private async register(): Promise<void> {
+    const state = this.requireState();
+    if (state.registered) {
+      return;
+    }
+    await insertSessionRow(this.env, newSessionFromState(state));
+    await resolveInstanceSandbox(this.env, state.instanceId).initializeInstance(
+      state.instanceId,
+      state.repoKey,
+      state.repo,
+      state.provider
+    );
+    // Written straight to storage rather than through `update`: the mirror that
+    // `update` performs is what this method exists to make possible, and the
+    // caller is about to report the real phase anyway.
+    this.state = { ...state, registered: true, updatedAt: new Date().toISOString() };
+    await this.persist();
   }
 
   /**
@@ -392,23 +502,35 @@ export class SessionAgent extends DurableObject<Env> {
   /** Drop persisted state when the owning instance is deleted. */
   async markDeleted(): Promise<void> {
     await this.ready;
-    const sessionId = this.state?.sessionId;
+    const state = this.state;
     this.state = undefined;
     await this.agentState.storage.deleteAll();
-    if (sessionId) {
-      // Sweep staged attachments the dispatch path never got to delete — the
-      // one place a lost/failed session's staging copies are reclaimed.
-      await this.deleteStagedAttachments(sessionId).catch((error) => {
-        console.warn('Failed to sweep staged prompt attachments', {
-          sessionId,
+    if (state) {
+      // The images of prompts this session never got to deliver. Their bytes
+      // are reachable only through the queue that just went away, so this is
+      // the last chance to reclaim them; the daily upload sweep is the backstop
+      // if it fails.
+      await this.deleteQueuedAttachments(state).catch((error) => {
+        console.warn('Failed to sweep queued prompt attachments', {
+          sessionId: state.sessionId,
           error: error instanceof Error ? error.message : String(error)
         });
       });
     }
   }
 
-  private async deleteStagedAttachments(sessionId: string): Promise<void> {
-    const prefix = promptAttachmentPrefix(sessionId);
+  private async deleteQueuedAttachments(
+    state: StoredSessionAgentState
+  ): Promise<void> {
+    const keys = state.pending.flatMap((prompt) =>
+      (prompt.attachments ?? []).map((attachment) => attachment.key)
+    );
+    if (keys.length > 0) {
+      await this.env.SESSION_BUCKET.delete(keys);
+    }
+    // Sessions created before uploads were their own request staged images
+    // under the session itself; their keys are not in the queue.
+    const prefix = promptAttachmentPrefix(state.sessionId);
     let cursor: string | undefined;
     do {
       const page = await this.env.SESSION_BUCKET.list({
@@ -440,8 +562,11 @@ export class SessionAgent extends DurableObject<Env> {
       return;
     }
 
-    await this.update({ phase: 'starting' });
     try {
+      // Before the first report, because a report against a session the
+      // registry has never heard of goes nowhere.
+      await this.registerOnce();
+      await this.update({ phase: 'starting' });
       await this.dispatchPending();
       await this.update({ phase: 'working', attempt: 0, lastError: undefined });
     } catch (error) {
@@ -772,6 +897,65 @@ export class SessionAgent extends DurableObject<Env> {
       updatedAt: state.updatedAt
     };
   }
+}
+
+/**
+ * Bring a stored state up to the current schema.
+ *
+ * Version 1 predates this object owning creation: its session was registered by
+ * the create request, so it is registered by definition — and the fields that
+ * registration needs were never stored, which is exactly why the flag matters
+ * more than the fields. The instance name is the one thing that cannot be
+ * recovered here; nothing reads it on an already-registered session.
+ */
+function migrateState(
+  state: StoredSessionAgentState
+): StoredSessionAgentState {
+  if (state.schemaVersion === SCHEMA_VERSION) {
+    return state;
+  }
+  if (state.schemaVersion !== 1) {
+    throw new Error(
+      `Unsupported session agent schema: ${String(state.schemaVersion)}`
+    );
+  }
+  return {
+    ...state,
+    schemaVersion: SCHEMA_VERSION,
+    instanceName: state.instanceName ?? state.instanceId,
+    provider: state.provider ?? 'cloudflare',
+    registered: true
+  };
+}
+
+/**
+ * The registry row this session should have, rebuilt from the agent's own
+ * state.
+ *
+ * Phase and pending count come from the state as it is now rather than from
+ * creation, because the row may be written after the first dispatch attempt has
+ * already moved both.
+ */
+function newSessionFromState(state: StoredSessionAgentState): NewSession {
+  const record: SessionRecord = {
+    id: state.sessionId,
+    instanceId: state.instanceId,
+    ...(state.repoKey ? { repoKey: state.repoKey } : {}),
+    directory: state.directory,
+    provider: state.provider,
+    model: state.model,
+    ...(state.variant ? { variant: state.variant } : {}),
+    title: state.title,
+    phase: state.phase,
+    pendingPromptCount: state.pending.length,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt
+  };
+  return {
+    record,
+    name: state.instanceName,
+    ...(state.repo ? { repo: state.repo } : {})
+  };
 }
 
 function needsDispatch(state: StoredSessionAgentState): boolean {

@@ -3,18 +3,21 @@ import test from 'node:test'
 
 import {
   CLEANUP_IDLE_DAYS,
-  MAX_SESSION_ATTACHMENT_BYTES,
   MAX_SESSION_ATTACHMENTS,
   MAX_SESSION_PROMPT_LENGTH,
   MAX_SESSION_TITLE_LENGTH,
+  attachmentUploadKey,
   cleanupCutoff,
   deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
   deriveSessionTitle,
+  isAttachmentUploadKey,
   isCleanedLifecycle,
+  isSessionAttachmentMime,
   isSessionPhase,
-  normalizeSessionAttachments,
+  normalizeAttachmentFilename,
+  normalizeAttachmentKeys,
   normalizeSessionPrompt,
   promptAttachmentKey,
   promptAttachmentPrefix
@@ -175,82 +178,64 @@ test('OpenCode may rename a session, a human outranks it', () => {
   )
 })
 
-// A base64 string whose decoded size is exactly `bytes`. The content never
-// matters to normalization, so length is all that is constructed.
-const base64OfSize = (bytes) => {
-  const whole = Math.floor(bytes / 3)
-  const rest = bytes % 3
-  return (
-    'AAAA'.repeat(whole) + (rest === 0 ? '' : rest === 1 ? 'AA==' : 'AAA=')
-  )
-}
+const uploadKey = () => attachmentUploadKey(crypto.randomUUID())
 
-test('attachments are optional and default to none', () => {
-  assert.deepEqual(normalizeSessionAttachments(undefined), [])
-  assert.deepEqual(normalizeSessionAttachments(null), [])
+test('attachment keys are optional and default to none', () => {
+  assert.deepEqual(normalizeAttachmentKeys(undefined), [])
+  assert.deepEqual(normalizeAttachmentKeys(null), [])
 })
 
-test('valid attachments round-trip with cleaned filenames', () => {
-  const result = normalizeSessionAttachments([
-    { mime: 'image/png', filename: 'shot.png', data: base64OfSize(9) },
-    { mime: 'image/jpeg', data: base64OfSize(10) }
-  ])
-  assert.equal(result.length, 2)
-  assert.equal(result[0].filename, 'shot.png')
-  assert.equal(result[1].filename, undefined)
+test('valid upload keys round-trip, bare or wrapped', () => {
+  const [a, b] = [uploadKey(), uploadKey()]
+  assert.deepEqual(normalizeAttachmentKeys([a, b]), [a, b])
+  assert.deepEqual(normalizeAttachmentKeys([{ key: a }, { key: b }]), [a, b])
+})
+
+test('only keys this Hub could have minted are accepted', () => {
+  assert.ok(isAttachmentUploadKey(uploadKey()))
+  // Anything that could name another object in the bucket is refused.
+  assert.equal(isAttachmentUploadKey('sessions/x/transcript'), false)
+  assert.equal(isAttachmentUploadKey('uploads/../sessions/x'), false)
+  assert.equal(isAttachmentUploadKey('uploads/'), false)
+  assert.equal(isAttachmentUploadKey('uploads/not-a-uuid'), false)
+  assert.equal(isAttachmentUploadKey(`${uploadKey()}/extra`), false)
+  assert.equal(isAttachmentUploadKey(undefined), false)
+})
+
+test('malformed attachment lists reject the whole request', () => {
+  assert.equal(normalizeAttachmentKeys('nope'), undefined)
+  assert.equal(normalizeAttachmentKeys([null]), undefined)
+  assert.equal(normalizeAttachmentKeys(['sessions/x/transcript']), undefined)
+  assert.equal(normalizeAttachmentKeys([{ key: 42 }]), undefined)
+  const key = uploadKey()
+  // The same upload twice would be delivered twice and deleted once.
+  assert.equal(normalizeAttachmentKeys([key, key]), undefined)
+  assert.equal(
+    normalizeAttachmentKeys(
+      Array.from({ length: MAX_SESSION_ATTACHMENTS + 1 }, uploadKey)
+    ),
+    undefined
+  )
+})
+
+test('attachment mime types are a closed set', () => {
+  for (const mime of ['image/png', 'image/jpeg', 'image/webp', 'image/gif']) {
+    assert.ok(isSessionAttachmentMime(mime))
+  }
+  assert.equal(isSessionAttachmentMime('image/tiff'), false)
+  assert.equal(isSessionAttachmentMime(undefined), false)
 })
 
 test('attachment filenames lose their paths and are bounded', () => {
-  const [a] = normalizeSessionAttachments([
-    { mime: 'image/png', filename: '../../etc/x.png', data: base64OfSize(3) }
-  ])
-  assert.equal(a.filename, 'x.png')
-  const [b] = normalizeSessionAttachments([
-    { mime: 'image/png', filename: 'C:\\Users\\me\\shot.png', data: base64OfSize(3) }
-  ])
-  assert.equal(b.filename, 'shot.png')
-  const [c] = normalizeSessionAttachments([
-    { mime: 'image/png', filename: 'n'.repeat(200), data: base64OfSize(3) }
-  ])
-  assert.equal(c.filename.length, 128)
-})
-
-test('malformed attachments reject the whole request', () => {
-  const png = (data) => [{ mime: 'image/png', data }]
-  assert.equal(normalizeSessionAttachments('nope'), undefined)
-  assert.equal(normalizeSessionAttachments([null]), undefined)
+  assert.equal(normalizeAttachmentFilename('../../etc/x.png'), 'x.png')
   assert.equal(
-    normalizeSessionAttachments([{ mime: 'image/tiff', data: base64OfSize(3) }]),
-    undefined
+    normalizeAttachmentFilename('C:\\Users\\me\\shot.png'),
+    'shot.png'
   )
-  assert.equal(normalizeSessionAttachments(png('')), undefined)
-  assert.equal(normalizeSessionAttachments(png('not base64!!')), undefined)
-  assert.equal(normalizeSessionAttachments(png('AAA')), undefined)
-  assert.equal(normalizeSessionAttachments(png('====')), undefined)
-})
-
-test('attachment size and count limits hold', () => {
-  const oversized = base64OfSize(MAX_SESSION_ATTACHMENT_BYTES + 3)
-  assert.equal(
-    normalizeSessionAttachments([{ mime: 'image/png', data: oversized }]),
-    undefined
-  )
-  const atLimit = base64OfSize(MAX_SESSION_ATTACHMENT_BYTES)
-  assert.equal(
-    normalizeSessionAttachments([{ mime: 'image/png', data: atLimit }]).length,
-    1
-  )
-  const one = { mime: 'image/png', data: base64OfSize(3) }
-  assert.equal(
-    normalizeSessionAttachments(Array(MAX_SESSION_ATTACHMENTS + 1).fill(one)),
-    undefined
-  )
-  // Three near-limit images pass the per-image cap but land over the total.
-  const nearLimit = { mime: 'image/png', data: atLimit }
-  assert.equal(
-    normalizeSessionAttachments([nearLimit, nearLimit, nearLimit]),
-    undefined
-  )
+  assert.equal(normalizeAttachmentFilename('n'.repeat(200)).length, 128)
+  assert.equal(normalizeAttachmentFilename('a\u0000b\u001fc.png'), 'abc.png')
+  assert.equal(normalizeAttachmentFilename(42), undefined)
+  assert.equal(normalizeAttachmentFilename('   '), undefined)
 })
 
 test('attachment keys are per prompt and swept per session', () => {

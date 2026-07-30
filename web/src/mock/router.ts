@@ -286,6 +286,44 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     return json(store.catalog);
   }
 
+  // --- uploads -------------------------------------------------------------
+  // The composer uploads each image as it is picked; prompts carry only keys.
+  if (p === '/api/uploads' && method === 'POST') {
+    const body = init?.body;
+    if (!(body instanceof Blob)) {
+      return json({ error: 'An image body is required' }, 400);
+    }
+    const mime = body.type || 'application/octet-stream';
+    const filenameHeader = new Headers(init?.headers).get('x-upload-filename');
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('read failed'));
+      reader.readAsDataURL(body);
+    });
+    const key = `uploads/${crypto.randomUUID()}`;
+    store.uploads.set(key, {
+      mime,
+      ...(filenameHeader ? { filename: filenameHeader } : {}),
+      dataUrl,
+      size: body.size
+    });
+    return json(
+      {
+        key,
+        mime,
+        ...(filenameHeader ? { filename: filenameHeader } : {}),
+        size: body.size
+      },
+      201
+    );
+  }
+  const uploadMatch = /^\/api\/uploads\/([^/]+)$/.exec(p);
+  if (uploadMatch && method === 'DELETE') {
+    store.uploads.delete(`uploads/${uploadMatch[1]}`);
+    return json({ deleted: true });
+  }
+
   // --- session collection -------------------------------------------------
   if (p === '/api/sessions' && method === 'GET') {
     return json([...store.sessions.values()].map((entry) => entry.view));

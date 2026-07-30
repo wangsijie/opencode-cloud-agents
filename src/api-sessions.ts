@@ -6,6 +6,7 @@
  * SessionAgent Durable Object performs the wake and the dispatch.
  */
 import type { SessionProvider } from '../protocol/types.ts';
+import { claimAttachmentUploads } from './api-uploads';
 import { listSessionProviders } from './sandbox-providers';
 import {
   HttpError,
@@ -40,10 +41,8 @@ import {
   deriveSessionTitle,
   isCleanedLifecycle,
   MAX_SESSION_TITLE_LENGTH,
-  normalizeSessionAttachments,
+  normalizeAttachmentKeys,
   normalizeSessionPrompt,
-  promptAttachmentKey,
-  type SessionAttachmentInput,
   type SessionAttachmentRef,
   type SessionMessage,
   type SessionRecord,
@@ -218,6 +217,22 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   return json(await getSessionView(env, await requireSession(env, record.id)), 202);
 }
 
+/**
+ * Start a session: validate the request, then make exactly one durable write.
+ *
+ * Everything a session is made of — its registry row, its container's identity,
+ * the wake, the clone, the first prompt — is the SessionAgent's work, performed
+ * on an alarm this call only schedules. So the whole of the request the user is
+ * waiting on is three config reads and one Durable Object write, and closing
+ * the tab the moment after pressing Enter cannot leave a session half-made:
+ * either the write landed and the session runs on its own, or it did not and
+ * nothing was created.
+ *
+ * The response is synthesized from the same intent rather than read back, which
+ * is what lets it come before the row exists. It reports a queued dispatch on a
+ * container that has not been asked to do anything yet — true, and exactly what
+ * the session page renders as a cold start.
+ */
 async function createSession(request: Request, env: Env): Promise<Response> {
   // The model catalog is stored config now, so it is read once per request
   // that validates against it, not on every poll.
@@ -226,7 +241,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   // create — the answer is two settings rows and creates are rare — so that
   // configuring the Docker agent takes effect without a redeploy.
   const providers = await listSessionProviders(env);
-  const input = await readCreateSessionInput(request, catalog, providers);
+  const input = await readCreateSessionInput(request, env, catalog, providers);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
   // records — so nothing this session does later needs the catalog again. A
   // request without a repository skips the catalog entirely: there is nothing
@@ -238,8 +253,7 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     throw new HttpError(400, 'Unknown repository');
   }
 
-  const record = await hubStore.createSession(
-    env,
+  const session = hubStore.buildNewSession(
     {
       ...(repo ? { repo } : {}),
       ...(input.provider ? { provider: input.provider } : {}),
@@ -249,50 +263,61 @@ async function createSession(request: Request, env: Env): Promise<Response> {
     },
     catalog
   );
-  try {
-    // The prompt id is fixed here so the staged attachment keys are known
-    // before the prompt becomes durable on the agent's queue.
-    const promptId = crypto.randomUUID();
-    const attachments = await stageAttachments(
-      env,
-      record.id,
-      promptId,
-      input.attachments
-    );
-    await resolveSessionAgent(env, record.id).startSession({
-      sessionId: record.id,
-      instanceId: record.instanceId,
+  const { record } = session;
+  await resolveSessionAgent(env, record.id).startSession({
+    sessionId: record.id,
+    instanceId: record.instanceId,
+    instanceName: session.name,
+    provider: record.provider,
+    ...(record.repoKey ? { repoKey: record.repoKey } : {}),
+    ...(repo ? { repo } : {}),
+    directory: workspaceDirectory(repo?.repoKey),
+    model: record.model,
+    ...(record.variant ? { variant: record.variant } : {}),
+    title: record.title,
+    createdAt: record.createdAt,
+    prompt: input.prompt,
+    promptId: crypto.randomUUID(),
+    ...(input.attachments.length > 0 ? { attachments: input.attachments } : {})
+  });
+  return json(provisionalSessionView(session), 202);
+}
+
+/**
+ * The session view for a session whose container has not been created yet.
+ *
+ * Synthesized rather than read: this is the answer to the create request, and
+ * reading it back would mean waiting for writes that deliberately happen after
+ * it. The runtime reads as a sleeping container, which is what an instance that
+ * has never been woken is — `unknownRuntimeStatus` is not usable here because
+ * its lifecycle is `error`, and an unstarted session is not a broken one.
+ */
+function provisionalSessionView(session: hubStore.NewSession): SessionView {
+  const { record } = session;
+  return {
+    ...record,
+    instance: {
+      id: record.instanceId,
+      name: session.name,
       ...(record.repoKey ? { repoKey: record.repoKey } : {}),
-      directory: workspaceDirectory(repo?.repoKey),
-      model: record.model,
-      ...(record.variant ? { variant: record.variant } : {}),
-      title: record.title,
-      prompt: input.prompt,
-      promptId,
-      ...(attachments.length > 0 ? { attachments } : {})
-    });
-  } catch (error) {
-    // The session exists, so surface the failure on the record instead of
-    // leaving an orphaned instance behind an error response.
-    const message = error instanceof Error ? error.message : String(error);
-    await hubStore
-      .updateSession(env, record.id, { phase: 'failed', lastError: message })
-      .catch(() => undefined);
-    return json(
-      await getSessionView(
-        env,
-        (await hubStore.getSession(env, record.id)) ?? record
-      ),
-      202
-    );
-  }
-  return json(
-    await getSessionView(
-      env,
-      (await hubStore.getSession(env, record.id)) ?? record
-    ),
-    202
-  );
+      ...(session.repo ? { repo: session.repo } : {}),
+      provider: record.provider,
+      lifecycle: 'ready',
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      runtime: {
+        container: 'unknown',
+        provider: record.provider,
+        platformRunning: false,
+        deleting: false,
+        lifecycle: 'sleeping',
+        persistence: { hasBackup: false, trackedBackupCount: 0 }
+      }
+    },
+    status: 'queued',
+    lastActivityAt: deriveLastActivityAt(record),
+    displayTitle: deriveDisplayTitle(record)
+  };
 }
 
 interface CreateSessionInput {
@@ -303,59 +328,31 @@ interface CreateSessionInput {
   model: string;
   variant?: string;
   prompt: string;
-  /** Validated images, still base64 — staged to R2 once the record exists. */
-  attachments: SessionAttachmentInput[];
-}
-
-/** Extract and validate the `attachments` field of a request body. */
-function readAttachmentsField(value: object): SessionAttachmentInput[] {
-  const attachments = normalizeSessionAttachments(
-    (value as { attachments?: unknown }).attachments
-  );
-  if (attachments === undefined) {
-    throw new HttpError(
-      400,
-      'Attachments must be up to 4 images (png, jpeg, webp or gif), 5MB each'
-    );
-  }
-  return attachments;
+  /** Images already in R2, claimed from the uploads the composer made. */
+  attachments: SessionAttachmentRef[];
 }
 
 /**
- * Stage image bytes in R2 and return the references that ride the prompt
- * queue. Staging happens before the prompt becomes durable, so dispatch can
- * never observe a missing object; keys are deterministic per promptId, so a
- * client retry re-puts the same content instead of orphaning copies.
+ * Resolve the `attachments` field of a request body: the keys of uploads the
+ * composer already made. The bytes never travel through here, so a prompt with
+ * four images is the same small request as one with none.
  */
-async function stageAttachments(
+async function readAttachmentsField(
   env: Env,
-  sessionId: string,
-  promptId: string,
-  attachments: SessionAttachmentInput[]
+  value: object
 ): Promise<SessionAttachmentRef[]> {
-  const refs: SessionAttachmentRef[] = [];
-  for (const [index, attachment] of attachments.entries()) {
-    const binary = atob(attachment.data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const key = promptAttachmentKey(sessionId, promptId, index);
-    await env.SESSION_BUCKET.put(key, bytes, {
-      httpMetadata: { contentType: attachment.mime }
-    });
-    refs.push({
-      key,
-      mime: attachment.mime,
-      ...(attachment.filename ? { filename: attachment.filename } : {}),
-      size: bytes.byteLength
-    });
+  const keys = normalizeAttachmentKeys(
+    (value as { attachments?: unknown }).attachments
+  );
+  if (keys === undefined) {
+    throw new HttpError(400, 'Attachments must be up to 4 uploaded images');
   }
-  return refs;
+  return await claimAttachmentUploads(env, keys);
 }
 
 async function readCreateSessionInput(
   request: Request,
+  env: Env,
   catalog: ModelCatalog,
   providers: SessionProvider[]
 ): Promise<CreateSessionInput> {
@@ -410,7 +407,7 @@ async function readCreateSessionInput(
     model: modelRef,
     ...(resolvedVariant ? { variant: resolvedVariant } : {}),
     prompt: text,
-    attachments: readAttachmentsField(value)
+    attachments: await readAttachmentsField(env, value)
   };
 }
 
@@ -501,15 +498,33 @@ function requireRepository(record: SessionRecord, intent: string): void {
   }
 }
 
+/**
+ * The session this route is about.
+ *
+ * A session becomes durable in its SessionAgent before it reaches the registry,
+ * so between the create response and the agent's first alarm there is a moment
+ * where the id the client holds names a session no row describes. Asking the
+ * agent to register itself closes that window on first contact — the page that
+ * navigated straight into the new session is normally what does it — instead of
+ * answering 404 for a session that certainly exists.
+ *
+ * Only a session no agent has ever heard of is missing.
+ */
 async function requireSession(env: Env, id: string): Promise<SessionRecord> {
   if (!isSafeInstanceId(id)) {
     throw new HttpError(400, 'Invalid session id');
   }
   const record = await hubStore.getSession(env, id);
-  if (!record) {
-    throw new HttpError(404, 'Session not found');
+  if (record) {
+    return record;
   }
-  return record;
+  if (await resolveSessionAgent(env, id).ensureRegistered()) {
+    const registered = await hubStore.getSession(env, id);
+    if (registered) {
+      return registered;
+    }
+  }
+  throw new HttpError(404, 'Session not found');
 }
 
 async function getSessionView(
@@ -613,7 +628,11 @@ async function sendSessionPrompt(
   env: Env,
   record: SessionRecord
 ): Promise<Response> {
-  const input = await readSendPromptInput(request, await loadModelCatalog(env));
+  const input = await readSendPromptInput(
+    request,
+    env,
+    await loadModelCatalog(env)
+  );
   if (record.phase === 'lost') {
     // The conversation this session names is gone from the container. A message
     // sent here would either 404 or open a different conversation under this
@@ -632,14 +651,13 @@ async function sendSessionPrompt(
     throw new HttpError(409, 'This session is not ready to receive messages');
   }
   const { attachments, ...prompt } = input;
-  // The prompt id must be fixed before staging so the R2 keys are deterministic
-  // and a client retry overwrites the same objects instead of orphaning more.
+  // A client that retries must not queue a second prompt, so the id is fixed
+  // here when it did not supply one.
   const promptId = prompt.promptId ?? crypto.randomUUID();
-  const refs = await stageAttachments(env, record.id, promptId, attachments);
   await resolveSessionAgent(env, record.id).queuePrompt({
     ...prompt,
     promptId,
-    ...(refs.length > 0 ? { attachments: refs } : {})
+    ...(attachments.length > 0 ? { attachments } : {})
   });
   // Sending a message is proof the user has seen where the conversation stands.
   await hubStore.clearSessionUnread(env, record.id).catch(() => undefined);
@@ -912,13 +930,14 @@ async function requireAwakeRuntime(
   return { instance, runtimeEpoch };
 }
 
-/** A send-message body: the queue input plus images not yet staged to R2. */
+/** A send-message body: the queue input plus the images already uploaded. */
 interface SendPromptRequest extends Omit<QueuePromptInput, 'attachments'> {
-  attachments: SessionAttachmentInput[];
+  attachments: SessionAttachmentRef[];
 }
 
 async function readSendPromptInput(
   request: Request,
+  env: Env,
   catalog: ModelCatalog
 ): Promise<SendPromptRequest> {
   let value: unknown;
@@ -969,7 +988,7 @@ async function readSendPromptInput(
     ...(model === undefined ? {} : { model }),
     ...(typeof variant === 'string' && variant ? { variant } : {}),
     ...(promptId === undefined ? {} : { promptId }),
-    attachments: readAttachmentsField(value)
+    attachments: await readAttachmentsField(env, value)
   };
 }
 

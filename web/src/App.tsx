@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchAuthState,
   fetchCatalog,
   fetchSettingsStatus,
   signOut,
   UNAUTHORIZED_EVENT,
-  type Catalog
+  type Catalog,
+  type SessionView
 } from './api';
 import { enteredNewSessionPage } from './catalog-refresh';
 import { AgentSessionPage } from './components/AgentSessionPage';
@@ -208,10 +209,30 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
 
   const sessionsChanged = useCallback(() => void refresh(true), [refresh]);
 
+  // The create response, kept until the polled list has caught up. A new
+  // session's row is written by its own agent a beat after the response, so the
+  // first poll can still miss it; showing the response's view bridges that gap
+  // the same way the optimistic bubble bridges a send.
+  const [justCreated, setJustCreated] = useState<SessionView>();
+  const sidebarSessions = useMemo(() => {
+    if (!justCreated) {
+      return sessions;
+    }
+    if (sessions?.some((session) => session.id === justCreated.id)) {
+      return sessions;
+    }
+    return [justCreated, ...(sessions ?? [])];
+  }, [sessions, justCreated]);
+  useEffect(() => {
+    if (justCreated && sessions?.some((session) => session.id === justCreated.id)) {
+      setJustCreated(undefined);
+    }
+  }, [sessions, justCreated]);
+
   return (
     <div className="app">
       <Sidebar
-        sessions={sessions}
+        sessions={sidebarSessions}
         listError={listError}
         activeId={route.name === 'session' ? route.id : undefined}
         refresh={refresh}
@@ -263,7 +284,10 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
             catalog={catalog}
             catalogError={catalogError}
             onRefreshRepos={() => loadCatalog(true)}
-            onCreated={sessionsChanged}
+            onCreated={(created) => {
+              setJustCreated(created);
+              sessionsChanged();
+            }}
             onMenu={() => setSidebarOpen(true)}
           />
         )}

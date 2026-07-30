@@ -281,9 +281,14 @@ export function SessionPage({
       ...(lastMessageId(messages) ? { afterMessageId: lastMessageId(messages)! } : {}),
       ...(attachments.length > 0
         ? {
-            attachments: attachments.map((attachment) => ({
-              previewUrl: attachment.dataUrl
-            }))
+            // A preview can lag its upload; a chip whose read has not landed
+            // yet just has no thumbnail in the bubble.
+            attachments: attachments
+              .filter(
+                (attachment): attachment is typeof attachment & { dataUrl: string } =>
+                  typeof attachment.dataUrl === 'string'
+              )
+              .map((attachment) => ({ previewUrl: attachment.dataUrl }))
           }
         : {})
     };

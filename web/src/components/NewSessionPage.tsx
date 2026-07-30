@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { createSession, type Catalog, type SessionProvider } from '../api';
+import {
+  createSession,
+  type Catalog,
+  type SessionProvider,
+  type SessionView
+} from '../api';
 import { navigate, sessionPath } from '../router';
 import {
   AttachButton,
@@ -39,7 +44,8 @@ export function NewSessionPage({
   catalog?: Catalog;
   catalogError?: string;
   onRefreshRepos: () => Promise<void>;
-  onCreated: () => void;
+  /** Receives the created view so the sidebar can show it before the poll. */
+  onCreated: (created: SessionView) => void;
   onMenu: () => void;
 }) {
   // `undefined` is "not chosen yet", which the catalog effect below resolves to
@@ -149,7 +155,7 @@ export function NewSessionPage({
       });
       setPrompt('');
       attachmentsApi.clear();
-      onCreated();
+      onCreated(created);
       navigate(sessionPath(created.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
