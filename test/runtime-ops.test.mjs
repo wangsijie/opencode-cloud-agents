@@ -5,7 +5,9 @@ import {
   injectContainerCredentials,
   provisionRepository,
   readSessionChanges,
-  resolveDefaultBranch
+  resolveDefaultBranch,
+  sanitizeSeededWorkspace,
+  wipeSeededWorkspace
 } from '../src/runtime-ops.ts'
 
 /**
@@ -264,4 +266,33 @@ test('a failed status read is an error, a failed diff is an empty diff', async (
     CHECKOUT
   )
   assert.equal(changes.diff, '')
+})
+
+// Regression: the marker restoreWorkspace writes for THIS session is written
+// before sanitize runs, so a sanitize that removed it would make the next wake
+// read a healthy volume as a lost workspace (inst-14d65198, 2026-07-31).
+test('sanitizing a seed removes donor state but never the persistence marker', async () => {
+  const host = stubHost({}, { '/workspace/owner/repo/.git': true })
+  await sanitizeSeededWorkspace(host, CHECKOUT)
+  const removal = host.calls.exec.find((call) => call.command.includes('rm -rf'))
+  assert.ok(removal, 'sanitize removes donor state')
+  assert.match(removal.command, /\.opencode-state\/data\/opencode/)
+  assert.match(removal.command, /\.opencode-state\/state/)
+  for (const call of host.calls.exec) {
+    assert.ok(
+      !call.command.includes('.opencode-persistence-ready'),
+      `sanitize must not touch the marker: ${call.command}`
+    )
+  }
+})
+
+test('wiping a failed seed spares the persistence marker too', async () => {
+  const host = stubHost()
+  await wipeSeededWorkspace(host, CHECKOUT)
+  for (const call of host.calls.exec) {
+    assert.ok(
+      !call.command.includes('.opencode-persistence-ready'),
+      `wipe must not touch the marker: ${call.command}`
+    )
+  }
 })

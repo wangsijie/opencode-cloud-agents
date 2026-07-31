@@ -77,11 +77,17 @@ export const OPENCODE_XDG_ENV = {
  * OPENCODE_ENV in sandbox.ts). The pnpm store (`.opencode-state/data/pnpm`)
  * and the download caches (`.opencode-state/cache`) stay — they are the whole
  * point of seeding.
+ *
+ * The persistence marker is deliberately NOT in this list. Sanitize runs
+ * *after* `restoreWorkspace` has written the session's own fresh marker, so
+ * removing it here deletes that marker and the next wake reads the surviving
+ * volume as a lost workspace — which is exactly how inst-14d65198 was falsely
+ * marked lost on 2026-07-31. A donor marker cannot leak through a seed in the
+ * first place: promote excludes it at copy time (see prebuild-runner.ts).
  */
 const SEED_DONOR_STATE = [
   '.opencode-state/data/opencode',
-  '.opencode-state/state',
-  PERSISTENCE_MARKER_NAME
+  '.opencode-state/state'
 ];
 
 /**
