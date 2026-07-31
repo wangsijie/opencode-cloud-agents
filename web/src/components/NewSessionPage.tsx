@@ -114,10 +114,15 @@ export function NewSessionPage({
   }, [catalog]);
 
   // Reset effort when the model changes, or when the current choice is no
-  // longer listed for that model.
+  // longer listed for that model. Empty variants clear the field so a leftover
+  // key is never posted with a model that does not accept effort.
   useEffect(() => {
     const variants =
       catalog?.models.find((option) => option.id === model)?.variants ?? [];
+    if (variants.length === 0) {
+      setVariant('');
+      return;
+    }
     const remembered =
       model === catalog?.defaultSelection.model
         ? catalog.defaultSelection.variant
@@ -143,10 +148,14 @@ export function NewSessionPage({
     setError(undefined);
     const attachments = attachmentsApi.attachments;
     try {
+      const effort =
+        variant && modelVariants.some((entry) => entry.id === variant)
+          ? variant
+          : undefined;
       const created = await createSession({
         ...(repoKey ? { repoKey } : {}),
         model,
-        ...(variant ? { variant } : {}),
+        ...(effort ? { variant: effort } : {}),
         prompt: text,
         provider: provider ?? providers?.[0] ?? 'cloudflare',
         ...(attachments.length > 0

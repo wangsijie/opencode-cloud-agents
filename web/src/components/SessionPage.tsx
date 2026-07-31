@@ -92,17 +92,20 @@ export function SessionPage({
     return catalog.models.find((option) => option.id === model)?.variants ?? [];
   }, [catalog, model]);
 
-  // Sessions started before variants were selectable, or after a model switch
-  // in the catalog, may have no effort stored — fill the default so the pill
-  // is never blank when the control is shown.
+  // Keep effort in sync with the selected model. A model with no variants must
+  // drop any leftover key — hiding the pill is not enough; send still reads
+  // this state and a stale effort 400s as "Unknown model variant". Cleared
+  // state is `''` (not `undefined`) so a later session refresh cannot treat it
+  // as "not yet loaded" and re-fill the previous model's effort.
   useEffect(() => {
     if (modelVariants.length === 0) {
+      setVariant('');
       return;
     }
     setVariant((current) =>
       current && modelVariants.some((entry) => entry.id === current)
         ? current
-        : (defaultVariant(modelVariants) ?? current)
+        : (defaultVariant(modelVariants) ?? '')
     );
   }, [model, modelVariants]);
 
@@ -296,10 +299,14 @@ export function SessionPage({
     setPrompt('');
     attachmentsApi.clear();
     try {
+      const effort =
+        variant && modelVariants.some((entry) => entry.id === variant)
+          ? variant
+          : undefined;
       await sendMessage(sessionId, {
         prompt: text,
         ...(model ? { model } : {}),
-        ...(variant ? { variant } : {}),
+        ...(effort ? { variant: effort } : {}),
         promptId: entry.id,
         ...(attachments.length > 0
           ? { attachments: toAttachmentPayload(attachments) }
@@ -621,7 +628,11 @@ export function SessionPage({
                           const variants =
                             catalog.models.find((option) => option.id === next)
                               ?.variants ?? [];
-                          setVariant(defaultVariant(variants));
+                          setVariant(
+                            variants.length > 0
+                              ? (defaultVariant(variants) ?? '')
+                              : ''
+                          );
                         }}
                       />
                     ) : null}
