@@ -119,7 +119,7 @@ const CONFLICT_BLOCK = gitModified('src/routes/login.ts', [
 export function idleChanges(): SessionChanges {
   return {
     observedAt: minutesAgo(1),
-    repoKey: 'wangsijie/opencode-cloud',
+    repoKey: 'acme/api-server',
     branch: 'opencode/refactor-auth',
     defaultBranch: 'main',
     onDefaultBranch: false,
@@ -157,7 +157,7 @@ export function idleChanges(): SessionChanges {
 export function workingChanges(): SessionChanges {
   return {
     observedAt: minutesAgo(0),
-    repoKey: 'wangsijie/logto',
+    repoKey: 'acme/webapp',
     branch: 'opencode/dark-mode-toggle',
     defaultBranch: 'master',
     onDefaultBranch: false,

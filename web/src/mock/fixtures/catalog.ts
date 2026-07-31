@@ -5,13 +5,13 @@ import { daysAgo } from './util';
 export function buildCatalog(): Catalog {
   return {
     repos: [
-      { repoKey: 'wangsijie/opencode-cloud', displayName: 'opencode-cloud' },
-      { repoKey: 'wangsijie/logto', displayName: 'logto' },
+      { repoKey: 'acme/api-server', displayName: 'api-server' },
+      { repoKey: 'acme/webapp', displayName: 'webapp' },
       {
-        repoKey: 'silverhand-io/experimental-payment-reconciliation-service',
+        repoKey: 'acme-labs/experimental-payment-reconciliation-service',
         displayName: 'experimental-payment-reconciliation-service'
       },
-      { repoKey: 'wangsijie/知识库', displayName: '知识库 · 团队文档' }
+      { repoKey: 'acme/知识库', displayName: '知识库 · 团队文档' }
     ],
     models: [
       {

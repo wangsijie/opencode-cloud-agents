@@ -88,7 +88,7 @@ export function buildSettings(): SettingView[] {
         },
         {
           name: 'deploy-preview',
-          repoKey: 'wangsijie/logto',
+          repoKey: 'acme/webapp',
           content:
             '---\nname: deploy-preview\ndescription: Deploy a preview environment.\n---\n\nRun `pnpm deploy:preview` and post the URL.'
         }
@@ -105,7 +105,7 @@ export function buildSettings(): SettingView[] {
         global: '# House rules\n\nAlways run the linter before committing.',
         repos: [
           {
-            repoKey: 'wangsijie/logto',
+            repoKey: 'acme/webapp',
             content: 'Use pnpm, and never touch the generated SDK folders.'
           }
         ]
@@ -127,10 +127,10 @@ export function buildSettings(): SettingView[] {
       configured: true,
       updatedAt: daysAgo(5),
       value: {
-        name: 'Sijie Wang',
-        email: 'wangsijie@silverhand.io',
+        name: 'Dev',
+        email: 'dev@example.com',
         overrides: [
-          { owner: 'silverhand-io', name: 'Sijie @ Silverhand', email: 'sijie@silverhand.io' }
+          { owner: 'acme-labs', name: 'Dev @ Acme', email: 'dev@example.com' }
         ]
       }
     },

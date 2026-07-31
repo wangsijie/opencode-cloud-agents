@@ -10,8 +10,8 @@ import {
 
 const repo = {
   repoKey: 'opencode-cloud',
-  displayName: 'wangsijie/opencode-cloud',
-  cloneUrl: 'git@github.com:wangsijie/opencode-cloud.git',
+  displayName: 'octocat/hello-world',
+  cloneUrl: 'git@github.com:octocat/hello-world.git',
   defaultBranch: 'master'
 }
 

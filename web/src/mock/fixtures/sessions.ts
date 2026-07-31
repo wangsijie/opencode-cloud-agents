@@ -59,8 +59,8 @@ export function buildFixtureSessions(): MockSessionState[] {
     view: {
       id: 'ses_working',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/logto',
-      directory: '/workspace/logto',
+      repoKey: 'acme/webapp',
+      directory: '/workspace/webapp',
       model: 'anthropic/claude-opus-4-5',
       variant: 'medium',
       title: 'Add a dark-mode toggle to the settings page.',
@@ -104,7 +104,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     view: {
       id: 'ses_idle',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       directory: '/workspace/opencode-cloud',
       model: 'anthropic/claude-opus-4-5',
       variant: 'high',
@@ -163,7 +163,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_question',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       directory: '/workspace/opencode-cloud',
       model: 'anthropic/claude-opus-4-5',
       title: 'The sidebar hover highlight flickers when moving across titles.',
@@ -239,7 +239,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_sleeping',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Migrate the web build to Vite 8.',
       displayTitle: 'Migrate the web build to Vite 8',
@@ -279,7 +279,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_waking',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Backfill the D1 migration history.',
       displayTitle: 'Backfill D1 migration history',
@@ -308,7 +308,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const queued = bareState({
     id: 'ses_queued',
     provider: 'cloudflare',
-    repoKey: 'wangsijie/logto',
+    repoKey: 'acme/webapp',
     model: 'anthropic/claude-opus-4-5',
     variant: 'medium',
     title: 'Investigate the memory leak in the SSE fan-out.',
@@ -326,7 +326,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const starting = bareState({
     id: 'ses_starting',
     provider: 'cloudflare',
-    repoKey: 'silverhand-io/experimental-payment-reconciliation-service',
+    repoKey: 'acme-labs/experimental-payment-reconciliation-service',
     model: 'openai/gpt-5.2-codex',
     variant: 'medium',
     title: 'Wire preview deployments for every pull request.',
@@ -344,7 +344,7 @@ export function buildFixtureSessions(): MockSessionState[] {
   const failed = bareState({
     id: 'ses_failed',
     provider: 'cloudflare',
-    repoKey: 'wangsijie/opencode-cloud',
+    repoKey: 'acme/api-server',
     model: 'anthropic/claude-sonnet-4-5',
     title: 'Clone from the repo with a revoked deploy key.',
     displayTitle: 'Clone from repo with a revoked deploy key',
@@ -366,7 +366,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_lost',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/logto',
+      repoKey: 'acme/webapp',
       model: 'anthropic/claude-opus-4-5',
       title: 'Prototype: WASM sqlite in the Worker.',
       displayTitle: 'Prototype: WASM sqlite in the Worker',
@@ -399,7 +399,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_error',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Container stuck in a restart loop.',
       displayTitle: 'Container stuck in a restart loop',
@@ -425,7 +425,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_deleting',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/logto',
+      repoKey: 'acme/webapp',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Teardown test.',
       displayTitle: 'Teardown test',
@@ -453,7 +453,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_cleaned',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/opencode-cloud',
+      repoKey: 'acme/api-server',
       directory: '/workspace/opencode-cloud',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'Tighten the CSP for the asset routes.',
@@ -492,7 +492,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_cjk',
       provider: 'cloudflare',
-      repoKey: 'wangsijie/知识库',
+      repoKey: 'acme/知识库',
       model: 'anthropic/claude-sonnet-4-5',
       title: 'リポジトリの CI を高速化する — キャッシュ導入と並列化の検証',
       displayTitle: 'リポジトリの CI を高速化する — キャッシュ導入と並列化の検証',
@@ -523,7 +523,7 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_long',
       provider: 'cloudflare',
-      repoKey: 'silverhand-io/experimental-payment-reconciliation-service',
+      repoKey: 'acme-labs/experimental-payment-reconciliation-service',
       model: 'anthropic/claude-opus-4-5',
       variant: 'high',
       title:
@@ -620,8 +620,8 @@ export function buildFixtureSessions(): MockSessionState[] {
     ...bareState({
       id: 'ses_docker',
       provider: 'docker',
-      repoKey: 'wangsijie/logto',
-      directory: '/workspace/logto',
+      repoKey: 'acme/webapp',
+      directory: '/workspace/webapp',
       model: 'anthropic/claude-opus-4-5',
       variant: 'high',
       title: 'Profile the connector test suite on the mini.',

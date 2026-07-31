@@ -157,17 +157,17 @@ test('a per-organization override beats the base identity for its owner only', (
     gitIdentity: {
       name: 'Op Erator',
       email: 'op@example.com',
-      overrides: [{ owner: 'Silverhand-io', name: 'Work Me', email: 'work@silverhand.io' }]
+      overrides: [{ owner: 'Acme-Labs', name: 'Work Me', email: 'work@example.com' }]
     }
   }
 
   // Owner match is case-insensitive, as GitHub's owner names are.
-  assert.deepEqual(gitConfigCommands(settings, 'silverhand-io'), [
+  assert.deepEqual(gitConfigCommands(settings, 'acme-labs'), [
     "git config --global user.name 'Work Me'",
-    "git config --global user.email 'work@silverhand.io'"
+    "git config --global user.email 'work@example.com'"
   ])
   // Any other owner — or no owner at all — falls back to the base identity.
-  for (const owner of ['logto-io', undefined]) {
+  for (const owner of ['acme-io', undefined]) {
     assert.deepEqual(gitConfigCommands(settings, owner), [
       "git config --global user.name 'Op Erator'",
       "git config --global user.email 'op@example.com'"

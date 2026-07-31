@@ -1,5 +1,6 @@
 {
-  "name": "opencode-cloud",
+  "name": "opencode-cloud-agents",
+  "license": "MIT",
   "version": "1.0.0",
   "private": true,
   "type": "module",

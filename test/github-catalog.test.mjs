@@ -10,9 +10,9 @@ import {
 
 function repo(overrides = {}) {
   return {
-    name: 'logto',
-    full_name: 'logto-io/logto',
-    ssh_url: 'git@github.com:logto-io/logto.git',
+    name: 'webapp',
+    full_name: 'acme-io/webapp',
+    ssh_url: 'git@github.com:acme-io/webapp.git',
     default_branch: 'master',
     permissions: { push: true },
     ...overrides
@@ -20,7 +20,7 @@ function repo(overrides = {}) {
 }
 
 test('repository keys become safe directory names', () => {
-  assert.equal(normalizeRepoKey('Logto'), 'logto')
+  assert.equal(normalizeRepoKey('Webapp'), 'webapp')
   assert.equal(normalizeRepoKey('my.repo_name'), 'my-repo-name')
   assert.equal(normalizeRepoKey('...'), '')
   assert.equal(normalizeRepoKey('a'.repeat(80)).length, 64)
@@ -31,9 +31,9 @@ test('repository keys become safe directory names', () => {
 test('a GitHub page becomes catalog entries', () => {
   assert.deepEqual(repoDefinitionsFromGithub([repo()]), [
     {
-      repoKey: 'logto',
-      displayName: 'logto-io/logto',
-      cloneUrl: 'git@github.com:logto-io/logto.git',
+      repoKey: 'webapp',
+      displayName: 'acme-io/webapp',
+      cloneUrl: 'git@github.com:acme-io/webapp.git',
       defaultBranch: 'master'
     }
   ])
@@ -58,26 +58,26 @@ test('repositories a session could not finish in are left out', () => {
 test('two repositories with the same name are told apart by owner', () => {
   const repos = repoDefinitionsFromGithub([
     repo(),
-    repo({ full_name: 'wangsijie/logto', ssh_url: 'git@github.com:wangsijie/logto.git' })
+    repo({ full_name: 'octocat/webapp', ssh_url: 'git@github.com:octocat/webapp.git' })
   ])
   assert.deepEqual(
     repos.map((entry) => entry.repoKey),
-    ['logto', 'wangsijie-logto']
+    ['webapp', 'octocat-webapp']
   )
 })
 
 test('keys already taken by an earlier page are not reused', () => {
   const existing = [
     {
-      repoKey: 'logto',
-      displayName: 'logto-io/logto',
-      cloneUrl: 'git@github.com:logto-io/logto.git',
+      repoKey: 'webapp',
+      displayName: 'acme-io/webapp',
+      cloneUrl: 'git@github.com:acme-io/webapp.git',
       defaultBranch: 'master'
     }
   ]
   assert.deepEqual(
     repoDefinitionsFromGithub([repo()], existing).map((entry) => entry.repoKey),
-    ['logto-io-logto']
+    ['acme-io-webapp']
   )
 })
 

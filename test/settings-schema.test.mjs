@@ -108,7 +108,7 @@ test('a skill may be scoped to a repository, once per scope', () => {
   assert.deepEqual(
     skills.validate([
       { name: 'deploy', content: '# doc', repoKey: 'opencode-cloud' },
-      { name: 'deploy', content: '# doc', repoKey: 'logto' }
+      { name: 'deploy', content: '# doc', repoKey: 'webapp' }
     ]),
     []
   )
@@ -120,8 +120,8 @@ test('a skill may be scoped to a repository, once per scope', () => {
   assert.ok(
     skills
       .validate([
-        { name: 'deploy', content: 'a', repoKey: 'logto' },
-        { name: 'deploy', content: 'b', repoKey: 'logto' }
+        { name: 'deploy', content: 'a', repoKey: 'webapp' },
+        { name: 'deploy', content: 'b', repoKey: 'webapp' }
       ])
       .some((error) => error.includes('twice'))
   )
@@ -130,7 +130,7 @@ test('a skill may be scoped to a repository, once per scope', () => {
     skills
       .validate([
         { name: 'deploy', content: 'a' },
-        { name: 'deploy', content: 'b', repoKey: 'logto' }
+        { name: 'deploy', content: 'b', repoKey: 'webapp' }
       ])
       .some((error) => error.includes('collide'))
   )
@@ -158,7 +158,7 @@ test('git identity overrides need a valid owner, no duplicates, and full identit
     identity.validate({
       name: 'Op',
       email: 'op@example.com',
-      overrides: [{ owner: 'silverhand-io', name: 'Work', email: 'work@silverhand.io' }]
+      overrides: [{ owner: 'acme-labs', name: 'Work', email: 'work@example.com' }]
     }),
     []
   )
@@ -171,7 +171,7 @@ test('git identity overrides need a valid owner, no duplicates, and full identit
       .validate({
         name: 'Op',
         email: 'op@example.com',
-        overrides: [{ owner: 'bad owner!', name: 'Work', email: 'work@silverhand.io' }]
+        overrides: [{ owner: 'bad owner!', name: 'Work', email: 'work@example.com' }]
       })
       .some((error) => error.includes('organization name'))
   )
