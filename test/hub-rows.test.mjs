@@ -37,6 +37,8 @@ function fullRow() {
     last_prompt_at: '2026-07-27T02:00:00.000Z',
     cleaned_at: null,
     unread_at: '2026-07-27T03:30:00.000Z',
+    workspace_origin: 'prebuild',
+    boot_step: null,
     created_at: '2026-07-27T01:00:00.000Z',
     updated_at: '2026-07-27T04:00:00.000Z'
   }
@@ -56,7 +58,8 @@ function minimalRow() {
     opencode_session_id: null,
     last_error: null,
     last_prompt_at: null,
-    unread_at: null
+    unread_at: null,
+    workspace_origin: null
   }
 }
 
@@ -90,6 +93,7 @@ test('a full row projects into both record shapes', () => {
     lastPromptAt: '2026-07-27T02:00:00.000Z',
     unreadAt: '2026-07-27T03:30:00.000Z',
     titleLocked: true,
+    workspaceOrigin: 'prebuild',
     createdAt: '2026-07-27T01:00:00.000Z',
     updatedAt: '2026-07-27T04:00:00.000Z'
   })
@@ -110,7 +114,9 @@ test('NULL columns become absent optional fields, not undefined values', () => {
     'lastPromptAt',
     'cleanedAt',
     'unreadAt',
-    'titleLocked'
+    'titleLocked',
+    'workspaceOrigin',
+    'bootStep'
   ]) {
     assert.ok(!(key in session), `${key} should be absent`)
   }

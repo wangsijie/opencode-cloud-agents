@@ -14,7 +14,12 @@
  * {@link opencodeServerEnv} — see the "Design grounding" section of
  * PROTOCOL.md, which records it against `@cloudflare/sandbox@0.12.3`.
  */
-import { sessionRoutes, HEALTHZ_ROUTE, assertSessionId } from '../protocol/routes.ts';
+import {
+  sessionRoutes,
+  prebuildRoutes,
+  HEALTHZ_ROUTE,
+  assertSessionId
+} from '../protocol/routes.ts';
 import {
   OPENCODE_START_TIMEOUT_MS,
   type EnsureRequest,
@@ -29,6 +34,10 @@ import {
   type ListFilesResponse,
   type OpencodeStartRequest,
   type OpencodeStartResponse,
+  type PrebuildDeleteResponse,
+  type PrebuildListResponse,
+  type PrebuildPromoteRequest,
+  type PrebuildPromoteResponse,
   type ReadFileResponse,
   type RemoveResponse,
   type SessionStateResponse,
@@ -146,6 +155,11 @@ export class HostClient {
     return this.capabilities.snapshots;
   }
 
+  /** Whether this host holds per-repo prebuilds and can seed from them. */
+  get supportsPrebuilds(): boolean {
+    return this.capabilities.prebuilds;
+  }
+
   healthz(): Promise<HealthzResponse> {
     return this.json<HealthzResponse>('GET', HEALTHZ_ROUTE);
   }
@@ -251,6 +265,29 @@ export class HostClient {
     );
   }
 
+  /** Archive this session's stopped workspace as its repo's prebuild. */
+  prebuildPromote(
+    input: PrebuildPromoteRequest
+  ): Promise<PrebuildPromoteResponse> {
+    return this.json<PrebuildPromoteResponse>(
+      'POST',
+      sessionRoutes.prebuildPromote(this.sessionId),
+      input
+    );
+  }
+
+  /** Host-level prebuild inventory. Not session-scoped, but same transport. */
+  prebuildList(): Promise<PrebuildListResponse> {
+    return this.json<PrebuildListResponse>('GET', prebuildRoutes.list());
+  }
+
+  prebuildRemove(repoKey: string): Promise<PrebuildDeleteResponse> {
+    return this.json<PrebuildDeleteResponse>(
+      'DELETE',
+      prebuildRoutes.remove(repoKey)
+    );
+  }
+
   /**
    * Forward one request to the container's OpenCode server.
    *
@@ -350,7 +387,7 @@ export async function resolveHostClient(
     return new HostClient(
       serviceBindingTransport(env.SANDBOX_HOST),
       sessionId,
-      { snapshots: true }
+      { snapshots: true, prebuilds: false }
     );
   }
   if (provider === 'docker') {
@@ -363,7 +400,7 @@ export async function resolveHostClient(
     return new HostClient(
       remoteTransport(config.baseUrl, config.token),
       sessionId,
-      { snapshots: false },
+      { snapshots: false, prebuilds: true },
       config.image
     );
   }

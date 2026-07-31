@@ -99,6 +99,17 @@ export function SettingsIcon() {
   );
 }
 
+/** Stacked layers: a warm workspace copy ready to be laid under a session. */
+export function LayersIcon() {
+  return (
+    <Icon>
+      <path d="M12 2 2 7l10 5 10-5-10-5Z" />
+      <path d="m2 17 10 5 10-5" />
+      <path d="m2 12 10 5 10-5" />
+    </Icon>
+  );
+}
+
 export function SignOutIcon() {
   return (
     <Icon>

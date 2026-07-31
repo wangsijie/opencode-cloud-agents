@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Three routes do not need a routing library.
+ * Four routes do not need a routing library.
  *
  * The Worker serves the same shell for every navigable path, so the SPA reads
  * `location.pathname` and keeps the History API in sync.
@@ -16,11 +16,15 @@ import { useEffect, useState } from 'react';
 export type Route =
   | { name: 'list' }
   | { name: 'settings' }
+  | { name: 'prebuilds' }
   | { name: 'session'; id: string; agent?: string };
 
 export function parseRoute(pathname: string): Route {
   if (/^\/settings\/?$/.test(pathname)) {
     return { name: 'settings' };
+  }
+  if (/^\/prebuilds\/?$/.test(pathname)) {
+    return { name: 'prebuilds' };
   }
   const match = /^\/sessions\/([^/]+)(?:\/agent\/([^/]+))?\/?$/.exec(pathname);
   if (!match) {

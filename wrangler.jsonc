@@ -79,6 +79,10 @@
       {
         "class_name": "SessionAgent",
         "name": "SessionAgent"
+      },
+      {
+        "class_name": "PrebuildRunner",
+        "name": "PrebuildRunner"
       }
     ]
   },
@@ -106,6 +110,10 @@
     {
       "deleted_classes": ["LogtoSandbox"],
       "tag": "v6"
+    },
+    {
+      "new_sqlite_classes": ["PrebuildRunner"],
+      "tag": "v7"
     }
   ]
 }

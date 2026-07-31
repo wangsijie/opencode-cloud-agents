@@ -18,6 +18,11 @@ import {
   parseInspect,
   parseListing,
   parsePublishedPort,
+  prebuildHelperArgs,
+  prebuildMetaScript,
+  prebuildPromoteScript,
+  prebuildSeedScript,
+  prebuildVolumeName,
   readFileScript,
   runArgs,
   serverAliveScript,
@@ -27,8 +32,14 @@ import {
   volumeName,
   writeFileScript
 } from '../agent/docker.mjs'
-import { matchSessionRoute as agentMatch } from '../agent/server.mjs'
-import { matchSessionRoute as protocolMatch } from '../protocol/routes.ts'
+import {
+  matchPrebuildRoute as agentPrebuildMatch,
+  matchSessionRoute as agentMatch
+} from '../agent/server.mjs'
+import {
+  matchPrebuildRoute as protocolPrebuildMatch,
+  matchSessionRoute as protocolMatch
+} from '../protocol/routes.ts'
 
 test('names are derived from the session id, and bad ids never reach docker', () => {
   assert.equal(containerName('abc_123-XYZ'), 'oc-session-abc_123-XYZ')
@@ -282,6 +293,8 @@ test('the agent routes exactly as the protocol table does', () => {
     ['POST', '/sessions/s1/opencode/start'],
     ['POST', '/sessions/s1/snapshot'],
     ['POST', '/sessions/s1/snapshot/restore'],
+    ['POST', '/sessions/s1/prebuild/promote'],
+    ['GET', '/sessions/s1/prebuild/promote'],
     ['GET', '/sessions/s1/proxy/event'],
     ['POST', '/sessions/s1/proxy/session/abc/message'],
     ['GET', '/sessions/s1/proxy'],
@@ -297,4 +310,101 @@ test('the agent routes exactly as the protocol table does', () => {
       `${method} ${path}`
     )
   }
+})
+
+test('the agent routes prebuilds exactly as the protocol table does', () => {
+  const cases = [
+    ['GET', '/prebuilds'],
+    ['POST', '/prebuilds'],
+    ['DELETE', '/prebuilds/opencode-cloud'],
+    ['DELETE', '/prebuilds/Not-Valid'],
+    ['GET', '/prebuilds/opencode-cloud'],
+    ['DELETE', '/prebuilds/a/b']
+  ]
+  for (const [method, path] of cases) {
+    assert.deepEqual(
+      agentPrebuildMatch(method, path),
+      protocolPrebuildMatch(method, path),
+      `${method} ${path}`
+    )
+  }
+})
+
+test('prebuild volume names are constrained like repo keys', () => {
+  assert.equal(prebuildVolumeName('opencode-cloud'), 'oc-prebuild-opencode-cloud')
+  assert.throws(() => prebuildVolumeName('Not Valid'))
+  assert.throws(() => prebuildVolumeName('../escape'))
+})
+
+test('the seed script reports an unpromoted volume with exit 3', () => {
+  const script = prebuildSeedScript()
+  assert.match(script, /exit 3/)
+  assert.match(script, /cp -a \/src\/current\/\. \/dst\//)
+})
+
+test('the promote script publishes atomically and prunes generations', () => {
+  const script = prebuildPromoteScript({
+    generation: 'gen-00001785400000000',
+    repoKey: 'opencode-cloud',
+    updatedAt: '2026-07-31T02:00:00.000Z',
+    exclude: ['.opencode-persistence-ready']
+  })
+  // The staging directory is dot-prefixed so the generation prune's `gen-`
+  // filter can never match it, and the publish is a single `mv`.
+  assert.match(script, /mkdir \/dst\/\.staging/)
+  assert.match(script, /rm -rf \/dst\/\.staging\/'\.opencode-persistence-ready'/)
+  assert.match(script, /mv \/dst\/\.staging \/dst\/gen-00001785400000000/)
+  assert.match(script, /mv -T \/dst\/\.current-next \/dst\/current/)
+  assert.match(script, /head -n -2/)
+  assert.throws(() =>
+    prebuildPromoteScript({
+      generation: 'nope',
+      repoKey: 'opencode-cloud',
+      updatedAt: '2026-07-31T02:00:00.000Z'
+    })
+  )
+  assert.throws(() =>
+    prebuildPromoteScript({
+      generation: 'gen-1',
+      repoKey: 'opencode-cloud',
+      updatedAt: '2026-07-31T02:00:00.000Z',
+      exclude: ['../outside']
+    })
+  )
+  assert.throws(() =>
+    prebuildPromoteScript({
+      generation: 'gen-1',
+      repoKey: 'opencode-cloud',
+      updatedAt: '2026-07-31T02:00:00.000Z',
+      exclude: ['/absolute']
+    })
+  )
+})
+
+test('helper containers mount exactly what they are told', () => {
+  assert.deepEqual(
+    prebuildHelperArgs({
+      image: 'opencode-session:latest',
+      mounts: ['oc-prebuild-x:/src:ro', 'oc-vol-s1:/dst'],
+      script: 'echo hi'
+    }),
+    [
+      'run',
+      '--rm',
+      '--volume',
+      'oc-prebuild-x:/src:ro',
+      '--volume',
+      'oc-vol-s1:/dst',
+      'opencode-session:latest',
+      'sh',
+      '-c',
+      'echo hi'
+    ]
+  )
+})
+
+test('the meta script prints one tab-separated line per mounted volume', () => {
+  const script = prebuildMetaScript(3)
+  assert.match(script, /-lt 3/)
+  assert.match(script, /meta\.json/)
 })

@@ -12,6 +12,7 @@ import type {
   WorkspaceEntry,
   WorkspaceListing
 } from '../api';
+import { prebuildState, startMockRun } from './fixtures/prebuilds';
 import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
 import { minutesAgo } from './fixtures/util';
 import {
@@ -265,6 +266,41 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     const match = /^\/api\/settings\/([^/]+)$/.exec(p);
     if (match && method === 'PUT') {
       return putSetting(decodeURIComponent(match[1]), parseBody(init));
+    }
+  }
+
+  // --- prebuilds ----------------------------------------------------------
+  if (p === '/api/prebuilds' && method === 'GET') {
+    return json({
+      prebuilds: [...prebuildState.prebuilds.values()],
+      runs: Object.fromEntries(prebuildState.runs)
+    });
+  }
+  if (p === '/api/prebuilds' && method === 'POST') {
+    const { repoKey } = parseBody(init);
+    if (typeof repoKey !== 'string' || repoKey.length === 0) {
+      return json({ error: 'Unknown repository' }, 400);
+    }
+    if (prebuildState.runs.get(repoKey)?.status === 'running') {
+      return json(
+        { error: 'A prebuild run is already underway for this repository' },
+        409
+      );
+    }
+    return json({ runId: startMockRun(repoKey) }, 202);
+  }
+  {
+    const match = /^\/api\/prebuilds\/(.+)$/.exec(p);
+    if (match && method === 'DELETE') {
+      const repoKey = decodeURIComponent(match[1]);
+      if (prebuildState.runs.get(repoKey)?.status === 'running') {
+        return json(
+          { error: 'A prebuild run is underway; wait for it to finish' },
+          409
+        );
+      }
+      prebuildState.prebuilds.delete(repoKey);
+      return json({ removed: true });
     }
   }
 

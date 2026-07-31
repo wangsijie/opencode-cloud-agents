@@ -131,6 +131,13 @@ export class CloudflareSandboxHost extends BaseSandbox<Env> {
         return jsonResponse(await this.snapshot(request));
       case 'snapshot-restore':
         return jsonResponse(await this.restoreSnapshot(request));
+      case 'prebuild-promote':
+        // The site branches on `capabilities.prebuilds`, so like the Docker
+        // host's snapshot routes this is the path nobody should reach.
+        throw new HostRequestError(
+          'PREBUILD_UNSUPPORTED',
+          'This host holds no prebuilds yet'
+        );
     }
   }
 

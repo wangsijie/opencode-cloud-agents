@@ -11,6 +11,7 @@ import {
 import { enteredNewSessionPage } from './catalog-refresh';
 import { AgentSessionPage } from './components/AgentSessionPage';
 import { NewSessionPage } from './components/NewSessionPage';
+import { PrebuildsPage } from './components/PrebuildsPage';
 import { SessionPage } from './components/SessionPage';
 import { SettingsPage } from './components/SettingsPage';
 import { SetupPasswordPage } from './components/SetupPasswordPage';
@@ -258,6 +259,11 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
             forced={false}
             onMenu={() => setSidebarOpen(true)}
             onSettingsChanged={() => undefined}
+          />
+        ) : route.name === 'prebuilds' ? (
+          <PrebuildsPage
+            catalog={catalog}
+            onMenu={() => setSidebarOpen(true)}
           />
         ) : route.name === 'session' && route.agent ? (
           // Keyed to the subagent as well as the session, so stepping between

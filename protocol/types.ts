@@ -32,6 +32,7 @@ export type HostErrorCode =
   | 'OPENCODE_START_FAILED'
   | 'SNAPSHOT_UNSUPPORTED'
   | 'SNAPSHOT_NOT_FOUND'
+  | 'PREBUILD_UNSUPPORTED'
   | 'HOST_ERROR';
 
 export interface HostErrorBody {
@@ -57,12 +58,25 @@ export interface HostCapabilities {
    * not.
    */
   snapshots: boolean;
+  /**
+   * Whether the host holds per-repo prebuilds (warm workspace copies) and can
+   * seed a new workspace from one. The Docker host keeps them on local
+   * volumes; the Cloudflare host does not support them yet.
+   */
+  prebuilds: boolean;
 }
 
 /** POST /sessions/:id/ensure */
 export interface EnsureRequest {
   /** Container image reference. Hosts with a fixed image ignore it. */
   image?: string;
+  /**
+   * Repository this session works in. A prebuilds-capable host that holds a
+   * prebuild for it seeds a *newly created* workspace from that copy; an
+   * existing workspace is never touched. Mechanical on the host side — what a
+   * seeded workspace still needs (sanitizing, fetch) is the caller's business.
+   */
+  repoKey?: string;
 }
 
 export interface EnsureResponse {
@@ -76,6 +90,12 @@ export interface EnsureResponse {
    * a workspace-loss marker. Ephemeral hosts mirror `created`.
    */
   workspaceCreated: boolean;
+  /**
+   * True when the just-created workspace was seeded from the repo's prebuild.
+   * The caller must sanitize such a workspace before starting OpenCode in it.
+   * Absent on hosts without prebuilds and whenever `workspaceCreated` is false.
+   */
+  seededFromPrebuild?: boolean;
 }
 
 /** GET /sessions/:id */
@@ -236,4 +256,51 @@ export interface SnapshotRestoreRequest {
 
 export interface SnapshotRestoreResponse {
   restored: boolean;
+}
+
+/**
+ * Repository keys reach the prebuild routes as path segments and volume name
+ * fragments, so they are constrained like session ids. Mirrors the site's own
+ * repo-key rule (src/repos.ts), which is stricter still.
+ */
+export const REPO_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * POST /sessions/:id/prebuild/promote — prebuilds hosts only.
+ * Archive the session's *stopped* workspace as the repo's prebuild. The copy
+ * replaces the previous prebuild atomically; concurrent seeds keep reading the
+ * generation they opened.
+ */
+export interface PrebuildPromoteRequest {
+  repoKey: string;
+  /**
+   * Workspace-relative paths to drop from the promoted copy — caller-owned
+   * bookkeeping files (the persistence marker) that must not leak into a
+   * seeded workspace. Relative, no `..`.
+   */
+  exclude?: string[];
+}
+
+export interface PrebuildPromoteResponse {
+  promoted: boolean;
+  /** Bytes of the promoted copy, when the host could measure it. */
+  sizeBytes?: number;
+}
+
+/** One prebuild a host holds, as GET /prebuilds reports it. */
+export interface PrebuildInfo {
+  repoKey: string;
+  /** When the prebuild was last promoted. */
+  updatedAt: string;
+  sizeBytes?: number;
+}
+
+/** GET /prebuilds — prebuilds hosts only. */
+export interface PrebuildListResponse {
+  prebuilds: PrebuildInfo[];
+}
+
+/** DELETE /prebuilds/:repoKey — idempotent, like session remove. */
+export interface PrebuildDeleteResponse {
+  removed: boolean;
 }

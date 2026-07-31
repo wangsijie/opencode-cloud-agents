@@ -8,7 +8,13 @@ import {
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
 import { useResizable } from '../useResizable';
-import { DotsIcon, PlusIcon, SettingsIcon, SignOutIcon } from './icons';
+import {
+  DotsIcon,
+  LayersIcon,
+  PlusIcon,
+  SettingsIcon,
+  SignOutIcon
+} from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
 
@@ -171,6 +177,18 @@ export function Sidebar({
 
       <div className="sidebar-footer">
         <div className="sidebar-account-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Prebuilds"
+            title="Prebuilds"
+            onClick={() => {
+              navigate('/prebuilds');
+              onClose();
+            }}
+          >
+            <LayersIcon />
+          </button>
           <button
             className="icon-button"
             type="button"

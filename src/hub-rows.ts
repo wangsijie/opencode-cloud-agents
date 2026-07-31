@@ -11,9 +11,11 @@ import type { SessionProvider } from '../protocol/types.ts';
 import type { InstanceLifecycle, InstanceRecord } from './instances.ts';
 import { isSafeRepoDefinition, type RepoDefinition } from './repos.ts';
 import type {
+  BootStep,
   SessionPhase,
   SessionRecord,
-  SessionStatePatch
+  SessionStatePatch,
+  WorkspaceOrigin
 } from './sessions.ts';
 
 /**
@@ -45,6 +47,8 @@ export interface SessionRow {
   last_prompt_at: string | null;
   cleaned_at: string | null;
   unread_at: string | null;
+  workspace_origin: string | null;
+  boot_step: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +91,10 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.cleaned_at === null ? {} : { cleanedAt: row.cleaned_at }),
     ...(row.unread_at === null ? {} : { unreadAt: row.unread_at }),
     ...(row.title_locked ? { titleLocked: true } : {}),
+    ...(row.workspace_origin === null
+      ? {}
+      : { workspaceOrigin: row.workspace_origin as WorkspaceOrigin }),
+    ...(row.boot_step === null ? {} : { bootStep: row.boot_step as BootStep }),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

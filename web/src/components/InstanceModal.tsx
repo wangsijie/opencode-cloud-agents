@@ -90,6 +90,16 @@ export function InstanceModal({
                 ? 'Snapshotted when the container sleeps'
                 : 'Kept on a named volume between containers'}
             </dd>
+            {session.workspaceOrigin ? (
+              <>
+                <dt>Started from</dt>
+                <dd>
+                  {session.workspaceOrigin === 'prebuild'
+                    ? 'Seeded from the repository prebuild'
+                    : 'A fresh clone'}
+                </dd>
+              </>
+            ) : null}
           </dl>
 
           {/*

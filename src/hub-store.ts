@@ -39,8 +39,10 @@ import {
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
 import {
   cleanupCutoff,
+  type BootStep,
   type SessionRecord,
-  type SessionStatePatch
+  type SessionStatePatch,
+  type WorkspaceOrigin
 } from './sessions';
 
 const REPO_CATALOG_SETTING_KEY = 'repo-catalog';
@@ -334,6 +336,39 @@ export async function markSessionRead(
 export async function clearSessionUnread(env: Env, id: string): Promise<void> {
   await env.DB.prepare('UPDATE sessions SET unread_at = NULL WHERE id = ?1')
     .bind(id)
+    .run();
+}
+
+/**
+ * Advance (or, with `null`, clear) the transient wake step the boot screen
+ * words itself with. Presentation only, so like the unread marker it never
+ * touches `updated_at` — and a write that fails must never fail a wake, which
+ * is the caller's job to guarantee.
+ */
+export async function setSessionBootStep(
+  env: Env,
+  id: string,
+  step: BootStep | null
+): Promise<void> {
+  await env.DB.prepare('UPDATE sessions SET boot_step = ?2 WHERE id = ?1')
+    .bind(id, step)
+    .run();
+}
+
+/**
+ * Record how this session's workspace was first materialized. Write-once by
+ * construction — the guard keeps a later wake (a snapshot restore, a volume
+ * loss re-clone) from rewriting history.
+ */
+export async function setSessionWorkspaceOrigin(
+  env: Env,
+  id: string,
+  origin: WorkspaceOrigin
+): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE sessions SET workspace_origin = ?2 WHERE id = ?1 AND workspace_origin IS NULL'
+  )
+    .bind(id, origin)
     .run();
 }
 

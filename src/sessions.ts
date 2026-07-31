@@ -98,9 +98,26 @@ export interface SessionRecord {
    * the opening prompt — but never on a name somebody chose.
    */
   titleLocked?: boolean;
+  /**
+   * How this session's workspace was first materialized: a fresh clone, or a
+   * seed from the repo's prebuild. Written once, at the first wake that
+   * creates the workspace; absent on sessions that predate the column.
+   * Presentation only — nothing branches on it.
+   */
+  workspaceOrigin?: WorkspaceOrigin;
+  /**
+   * Where the current wake is, while one is in flight ('seeding', 'cloning');
+   * cleared when the wake completes. The boot screen words itself with this.
+   * Presentation only — nothing branches on it.
+   */
+  bootStep?: BootStep;
   createdAt: string;
   updatedAt: string;
 }
+
+export type WorkspaceOrigin = 'clone' | 'prebuild';
+
+export type BootStep = 'seeding' | 'cloning';
 
 /** Partial state reported back by the SessionAgent after each dispatch step. */
 export interface SessionStatePatch {
