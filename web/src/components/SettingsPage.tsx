@@ -685,8 +685,9 @@ function EnvVarsSection({
             onChange={(event) => edit(index, { name: event.target.value })}
           />
           <input
-            type="password"
+            type="text"
             autoComplete="off"
+            spellCheck={false}
             placeholder={row.stored ? 'Configured — blank keeps it' : 'value'}
             aria-label="Variable value"
             value={row.value}
