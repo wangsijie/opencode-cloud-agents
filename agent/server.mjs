@@ -159,8 +159,15 @@ async function handle(context, request, response) {
   const startedAt = Date.now();
   const url = new URL(request.url ?? '/', 'http://agent');
   response.on('finish', () => {
+    // Only failures are written. A successful request is not evidence of
+    // anything — the site polls every session's state on every list refresh,
+    // and at 58 sessions that one line accounted for 87% of a log nobody read.
+    // Dropping it is what keeps this file small enough to need no rotation.
+    if (response.statusCode < 400) {
+      return;
+    }
     context.log(
-      'info',
+      'error',
       `${request.method} ${url.pathname} → ${response.statusCode} ${
         Date.now() - startedAt
       }ms`

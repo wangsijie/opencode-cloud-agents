@@ -216,10 +216,15 @@ sweep to follow. It also means a session must be deleted from the Hub *before*
 the Docker settings are cleared — with no agent URL the site cannot reach the
 host, and the session sits in `deleting`.
 
-**Reading logs.** The agent logs one line per request (method, path, status,
-duration) and never a body. A session's OpenCode server logs inside its
-container at `/tmp/opencode-server.log`; a failed `opencode/start` quotes the
-tail of it in the 502.
+**Reading logs.** The agent logs one line per *failed* request (method, path,
+status, duration) and never a body; a 2xx is written nowhere. The site polls
+every session's state on every list refresh, so success lines grow with the
+number of sessions rather than with anything worth reading — logging only
+failures is what keeps this file small enough to need no rotation. Lifecycle
+events that are neither a request nor a failure (an image replacement, a
+prebuild seed or promote) are still logged. A session's OpenCode server logs
+inside its container at `/tmp/opencode-server.log`; a failed `opencode/start`
+quotes the tail of it in the 502.
 
 ## Notes on the implementation
 
