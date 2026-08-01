@@ -7,6 +7,7 @@ ARG PNPM_VERSION=11.17.0
 ARG NOTION_MCP_VERSION=2.5.1
 ARG FIGMA_MCP_VERSION=0.13.2
 ARG RCLONE_VERSION=1.74.4
+ARG CLOUDFLARED_VERSION=2026.7.3
 
 # The base image includes Git but not an SSH client. Ubuntu 22.04's gh package
 # is several years old, so install the current CLI from GitHub's official release.
@@ -46,6 +47,22 @@ RUN case "$(dpkg --print-architecture)" in \
     && dpkg --install /tmp/rclone.deb \
     && rm -f /tmp/rclone.deb \
     && test "$(env -u RCLONE_VERSION rclone version | awk 'NR == 1 { print $2 }')" = "v${RCLONE_VERSION}"
+
+# cloudflared exists for one purpose: the expose-dev-server built-in skill
+# (src/builtin-skills.ts) lets the agent open a quick tunnel to a dev server
+# when — and only when — the user asks for one. The image carries only the
+# binary; nothing starts it.
+RUN case "$(dpkg --print-architecture)" in \
+        amd64) CLOUDFLARED_ARCH=amd64; CLOUDFLARED_SHA256=9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17 ;; \
+        arm64) CLOUDFLARED_ARCH=arm64; CLOUDFLARED_SHA256=65259e652a7bea08bf5df603233ab22b8bf3116af8df9f9206209af6a1b955c0 ;; \
+        *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --silent --show-error \
+        "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${CLOUDFLARED_ARCH}" \
+        --output /usr/local/bin/cloudflared \
+    && echo "${CLOUDFLARED_SHA256}  /usr/local/bin/cloudflared" | sha256sum --check --status \
+    && chmod 0755 /usr/local/bin/cloudflared \
+    && test "$(cloudflared --version | awk '{ print $3 }')" = "${CLOUDFLARED_VERSION}"
 
 # Keep the Cloudflare runtime separate from the agent so OpenCode can be
 # upgraded independently of the Sandbox SDK release cadence.

@@ -10,6 +10,7 @@
  * The file/command derivations are pure so their shapes are unit-testable;
  * only `loadContainerCredentials` reads the database.
  */
+import { BUILTIN_SKILLS } from './builtin-skills.ts';
 import {
   SETTING_KEYS,
   readSetting,
@@ -111,7 +112,7 @@ export async function loadContainerCredentials(
  * own: one token serves the Worker's repo listing and the container's `gh`.
  * Skills and AGENTS.md land under the global config root, which the R2
  * snapshot never covers, so what is written here is always exactly the
- * settings list.
+ * built-in skills plus the settings list.
  *
  * `repoKey` is the instance's repository; it selects the per-repo AGENTS.md
  * addition and the repo-scoped skills when the settings hold any. Repo-scoped
@@ -148,7 +149,16 @@ export function credentialFiles(
       mode: '600'
     });
   }
+  // Built-ins first, settings skills over them: a settings skill sharing a
+  // built-in's name replaces it (see src/builtin-skills.ts).
+  const skills = new Map<string, SkillSetting>();
+  for (const skill of BUILTIN_SKILLS) {
+    skills.set(skill.name, skill);
+  }
   for (const skill of resolveSkills(settings.skills, repoKey)) {
+    skills.set(skill.name, skill);
+  }
+  for (const skill of skills.values()) {
     files.push({
       path: `${CONTAINER_SKILLS_ROOT}/${skill.name}/SKILL.md`,
       content: ensureTrailingNewline(skill.content),

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { BUILTIN_SKILLS } from '../src/builtin-skills.ts'
 import {
   CONTAINER_AGENTS_MD_PATH,
   CONTAINER_SKILLS_ROOT,
@@ -52,7 +53,7 @@ test('every configured credential lands at its container path with its mode', ()
     '# skill\n'
   )
   assert.ok(byPath.has(`${CONTAINER_SKILLS_ROOT}/review/SKILL.md`))
-  assert.equal(files.length, 5)
+  assert.equal(files.length, 5 + BUILTIN_SKILLS.length)
 })
 
 test('the merged AGENTS.md lands at the global config path', () => {
@@ -65,17 +66,16 @@ test('the merged AGENTS.md lands at the global config path', () => {
     }
   }
 
-  const files = credentialFiles(settings, 'opencode-cloud')
-  assert.equal(files.length, 1)
-  assert.equal(files[0].path, CONTAINER_AGENTS_MD_PATH)
-  assert.equal(files[0].mode, '644')
+  const agentsFile = (files) => files.find((file) => file.path === CONTAINER_AGENTS_MD_PATH)
+
+  const merged = agentsFile(credentialFiles(settings, 'opencode-cloud'))
+  assert.equal(merged.mode, '644')
   // Global first, the repo addition after, one blank line between.
-  assert.equal(files[0].content, '# House rules\n\nUse pnpm.\n')
+  assert.equal(merged.content, '# House rules\n\nUse pnpm.\n')
 
   // A session on another repo — or none — gets only the global block.
   for (const repoKey of ['other-repo', undefined]) {
-    const globalOnly = credentialFiles(settings, repoKey)
-    assert.equal(globalOnly[0].content, '# House rules\n')
+    assert.equal(agentsFile(credentialFiles(settings, repoKey)).content, '# House rules\n')
   }
 })
 
@@ -91,10 +91,9 @@ test('a repo-scoped skill reaches only that repository, at the global path', () 
   // Repo keys compare case-insensitively, like the catalog's lowercasing.
   const matching = credentialFiles(settings, 'opencode-cloud')
   const paths = matching.map((file) => file.path)
-  assert.deepEqual(paths, [
-    `${CONTAINER_SKILLS_ROOT}/babysit/SKILL.md`,
-    `${CONTAINER_SKILLS_ROOT}/deploy/SKILL.md`
-  ])
+  for (const name of ['babysit', 'deploy']) {
+    assert.ok(paths.includes(`${CONTAINER_SKILLS_ROOT}/${name}/SKILL.md`))
+  }
 
   // A session on another repo — or none — gets only the global skill.
   for (const repoKey of ['other-repo', undefined]) {
@@ -125,10 +124,30 @@ test('resolveAgentsMd merges what exists and yields nothing for nothing', () => 
   )
 })
 
-test('nothing configured writes nothing', () => {
-  assert.deepEqual(credentialFiles({ env: [], skills: [] }), [])
+test('nothing configured writes only the built-in skills', () => {
+  assert.deepEqual(
+    credentialFiles({ env: [], skills: [] }).map((file) => file.path),
+    BUILTIN_SKILLS.map((skill) => `${CONTAINER_SKILLS_ROOT}/${skill.name}/SKILL.md`)
+  )
   assert.deepEqual(gitConfigCommands({ env: [], skills: [] }), [])
   assert.deepEqual(containerEnv({ env: [], skills: [] }), {})
+})
+
+test('built-in skills reach every container; a same-name settings skill replaces one', () => {
+  const builtinPath = `${CONTAINER_SKILLS_ROOT}/expose-dev-server/SKILL.md`
+
+  const stock = credentialFiles({ env: [], skills: [] })
+  const builtin = stock.find((file) => file.path === builtinPath)
+  assert.equal(builtin.mode, '644')
+  assert.ok(builtin.content.includes('cloudflared tunnel --url'))
+  assert.ok(builtin.content.includes('only when the user has explicitly asked'))
+
+  const overridden = credentialFiles({
+    env: [],
+    skills: [{ name: 'expose-dev-server', content: '# mine' }]
+  })
+  const replacements = overridden.filter((file) => file.path === builtinPath)
+  assert.deepEqual(replacements, [{ path: builtinPath, content: '# mine\n', mode: '644' }])
 })
 
 test('git identity and signing are configured only for what exists', () => {
@@ -190,10 +209,9 @@ test('a pasted MCP auth store is staged outside the snapshot, mode 600', () => {
     skills: [],
     mcpAuth: { content: '{"figma":{"access":"tok"}}', token: '2026-07-29T00:00:00Z' }
   })
-  assert.equal(files.length, 1)
-  assert.equal(files[0].path, MCP_AUTH_STAGING)
-  assert.equal(files[0].mode, '600')
-  assert.equal(files[0].content, '{"figma":{"access":"tok"}}\n')
+  const staged = files.find((file) => file.path === MCP_AUTH_STAGING)
+  assert.equal(staged.mode, '600')
+  assert.equal(staged.content, '{"figma":{"access":"tok"}}\n')
 })
 
 test('the seed command is guarded by the revision marker and never carries the store', () => {

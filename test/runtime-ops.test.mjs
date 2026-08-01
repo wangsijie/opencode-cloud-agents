@@ -75,7 +75,7 @@ test('credentials are one removal, one batch and one config command', async () =
   assert.equal(host.calls.writeBatch.length, 1)
   const written = host.calls.writeBatch[0]
   assert.deepEqual(
-    written.map((file) => file.path),
+    written.map((file) => file.path).filter((path) => !path.includes('expose-dev-server')),
     [
       '/root/.ssh/id_ed25519',
       '/root/.ssh/id_ed25519.pub',
@@ -101,7 +101,11 @@ test('no credentials at all still clears what a previous wake wrote', async () =
     host.calls.exec[1].command,
     /^if \[ -e '\/workspace\/\.opencode-state\/data\/opencode\/\.mcp-auth\.seeded' \]/
   )
-  assert.equal(host.calls.writeBatch.length, 0)
+  // The built-in skills still ride the batch — they are not credentials.
+  assert.equal(host.calls.writeBatch.length, 1)
+  assert.ok(
+    host.calls.writeBatch[0].every((file) => file.path.startsWith('/root/.config/opencode/skills/'))
+  )
   assert.deepEqual(env, {})
 })
 
@@ -118,8 +122,9 @@ test('a stored MCP auth store is staged in the batch and installed by the guarde
   )
 
   assert.equal(host.calls.writeBatch.length, 1)
-  const [staged] = host.calls.writeBatch[0]
-  assert.equal(staged.path, '/root/.mcp-auth.pending.json')
+  const staged = host.calls.writeBatch[0].find(
+    (file) => file.path === '/root/.mcp-auth.pending.json'
+  )
   assert.equal(staged.mode, '600')
 
   assert.equal(host.calls.exec.length, 2)
