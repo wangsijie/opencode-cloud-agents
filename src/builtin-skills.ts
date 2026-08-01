@@ -44,11 +44,37 @@ sleep 3 && grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com' /tmp/cloudflared-3
 If grep prints nothing, wait a moment and run it again. Then report the URL
 to the user verbatim, together with both caveats below.
 
+## The visitor is not on localhost
+
+Through the tunnel the browser's origin is \`https://….trycloudflare.com\`,
+not \`http://localhost:<port>\`. Before reporting the URL, check for what
+that breaks — and prefer the smallest edit, clearly marked or reverted once
+the tunnel closes:
+
+- **Host allow-list.** Vite rejects requests for hosts it does not know:
+  add the tunnel hostname to \`server.allowedHosts\` in the dev config (or
+  set it to \`true\` while debugging). webpack-dev-server has the same knob
+  under the same name.
+- **Frontend and backend on different ports.** One tunnel maps one port.
+  Route the API through the frontend dev server's own proxy (Vite
+  \`server.proxy\`, Next.js \`rewrites\`, CRA \`proxy\`) so a single tunnel
+  serves both, same-origin, with relative \`/api/…\` URLs. Only when that is
+  impossible, open a second tunnel for the backend (its own log file), point
+  the frontend's API base URL at it, and open the backend's CORS to the
+  frontend's tunnel origin.
+- **Hardcoded \`localhost\` URLs.** An absolute \`http://localhost:<port>\`
+  in frontend code resolves to the visitor's own machine and fails; make it
+  relative. OAuth callbacks and cookie domains registered for localhost also
+  will not work through the tunnel — say so rather than chasing them.
+
 ## Stop
 
 \`\`\`bash
 pkill cloudflared
 \`\`\`
+
+That kills every tunnel; a single one can be stopped by the port instead:
+\`pkill -f 'tunnel --url http://localhost:3000'\`.
 
 Stop the tunnel when the debugging it was opened for is over, or whenever the
 user asks.
