@@ -29,10 +29,17 @@ external URL, never merely because a dev server is running.
 
 ## Start
 
+Always pass \`--protocol http2\`. QUIC (cloudflared's default) is blocked on
+this network, and the failure is silent in a misleading way: startup prints
+\`SUMMARY: Environment ready with degraded transport … will proceed using
+'http2'\`, then cloudflared dials QUIC anyway and every request comes back
+530. The self-check's conclusion does not match its behavior, so do not rely
+on an automatic fallback.
+
 With the server listening on, say, port 3000:
 
 \`\`\`bash
-nohup cloudflared tunnel --url http://localhost:3000 >/tmp/cloudflared-3000.log 2>&1 &
+nohup cloudflared tunnel --protocol http2 --url http://localhost:3000 >/tmp/cloudflared-3000.log 2>&1 &
 \`\`\`
 
 The URL appears in the log banner within a few seconds:
@@ -41,31 +48,43 @@ The URL appears in the log banner within a few seconds:
 sleep 3 && grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com' /tmp/cloudflared-3000.log | head -1
 \`\`\`
 
-If grep prints nothing, wait a moment and run it again. Then report the URL
-to the user verbatim, together with both caveats below.
+If grep prints nothing, wait a moment and run it again.
+
+## Verify before reporting
+
+The banner prints the URL even when the tunnel cannot carry traffic. A
+printed URL is not a working URL — curl it yourself first:
+
+\`\`\`bash
+curl -sS -o /dev/null -w '%{http_code}\\n' https://<subdomain>.trycloudflare.com
+\`\`\`
+
+530 means the tunnel is up on Cloudflare's side but has no working edge
+connection — almost always the QUIC problem above; kill it and restart with
+\`--protocol http2\`. 502/504 means the tunnel works and the local server does
+not. Only once you get the status the local server actually returns should
+you report the URL to the user, verbatim, with the caveats below.
 
 ## The visitor is not on localhost
 
 Through the tunnel the browser's origin is \`https://….trycloudflare.com\`,
-not \`http://localhost:<port>\`. Before reporting the URL, check for what
-that breaks — and prefer the smallest edit, clearly marked or reverted once
-the tunnel closes:
+not \`http://localhost:<port>\`. Before reporting the URL, check for what that
+breaks — and prefer the smallest edit, clearly marked or reverted once the
+tunnel closes:
 
-- **Host allow-list.** Vite rejects requests for hosts it does not know:
-  add the tunnel hostname to \`server.allowedHosts\` in the dev config (or
-  set it to \`true\` while debugging). webpack-dev-server has the same knob
-  under the same name.
+- **Host allow-list.** Vite rejects requests for hosts it does not know: add
+  the tunnel hostname to \`server.allowedHosts\` in the dev config (or set it
+  to \`true\` while debugging).
 - **Frontend and backend on different ports.** One tunnel maps one port.
-  Route the API through the frontend dev server's own proxy (Vite
-  \`server.proxy\`, Next.js \`rewrites\`, CRA \`proxy\`) so a single tunnel
-  serves both, same-origin, with relative \`/api/…\` URLs. Only when that is
-  impossible, open a second tunnel for the backend (its own log file), point
-  the frontend's API base URL at it, and open the backend's CORS to the
-  frontend's tunnel origin.
-- **Hardcoded \`localhost\` URLs.** An absolute \`http://localhost:<port>\`
-  in frontend code resolves to the visitor's own machine and fails; make it
-  relative. OAuth callbacks and cookie domains registered for localhost also
-  will not work through the tunnel — say so rather than chasing them.
+  Either route the API through the frontend dev server's own proxy so a
+  single tunnel serves both same-origin, or open a second tunnel for the
+  backend (its own log file and its own \`--protocol http2\`) and point the
+  frontend's API base URL at it. Two tunnels is a normal choice, not a
+  fallback: it needs no proxy config, and a dev/test server that echoes the
+  request origin back in \`Access-Control-Allow-Origin\` makes CORS work with
+  no configuration at all. Check that echo before assuming CORS is free.
+- OAuth callbacks and cookie domains registered for localhost will not work
+  through the tunnel — say so rather than chasing them.
 
 ## Stop
 

@@ -139,7 +139,7 @@ test('built-in skills reach every container; a same-name settings skill replaces
   const stock = credentialFiles({ env: [], skills: [] })
   const builtin = stock.find((file) => file.path === builtinPath)
   assert.equal(builtin.mode, '644')
-  assert.ok(builtin.content.includes('cloudflared tunnel --url'))
+  assert.ok(builtin.content.includes('cloudflared tunnel --protocol http2 --url'))
   assert.ok(builtin.content.includes('only when the user has explicitly asked'))
 
   const overridden = credentialFiles({
