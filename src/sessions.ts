@@ -13,13 +13,18 @@ import type { Message, Part } from '@opencode-ai/sdk/v2';
 import type { SessionProvider } from '../protocol/types.ts';
 import type {
   InstanceLifecycle,
+  InstanceRecord,
   InstanceRuntimeStatus,
-  InstanceView
+  InstanceView,
+  RuntimeLifecycle
 } from './instances';
 import {
   isOpencodePlaceholderTitle,
   type TranscriptMirrorSummary
 } from './transcript-mirror.ts';
+
+/** Container status values stored on the session row for the list Stop button. */
+export type CachedContainerStatus = InstanceRuntimeStatus['container'];
 
 export type SessionPhase =
   /** Accepted, waiting for the agent alarm to start dispatch. */
@@ -111,6 +116,29 @@ export interface SessionRecord {
    * Presentation only — nothing branches on it.
    */
   bootStep?: BootStep;
+  /**
+   * Last known runtime lifecycle, mirrored from the LifecycleCoordinator (and
+   * from list/detail calibrations) so the session list can render without a
+   * Durable Object round trip. Absent until the first observation.
+   */
+  runtimeLifecycle?: RuntimeLifecycle;
+  /**
+   * Last known container status, for the list Stop button. Absent until the
+   * first observation; when the coordinator pushes a lifecycle without asking
+   * the host it may be a hint (`running` while awake, `stopped` while asleep).
+   */
+  container?: CachedContainerStatus;
+  /**
+   * Whether the session list should still live-query this row's Durable
+   * Objects and host. Cleared when the runtime reaches idle or sleeping;
+   * set again by user/dispatch intents that can change runtime state.
+   */
+  statusQuery: boolean;
+  /**
+   * When `runtimeLifecycle` / `container` were last written. Absent means the
+   * cache has never been filled and the list must ask once.
+   */
+  statusObservedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -272,6 +300,95 @@ export function deriveSessionStatus(
       // the distinction is a container detail the session view hides.
       return 'sleeping';
   }
+}
+
+/**
+ * Runtime lifecycles that can still change without a Hub write, so the list
+ * must keep calibrating. Idle and sleeping are stable until a user action or
+ * a coordinator transition pushes a new value into D1.
+ */
+export function runtimeLifecycleNeedsStatusQuery(
+  lifecycle: RuntimeLifecycle
+): boolean {
+  return lifecycle !== 'idle' && lifecycle !== 'sleeping';
+}
+
+/**
+ * Whether `GET /api/sessions` should fan out to this row's Durable Objects.
+ *
+ * Non-ready Hub lifecycles already short-circuit inside `getInstanceView`.
+ * Unfinished dispatch (`queued`/`starting`) always asks, even if a coordinator
+ * push cleared the flag while the wake had not started yet. A never-observed
+ * row asks once so the cache can be filled.
+ */
+export function sessionNeedsLiveStatusQuery(
+  session: SessionRecord,
+  instance: InstanceRecord
+): boolean {
+  if (instance.lifecycle !== 'ready') {
+    return false;
+  }
+  if (session.phase === 'queued' || session.phase === 'starting') {
+    return true;
+  }
+  if (!session.statusObservedAt || session.runtimeLifecycle === undefined) {
+    return true;
+  }
+  return session.statusQuery;
+}
+
+/**
+ * Approximate container status from a runtime lifecycle alone.
+ *
+ * Used when the LifecycleCoordinator mirrors a transition without a host
+ * round trip. List calibrations overwrite this with the host's answer.
+ */
+export function containerHintForRuntimeLifecycle(
+  lifecycle: RuntimeLifecycle
+): CachedContainerStatus {
+  switch (lifecycle) {
+    case 'sleeping':
+    case 'stopping':
+      return 'stopped';
+    case 'quiescing':
+    case 'checkpointing':
+      return 'stopping';
+    default:
+      return 'running';
+  }
+}
+
+/**
+ * Build a list-ready runtime status from the D1 cache, with no DO/host I/O.
+ *
+ * Returns undefined when the cache has never been filled — the caller should
+ * fall through to a live query.
+ */
+export function runtimeStatusFromSessionCache(
+  session: SessionRecord,
+  instance: InstanceRecord
+): InstanceRuntimeStatus | undefined {
+  if (!session.statusObservedAt || session.runtimeLifecycle === undefined) {
+    return undefined;
+  }
+  const lifecycle = session.runtimeLifecycle;
+  const container =
+    session.container ?? containerHintForRuntimeLifecycle(lifecycle);
+  const platformRunning =
+    container === 'running' ||
+    container === 'healthy' ||
+    container === 'stopping';
+  return {
+    container,
+    provider: instance.provider,
+    deleting: false,
+    platformRunning,
+    lifecycle,
+    persistence: {
+      hasBackup: false,
+      trackedBackupCount: 0
+    }
+  };
 }
 
 /** The most recent timestamp known for a session, without touching the container. */

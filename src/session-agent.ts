@@ -22,6 +22,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { SessionProvider } from '../protocol/types.ts';
 import {
   insertSessionRow,
+  markSessionStatusQuery,
   markSessionUnread,
   updateSession,
   type NewSession
@@ -445,6 +446,11 @@ export class SessionAgent extends DurableObject<Env> {
     delete this.state.lastError;
     await this.persist();
     await this.reportToHub();
+    // Sending can wake a sleeping container; the list must calibrate until
+    // the runtime settles on idle or sleeping again.
+    await markSessionStatusQuery(this.env, this.state.sessionId).catch(
+      () => undefined
+    );
     await this.agentState.storage.setAlarm(Date.now());
     return this.snapshot();
   }
@@ -469,6 +475,9 @@ export class SessionAgent extends DurableObject<Env> {
     delete this.state.lastError;
     await this.persist();
     await this.reportToHub();
+    await markSessionStatusQuery(this.env, this.state.sessionId).catch(
+      () => undefined
+    );
     if (needsDispatch(this.state)) {
       await this.agentState.storage.setAlarm(Date.now());
     }
@@ -948,6 +957,7 @@ function newSessionFromState(state: StoredSessionAgentState): NewSession {
     title: state.title,
     phase: state.phase,
     pendingPromptCount: state.pending.length,
+    statusQuery: true,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt
   };

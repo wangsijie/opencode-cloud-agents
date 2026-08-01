@@ -39,6 +39,10 @@ function fullRow() {
     unread_at: '2026-07-27T03:30:00.000Z',
     workspace_origin: 'prebuild',
     boot_step: null,
+    runtime_lifecycle: 'busy',
+    container: 'running',
+    status_query: 1,
+    status_observed_at: '2026-07-27T03:45:00.000Z',
     created_at: '2026-07-27T01:00:00.000Z',
     updated_at: '2026-07-27T04:00:00.000Z'
   }
@@ -59,7 +63,11 @@ function minimalRow() {
     last_error: null,
     last_prompt_at: null,
     unread_at: null,
-    workspace_origin: null
+    workspace_origin: null,
+    runtime_lifecycle: null,
+    container: null,
+    status_query: 1,
+    status_observed_at: null
   }
 }
 
@@ -94,6 +102,10 @@ test('a full row projects into both record shapes', () => {
     unreadAt: '2026-07-27T03:30:00.000Z',
     titleLocked: true,
     workspaceOrigin: 'prebuild',
+    runtimeLifecycle: 'busy',
+    container: 'running',
+    statusQuery: true,
+    statusObservedAt: '2026-07-27T03:45:00.000Z',
     createdAt: '2026-07-27T01:00:00.000Z',
     updatedAt: '2026-07-27T04:00:00.000Z'
   })
@@ -116,10 +128,28 @@ test('NULL columns become absent optional fields, not undefined values', () => {
     'unreadAt',
     'titleLocked',
     'workspaceOrigin',
-    'bootStep'
+    'bootStep',
+    'runtimeLifecycle',
+    'container',
+    'statusObservedAt'
   ]) {
     assert.ok(!(key in session), `${key} should be absent`)
   }
+  assert.equal(session.statusQuery, true)
+})
+
+test('status_query 0 projects as a cold session', () => {
+  const session = rowToSession({
+    ...minimalRow(),
+    runtime_lifecycle: 'sleeping',
+    container: 'stopped',
+    status_query: 0,
+    status_observed_at: '2026-07-27T05:00:00.000Z'
+  })
+  assert.equal(session.runtimeLifecycle, 'sleeping')
+  assert.equal(session.container, 'stopped')
+  assert.equal(session.statusQuery, false)
+  assert.equal(session.statusObservedAt, '2026-07-27T05:00:00.000Z')
 })
 
 test('a cleaned row carries its lifecycle and timestamp into the records', () => {

@@ -8,6 +8,7 @@ import {
   MAX_SESSION_TITLE_LENGTH,
   attachmentUploadKey,
   cleanupCutoff,
+  containerHintForRuntimeLifecycle,
   deriveDisplayTitle,
   deriveLastActivityAt,
   deriveSessionStatus,
@@ -20,7 +21,10 @@ import {
   normalizeAttachmentKeys,
   normalizeSessionPrompt,
   promptAttachmentKey,
-  promptAttachmentPrefix
+  promptAttachmentPrefix,
+  runtimeLifecycleNeedsStatusQuery,
+  runtimeStatusFromSessionCache,
+  sessionNeedsLiveStatusQuery
 } from '../src/sessions.ts'
 
 // The model catalog's own behaviour is covered in model-catalog.test.mjs,
@@ -242,4 +246,127 @@ test('attachment keys are per prompt and swept per session', () => {
   const key = promptAttachmentKey('s1', 'p1', 0)
   assert.equal(key, 'prompt-attachments/s1/p1/0')
   assert.ok(key.startsWith(promptAttachmentPrefix('s1')))
+})
+
+test('only idle and sleeping clear the status-query flag', () => {
+  assert.equal(runtimeLifecycleNeedsStatusQuery('idle'), false)
+  assert.equal(runtimeLifecycleNeedsStatusQuery('sleeping'), false)
+  for (const lifecycle of [
+    'busy',
+    'waking',
+    'quiescing',
+    'checkpointing',
+    'stopping',
+    'error'
+  ]) {
+    assert.equal(runtimeLifecycleNeedsStatusQuery(lifecycle), true)
+  }
+})
+
+test('container hints match what the list Stop button needs', () => {
+  assert.equal(containerHintForRuntimeLifecycle('sleeping'), 'stopped')
+  assert.equal(containerHintForRuntimeLifecycle('stopping'), 'stopped')
+  assert.equal(containerHintForRuntimeLifecycle('quiescing'), 'stopping')
+  assert.equal(containerHintForRuntimeLifecycle('idle'), 'running')
+  assert.equal(containerHintForRuntimeLifecycle('busy'), 'running')
+})
+
+const readyInstance = {
+  id: 'inst-1',
+  name: 'test',
+  provider: 'cloudflare',
+  lifecycle: 'ready',
+  createdAt: '2026-07-27T01:00:00.000Z',
+  updatedAt: '2026-07-27T01:00:00.000Z'
+}
+
+function cachedSession(overrides = {}) {
+  return {
+    id: 'inst-1',
+    instanceId: 'inst-1',
+    provider: 'cloudflare',
+    model: 'anthropic/claude-fable-5',
+    title: 'Test',
+    phase: 'working',
+    pendingPromptCount: 0,
+    statusQuery: false,
+    runtimeLifecycle: 'sleeping',
+    container: 'stopped',
+    statusObservedAt: '2026-07-27T02:00:00.000Z',
+    createdAt: '2026-07-27T01:00:00.000Z',
+    updatedAt: '2026-07-27T02:00:00.000Z',
+    ...overrides
+  }
+}
+
+test('the list skips live query for cold idle and sleeping rows', () => {
+  assert.equal(
+    sessionNeedsLiveStatusQuery(cachedSession(), readyInstance),
+    false
+  )
+  assert.equal(
+    sessionNeedsLiveStatusQuery(
+      cachedSession({ runtimeLifecycle: 'idle', container: 'running' }),
+      readyInstance
+    ),
+    false
+  )
+})
+
+test('unfinished dispatch and hot flags keep the list calibrating', () => {
+  assert.equal(
+    sessionNeedsLiveStatusQuery(
+      cachedSession({ phase: 'queued', statusQuery: false }),
+      readyInstance
+    ),
+    true
+  )
+  assert.equal(
+    sessionNeedsLiveStatusQuery(
+      cachedSession({ statusQuery: true, runtimeLifecycle: 'busy' }),
+      readyInstance
+    ),
+    true
+  )
+  assert.equal(
+    sessionNeedsLiveStatusQuery(
+      cachedSession({
+        statusObservedAt: undefined,
+        runtimeLifecycle: undefined,
+        container: undefined,
+        statusQuery: false
+      }),
+      readyInstance
+    ),
+    true
+  )
+})
+
+test('non-ready hub lifecycles never need a live status fan-out', () => {
+  assert.equal(
+    sessionNeedsLiveStatusQuery(cachedSession({ statusQuery: true }), {
+      ...readyInstance,
+      lifecycle: 'cleaned'
+    }),
+    false
+  )
+})
+
+test('a filled runtime cache is enough to build a list runtime view', () => {
+  const runtime = runtimeStatusFromSessionCache(cachedSession(), readyInstance)
+  assert.deepEqual(runtime, {
+    container: 'stopped',
+    provider: 'cloudflare',
+    deleting: false,
+    platformRunning: false,
+    lifecycle: 'sleeping',
+    persistence: { hasBackup: false, trackedBackupCount: 0 }
+  })
+  assert.equal(
+    runtimeStatusFromSessionCache(
+      cachedSession({ statusObservedAt: undefined }),
+      readyInstance
+    ),
+    undefined
+  )
 })

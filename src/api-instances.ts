@@ -75,6 +75,8 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
     // does, through the session agent. This stays as the operator's manual
     // start, and now answers with runtime state rather than a URL to enter.
     case 'wake': {
+      // Intent: the list should calibrate until the runtime settles again.
+      await hubStore.markSessionStatusQuery(env, record.id).catch(() => undefined);
       const wake = await wakeInstance(env, record, lifecycle);
       return json({
         runtime: await getMergedRuntimeStatus(sandbox, wake.status)
@@ -104,6 +106,7 @@ export async function handleHubApi(request: Request, env: Env): Promise<Response
         lifecycle,
         record.provider
       );
+      await hubStore.markSessionStatusQuery(env, record.id).catch(() => undefined);
       await lifecycle.forceStop();
       return json(await getInstanceView(env, record));
     case 'test': {

@@ -43,6 +43,9 @@ import {
   MAX_SESSION_TITLE_LENGTH,
   normalizeAttachmentKeys,
   normalizeSessionPrompt,
+  runtimeLifecycleNeedsStatusQuery,
+  runtimeStatusFromSessionCache,
+  sessionNeedsLiveStatusQuery,
   type SessionAttachmentRef,
   type SessionMessage,
   type SessionRecord,
@@ -71,7 +74,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       return json(
         await Promise.all(
           entries.map(({ session, instance }) =>
-            getSessionView(env, session, instance)
+            getSessionListView(env, session, instance)
           )
         )
       );
@@ -527,6 +530,30 @@ async function requireSession(env: Env, id: string): Promise<SessionRecord> {
   throw new HttpError(404, 'Session not found');
 }
 
+/**
+ * Session list entry: serve cold rows from the D1 runtime cache, and only
+ * fan out to Durable Objects / the host for rows that still need calibration.
+ */
+async function getSessionListView(
+  env: Env,
+  record: SessionRecord,
+  instance: InstanceRecord
+): Promise<SessionView> {
+  if (!sessionNeedsLiveStatusQuery(record, instance)) {
+    const runtime = runtimeStatusFromSessionCache(record, instance);
+    if (runtime) {
+      return {
+        ...record,
+        instance: { ...instance, runtime },
+        status: deriveSessionStatus(record.phase, runtime, instance.lifecycle),
+        lastActivityAt: deriveLastActivityAt(record),
+        displayTitle: deriveDisplayTitle(record)
+      };
+    }
+  }
+  return getSessionView(env, record, instance);
+}
+
 async function getSessionView(
   env: Env,
   record: SessionRecord,
@@ -557,6 +584,22 @@ async function getSessionView(
     view.runtime.workspaceLost?.opencodeSessionId === record.opencodeSessionId
   ) {
     record = await markSessionLost(env, record, view.runtime.workspaceLost.at);
+  }
+  // Mirror the calibrated runtime onto the row so the next list poll can skip
+  // this session once it is idle or sleeping.
+  if (instance?.lifecycle === 'ready') {
+    await hubStore
+      .patchSessionRuntimeStatus(env, record.id, {
+        runtimeLifecycle: view.runtime.lifecycle,
+        container: view.runtime.container,
+        statusQuery: runtimeLifecycleNeedsStatusQuery(view.runtime.lifecycle)
+      })
+      .catch((error: unknown) => {
+        console.warn('Failed to cache session runtime status', {
+          sessionId: record.id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
   }
   // The summary rides along on the runtime status the list already reads, so
   // knowing how much history a session has costs no extra round trip and no
@@ -808,6 +851,8 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
       directory
     }
   );
+  // Abort moves busy → idle; keep the list calibrating until that lands.
+  await hubStore.markSessionStatusQuery(env, record.id).catch(() => undefined);
   return json({
     aborted,
     session: await getSessionView(env, await requireSession(env, record.id))

@@ -8,10 +8,15 @@
  * is imported, and these are what the unit tests need to reach.
  */
 import type { SessionProvider } from '../protocol/types.ts';
-import type { InstanceLifecycle, InstanceRecord } from './instances.ts';
+import type {
+  InstanceLifecycle,
+  InstanceRecord,
+  RuntimeLifecycle
+} from './instances.ts';
 import { isSafeRepoDefinition, type RepoDefinition } from './repos.ts';
 import type {
   BootStep,
+  CachedContainerStatus,
   SessionPhase,
   SessionRecord,
   SessionStatePatch,
@@ -49,6 +54,10 @@ export interface SessionRow {
   unread_at: string | null;
   workspace_origin: string | null;
   boot_step: string | null;
+  runtime_lifecycle: string | null;
+  container: string | null;
+  status_query: number;
+  status_observed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -95,6 +104,16 @@ export function rowToSession(row: SessionRow): SessionRecord {
       ? {}
       : { workspaceOrigin: row.workspace_origin as WorkspaceOrigin }),
     ...(row.boot_step === null ? {} : { bootStep: row.boot_step as BootStep }),
+    ...(row.runtime_lifecycle === null
+      ? {}
+      : { runtimeLifecycle: row.runtime_lifecycle as RuntimeLifecycle }),
+    ...(row.container === null
+      ? {}
+      : { container: row.container as CachedContainerStatus }),
+    statusQuery: row.status_query !== 0,
+    ...(row.status_observed_at === null
+      ? {}
+      : { statusObservedAt: row.status_observed_at }),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
