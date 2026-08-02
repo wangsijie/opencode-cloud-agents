@@ -1,0 +1,125 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "opencode-cloud",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // The daily idle-session sweep. The cron only discovers and claims aged
+  // sessions; the actual container removal is drained serially by the Hub
+  // Durable Object's alarm, same as deletions (see hub.ts).
+  "triggers": {
+    "crons": ["23 3 * * *"]
+  },
+  // The Hub SPA. `run_worker_first` keeps every route decision in the Worker:
+  // the origin check runs on every request, `/` serves either the SPA or the
+  // stock UI depending on its query, and `/assets/` still belongs to the
+  // container proxy. Letting the asset server answer first would quietly break
+  // all three.
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Two buckets, split by who writes them. `SESSION_BUCKET` is the site's own:
+  // transcript mirrors and staged prompt attachments, written and read here and
+  // nowhere else. `BACKUP_BUCKET` holds the container snapshots the sandbox host
+  // worker writes; the site never writes it and no longer sets
+  // `BACKUP_BUCKET_NAME` (the SDK read that, and the SDK is on the host now).
+  // The binding stays because snapshot *deletion* is deliberately not part of
+  // the protocol: the ledger of handles lives in the Sandbox object, so purge
+  // deletes the objects from here (see PROTOCOL.md, "snapshot").
+  "r2_buckets": [
+    {
+      "binding": "SESSION_BUCKET",
+      "bucket_name": "opencode-cloud-sessions"
+    },
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "opencode-cloud-backups"
+    }
+  ],
+  // The session registry and settings. Always read through the primary — the
+  // D1 Sessions API (read replication) is deliberately unused, so every query
+  // is strongly consistent.
+  //
+  // No `database_id`: it is a per-account value, and hardcoding one would make
+  // every deployment of this repository other than the original a manual edit.
+  // Wrangler resolves the binding from `database_name` at deploy time — it
+  // looks the database up in whichever account the credentials belong to, and
+  // creates it if there is none. That makes a fresh deploy work with no
+  // configuration at all, so keep this omitted rather than reintroducing an id.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "opencode-cloud",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // The site runs no containers. Every one of them belongs to a sandbox host —
+  // for Cloudflare sessions that is `opencode-sandbox-host`, reached only over
+  // this private binding, which is also the authentication boundary: the
+  // protocol's bearer token exists for remote hosts, not for this one.
+  "services": [
+    {
+      "binding": "SANDBOX_HOST",
+      "service": "opencode-sandbox-host"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "Sandbox",
+        "name": "Sandbox"
+      },
+      {
+        "class_name": "Hub",
+        "name": "Hub"
+      },
+      {
+        "class_name": "LifecycleCoordinator",
+        "name": "LifecycleCoordinator"
+      },
+      {
+        "class_name": "SessionAgent",
+        "name": "SessionAgent"
+      },
+      {
+        "class_name": "PrebuildRunner",
+        "name": "PrebuildRunner"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["Sandbox"],
+      "tag": "v1"
+    },
+    {
+      "new_sqlite_classes": ["Hub"],
+      "tag": "v2"
+    },
+    {
+      "new_sqlite_classes": ["LogtoSandbox"],
+      "tag": "v3"
+    },
+    {
+      "new_sqlite_classes": ["LifecycleCoordinator"],
+      "tag": "v4"
+    },
+    {
+      "new_sqlite_classes": ["SessionAgent"],
+      "tag": "v5"
+    },
+    {
+      "deleted_classes": ["LogtoSandbox"],
+      "tag": "v6"
+    },
+    {
+      "new_sqlite_classes": ["PrebuildRunner"],
+      "tag": "v7"
+    }
+  ]
+}

@@ -1,0 +1,2782 @@
+/*
+ * Design baseline for the Hub SPA.
+ *
+ * The shape is a sidebar of past sessions beside one conversation, the way a
+ * chat client is laid out, because that is what this app turned out to be: the
+ * session list is navigation, not a page you visit.
+ *
+ * Two palettes, chosen by the operating system. Neither is the "real" one — the
+ * tokens carry every colour, so a rule that names a hex value outside the two
+ * blocks below is a bug waiting for the other theme.
+ *
+ * Mobile-first per the roadmap decision: the phone is a first-class surface, so
+ * the base rules target a narrow screen (sidebar as a drawer) and desktop
+ * widens from there.
+ */
+:root {
+  --bg: #faf9f5;
+  --bg-sidebar: #f0eee6;
+  --surface: #ffffff;
+  --surface-raised: #ebe9e0;
+  --surface-sunken: #f5f4ee;
+  --border: rgba(31, 30, 26, 0.1);
+  --border-strong: rgba(31, 30, 26, 0.2);
+  --border-focus: rgba(31, 30, 26, 0.38);
+  --text: #1a1915;
+  --text-dim: #6e6b64;
+
+  --accent: #f92040;
+  --accent-hover: #e01b39;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(249, 32, 64, 0.12);
+
+  --ok: #3f8f5f;
+  --info: #3b82c4;
+  --warn: #d97a26;
+  --danger: #b0342a;
+  --danger-bg: #f8e9e7;
+  --danger-border: #e7c7c2;
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+  /* Text chips — the repo and model tags, the status badge, a file's status.
+     They label something rather than inviting a click, and a full pill reads
+     as a control; the softened rectangle keeps them quieter than the buttons
+     around them. The composer's pickers follow at `--radius-sm`, being the
+     same shape one size up. Buttons keep `--radius-full`. */
+  --radius-chip: 6px;
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: ui-serif, Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --gap: 12px;
+  --sidebar-width: 288px;
+  --aside-width: 380px;
+  --column: 48rem;
+  --shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #262624;
+    --bg-sidebar: #1f1e1d;
+    --surface: #30302e;
+    --surface-raised: #3a3a37;
+    --surface-sunken: #1f1e1d;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.17);
+    --border-focus: rgba(255, 255, 255, 0.38);
+    --text: #f5f4ef;
+    --text-dim: #a8a49c;
+
+    --accent-hover: #fb4560;
+    --accent-soft: rgba(249, 32, 64, 0.22);
+
+    --ok: #5fb98a;
+    --info: #7cb5e8;
+    --warn: #e8a45f;
+    --danger: #e5827a;
+    --danger-bg: #3a2422;
+    --danger-border: #5b2c2c;
+
+    --shadow: 0 4px 20px rgb(0 0 0 / 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  /* The shell owns the viewport and every scroll happens inside it, so the
+     document itself must not scroll — otherwise a phone gets a second, empty
+     scroll axis behind the fixed layout. */
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.mono,
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* ---------- shell ---------- */
+
+.app {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  /* Flex items refuse to shrink below their content without this, which is what
+     makes long code blocks widen the whole layout instead of scrolling. */
+  min-width: 0;
+  height: 100%;
+}
+
+.content-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 52px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.content-header.bare {
+  border-bottom: 0;
+}
+
+/* Title and tags share the header's flexible middle: the title gives way first,
+   because a truncated name is still recognisable and a truncated repo is not. */
+.content-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.content-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Where the session runs: a fact about the run rather than a heading, so it
+   reads as a label beside the title. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 14rem;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A glyph in front of the label says what kind of fact the tag states — which
+   is only worth the space if it never competes with the label for it. */
+.tag svg {
+  flex: none;
+  opacity: 0.75;
+}
+
+/* With an icon beside it the chip is the flex row, so the text is what has to
+   give: truncation moves onto the label rather than clipping the glyph. */
+.tag-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A fact stated as a glyph alone — the Docker host mark. No chip: a border
+   around a lone icon reads as a button, and this one does nothing. It is drawn
+   at the size of the header's own icons, in the dim they share, so it sits
+   beside the title as quietly as the panel toggle does at the other end. */
+.heading-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--text-dim);
+}
+
+/* Where a subagent sits, as the header of the page you are on. The trail gives
+   way from the left: the level you are reading is the one that must survive a
+   narrow window, and the way back is one step, not the whole path. */
+.breadcrumb {
+  gap: 4px;
+  overflow: hidden;
+}
+
+.breadcrumb-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.breadcrumb-step:last-child {
+  flex: 0 1 auto;
+}
+
+.breadcrumb-link {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.breadcrumb-link:hover {
+  color: var(--text);
+}
+
+.breadcrumb-sep {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+/* A narrow header keeps the two ends of the trail: where you are, and the
+   session it belongs to. The levels between them are the ones you can reach
+   again by going back through the one below. */
+@media (max-width: 599px) {
+  .breadcrumb-step:not(:first-child):not(:last-child) {
+    display: none;
+  }
+}
+
+/* The tags are the first thing a narrow header can do without: the title and
+   the status say more in the same space. The host mark stays — it costs a
+   fraction of what the repo name does, and it is on the header at all only
+   when the session is somewhere unusual. */
+@media (max-width: 599px) {
+  .content-heading .tag {
+    display: none;
+  }
+}
+
+.icon-button.active {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.content-body {
+  flex: 1 1 0;
+  /* Without min-height the flex child grows to its content and the inner scroll
+     never engages. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-column,
+.composer-area {
+  width: 100%;
+  max-width: var(--column);
+  margin-inline: auto;
+  padding-inline: 16px;
+}
+
+.session-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding-block: 16px;
+}
+
+.composer-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+.session-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* A session that has nothing to read yet is only waiting, so the wait is all
+   the page shows: centred, one spinner, one line. */
+.session-booting {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.session-booting p {
+  margin: 0;
+}
+
+.booting-title {
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
+/* Below the header the page splits: the conversation, and the details panel
+   when it is open. The header stays across both so the panel's toggle keeps its
+   corner. */
+.session-split {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.session-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+/* ---------- session details panel ---------- */
+
+/*
+  Narrow enough and there is no room to dock it beside the conversation without
+  making both unreadable, so it slides over the top instead. The breakpoint is
+  wider than the sidebar's: this panel needs a diff's worth of width, not a
+  list's.
+*/
+.session-aside {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: min(92vw, var(--aside-width));
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  padding-right: env(safe-area-inset-right);
+  box-shadow: var(--shadow);
+  animation: aside-in 0.2s ease;
+}
+
+@keyframes aside-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+.aside-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 0.4);
+}
+
+@media (min-width: 1100px) {
+  .session-aside {
+    position: relative;
+    width: var(--aside-width);
+    box-shadow: none;
+    animation: none;
+  }
+
+  .aside-backdrop {
+    display: none;
+  }
+}
+
+/* Undocked, the panel covers the conversation instead of sharing the row with
+   it: there is no split for the handle to move. */
+@media (max-width: 1099px) {
+  .session-aside .resize-handle {
+    display: none;
+  }
+}
+
+.aside-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex: none;
+  padding: 6px 8px 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.aside-tabs {
+  display: flex;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aside-tabs .link-button.active {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* A flex column so a panel that wants the whole height can ask for it (the file
+   browser does — see `.workspace-panel`); one that does not keeps its natural
+   height and scrolls here as before. */
+.aside-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+/* ---------- resize handles ---------- */
+
+/*
+  A panel edge you can drag. It is 7px of hit area laid over the 1px border
+  rather than a visible bar, so the split still reads as a line until the
+  pointer is on it — the widths themselves live in `localStorage`, not here.
+
+  Only rendered as an affordance where the panel is docked: the two media
+  queries below take it out of the drawer and the overlay, where dragging a
+  width against a viewport-clamped panel would do nothing.
+*/
+.resize-handle {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  width: 7px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resize-handle.end {
+  right: -3px;
+}
+
+.resize-handle.start {
+  left: -3px;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+/* Mid-drag the pointer is regularly off the handle and over text; without this
+   the conversation selects itself and the cursor flickers. */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing .resize-handle {
+  background: var(--accent-soft);
+}
+
+/* ---------- sidebar ---------- */
+
+.sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--sidebar-width);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding-left: env(safe-area-inset-left);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  flex: none;
+  min-height: 52px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin: 0 8px 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sidebar-new:hover {
+  background: var(--surface-raised);
+}
+
+.sidebar-history {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 8px;
+}
+
+.sidebar-group-label {
+  margin: 10px 0 2px;
+  padding-inline: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  /* The gap keeps two adjacent highlighted rows — the active one and the one
+     under the pointer — from reading as a single block. */
+  margin-bottom: 2px;
+  padding-right: 4px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+/* The link is a sibling of the menu button rather than its parent: a button
+   inside an anchor is not something HTML allows. */
+.row-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 4px 4px 10px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.session-row:hover {
+  background: var(--surface-raised);
+}
+
+.session-row.active {
+  background: var(--surface-raised);
+  font-weight: 500;
+}
+
+.session-row.deleting {
+  opacity: 0.5;
+}
+
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The sandbox host, when it is not the default one. Quieter than a `.tag`: it
+   qualifies the title rather than standing beside it, and it must never be the
+   thing that truncates the title it follows. */
+.row-tag {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.row-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.row-dot.working {
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Steady, unlike the running pulse: the agent stopped and is waiting to be read. */
+.row-dot.unread {
+  background: var(--accent);
+}
+
+.row-menu-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.row-menu-button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* On a mouse the menu button only appears for the row under the pointer;
+   without hover — a phone — it is always there, because there is nothing else
+   to reveal it. */
+@media (hover: hover) {
+  .session-row .row-menu-button {
+    opacity: 0;
+  }
+
+  .session-row:hover .row-menu-button,
+  .session-row:focus-within .row-menu-button,
+  .session-row .row-menu-button:focus-visible,
+  .session-row.menu-open .row-menu-button {
+    opacity: 1;
+  }
+}
+
+.row-menu {
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 4px;
+  z-index: 10;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.row-menu button {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu button:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.row-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.row-menu button.danger {
+  color: var(--danger);
+}
+
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  flex: none;
+  padding: 8px 16px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-account-actions {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.sidebar-error {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-empty {
+  padding: 12px 10px;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+/* ---------- controls ---------- */
+
+.button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  min-height: 40px;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.button.danger {
+  color: var(--danger);
+}
+
+.link-button {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  padding: 4px 0;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--text);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.send-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+textarea,
+select,
+input[type='text'],
+input[type='number'],
+input[type='password'] {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 12px;
+  /* Below 16px iOS Safari zooms the page on focus. */
+  font: inherit;
+  font-size: 16px;
+  min-height: 40px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.pill-select {
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+/* Fields carry focus on their own border; only the outline-drawn controls below
+   need a ring. */
+textarea:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+a:focus-visible,
+.button:focus-visible,
+.link-button:focus-visible,
+.icon-button:focus-visible,
+.send-button:focus-visible,
+.file-entry:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- composer ---------- */
+
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.composer-box:focus-within {
+  border-color: var(--border-focus);
+}
+
+/* The box carries the focus ring for everything inside it, so the field itself
+   is chrome-free. */
+.composer-box .prompt {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 4px 2px;
+  min-height: 0;
+  max-height: 200px;
+  resize: none;
+  outline: none;
+  field-sizing: content;
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- image attachments ---------- */
+
+.attachment-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.attachment-chip {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+
+.attachment-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+}
+
+/* Overhangs the thumbnail corner so it never covers much of the preview. */
+.attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.attachment-remove:hover {
+  color: var(--text);
+}
+
+.attachment-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* The bytes are still on their way to R2; the chip is visible but not ready. */
+.attachment-chip.uploading img,
+.attachment-chip.uploading .attachment-placeholder {
+  opacity: 0.45;
+}
+
+.attachment-chip.failed img,
+.attachment-chip.failed .attachment-placeholder {
+  opacity: 0.35;
+  border-color: var(--danger);
+}
+
+/* Stands in for the thumbnail while the preview read is still running. */
+.attachment-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+}
+
+/* Sits over the middle of a failed chip: the failure is the chip's state,
+   and clicking it is the retry. */
+.attachment-retry {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachment-retry:hover {
+  color: var(--text);
+}
+
+/* An image sent with a message, rendered from its data URL. */
+.part-image {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: var(--radius);
+}
+
+.pending-attachment {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.composer-row .pill-select {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* ---------- composer pickers ---------- */
+
+/*
+  Both pickers are drawn rather than native: one panel holds a search field and
+  the refresh button, and a `<select>` can hold neither. Closed, they are the
+  same pill they always were.
+*/
+.pill-menu {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pill-menu-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pill-menu-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pill-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Opens upwards: the composer sits low on the page on a phone, and the panel
+   would otherwise unfold under the keyboard. */
+.pill-menu-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: min(320px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.pill-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.pill-menu-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.pill-menu-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.pill-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* One highlight, moved by both the pointer and the arrow keys, so the row Enter
+   would take is never ambiguous. */
+.pill-menu-option.active {
+  background: var(--surface-raised);
+}
+
+.pill-menu-option-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill-menu-empty {
+  margin: 0;
+  padding: 8px;
+  font-size: 13px;
+}
+
+/* Legacy composer shape, still used by the publish form. */
+.composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ---------- sign in ---------- */
+
+/*
+  The sign-in form is the whole page when it is shown, so it centres in the
+  viewport rather than sitting in the app's column: there is no sidebar beside
+  it and no header above it to line up with.
+*/
+.sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px 16px;
+  background: var(--bg);
+}
+
+.sign-in-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 22rem;
+}
+
+/* Shown exactly once, right after generating: worth being easy to read. */
+.generated-password {
+  display: block;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 16px;
+  text-align: center;
+  user-select: all;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+/* ---------- settings ---------- */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 56rem;
+  margin-inline: auto;
+  padding: 8px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.settings-page h1 {
+  margin: 0;
+  font: 400 clamp(22px, 3vw, 28px) / 1.3 var(--font-serif);
+}
+
+/*
+  Master–detail: section names on one side, the selected section's form on the
+  other. On a phone there is no side to spare, so the nav is a scrollable pill
+  row above the form instead.
+*/
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-nav {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  /* Bleeds to the page edge so the scrolling row does not clip mid-pill. */
+  margin-inline: -16px;
+  padding-inline: 16px;
+}
+
+.settings-nav-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: var(--surface-raised);
+}
+
+.settings-nav-item.active {
+  background: var(--surface-raised);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* One mark per section: what still blocks the Hub, and what is already done.
+   The blank state keeps its box so the labels align down the column. */
+.nav-state {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.nav-state.missing {
+  background: var(--accent);
+}
+
+.nav-state.done {
+  background: var(--ok);
+}
+
+.settings-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .settings-layout {
+    flex-direction: row;
+    gap: 32px;
+  }
+
+  .settings-nav {
+    flex-direction: column;
+    flex: none;
+    width: 180px;
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+    position: sticky;
+    top: 8px;
+    align-self: flex-start;
+  }
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-section h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-section h3 {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-section p {
+  margin: 0;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-skill {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.settings-advanced[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+  The forms here are operator chores, not the app's subject, so everything is
+  one size down from the global controls: the page should read as a settings
+  sheet, not a sign-up flow. The 16px input font survives on narrow screens
+  only because iOS zooms into anything smaller.
+*/
+.settings-page input[type='text'],
+.settings-page input[type='number'],
+.settings-page input[type='password'],
+.settings-page select,
+.settings-page textarea {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-page .button {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.settings-page .actions .button {
+  flex: none;
+}
+
+.settings-page .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+@media (min-width: 768px) {
+  .settings-page input[type='text'],
+  .settings-page input[type='password'],
+  .settings-page select,
+  .settings-page textarea {
+    font-size: 13.5px;
+  }
+
+  .settings-page .code-editor {
+    font-size: 12.5px;
+  }
+}
+
+/* Onboarding's exit: the gate never opens on its own, so once nothing required
+   is missing this is the one way in. */
+.settings-continue {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.settings-continue p {
+  flex: 1 1 12rem;
+  margin: 0;
+}
+
+.code-editor {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* ---------- new session page ---------- */
+
+.new-session {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  min-height: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.greeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font: 400 clamp(26px, 4vw, 32px) / 1.3 var(--font-serif);
+}
+
+.greeting .spark {
+  flex: none;
+  color: var(--accent);
+}
+
+/* ---------- cards, banners ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.card.error h2,
+.banner.error {
+  color: var(--danger);
+}
+
+.banner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.banner.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.banner.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions .button {
+  flex: 1 1 auto;
+}
+
+/* ---------- messages ---------- */
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-block: 8px;
+}
+
+.message-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The user's own words are the anchor when scanning back through a thread, so
+   they get a container; the agent's reply reads as the page itself. */
+.message.user .message-body {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--surface-raised);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+}
+
+.message.user {
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.message.assistant .part-text {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.part-text {
+  overflow-wrap: anywhere;
+}
+
+.part-text > :first-child {
+  margin-top: 0;
+}
+
+.part-text > :last-child {
+  margin-bottom: 0;
+}
+
+/* Code, tables and their overflow scrolling are Streamdown's job now; only
+   the pieces its utilities don't set are pinned here. */
+.part-text [data-streamdown='inline-code'] {
+  font-size: 13px;
+}
+
+/*
+ * Streamdown 2.5 gives each highlighted line a `block` class only together
+ * with the line-number gutter; with lineNumbers off the line spans are
+ * classless and inline, collapsing the whole block onto one line.
+ */
+.part-text [data-streamdown='code-block-body'] code > span {
+  display: block;
+}
+
+.part-reasoning summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.reasoning-body {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.part-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.part-tool .tool-name {
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+
+/* A tool call stays one line tall until someone asks to see its full label. */
+.part-tool .tool-title {
+  color: var(--text-dim);
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.part-tool.tool-disclosure {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.part-tool.tool-disclosure:hover,
+.part-tool.tool-disclosure:focus-visible {
+  border-color: var(--text-dim);
+  background: var(--surface-raised);
+}
+
+.part-tool.tool-disclosure .tool-open {
+  transition: transform 0.12s ease;
+}
+
+.part-tool.tool-disclosure.open {
+  align-items: flex-start;
+}
+
+.part-tool.tool-disclosure.open .tool-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+.part-tool.tool-disclosure.open .tool-open {
+  transform: rotate(90deg);
+}
+
+.part-tool .tool-status {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/*
+ * A `task` call is a whole conversation folded into one line, so its row is the
+ * door into that conversation rather than a description of it. It keeps the
+ * tool row's shape exactly — the chevron is the only thing that says it opens.
+ */
+a.part-task {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.part-task:hover,
+a.part-task:focus-visible {
+  border-color: var(--text-dim);
+  background: var(--surface-raised);
+}
+
+.part-tool .tool-open {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  /* The row aligns on the text baseline, which an icon does not have: left to
+     take part it sits a pixel low and makes the row taller than the plain tool
+     rows stacked above it. */
+  align-self: center;
+  /* Sits at the far end, unless a status is already holding that place. */
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+.part-tool .tool-status + .tool-open {
+  margin-left: 0;
+}
+
+.tool-error {
+  border-color: var(--danger-border);
+}
+
+.part-todo {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.part-todo .todo-completed {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.part-placeholder {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ---------- the agent asks, the reader answers ---------- */
+
+.part-question {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* Only a card that can still be answered asks for the eye. */
+.part-question.pending {
+  border-color: var(--border-strong);
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-text {
+  margin: 0;
+  font-size: 13px;
+}
+
+.question-tag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.question-option {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+button.question-option {
+  cursor: pointer;
+}
+
+button.question-option:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  background: var(--surface-raised);
+}
+
+button.question-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.question-option.selected,
+.question-option.chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.question-option.static,
+.question-option.unanswered {
+  color: var(--text-dim);
+}
+
+.question-option .option-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Typed as `input.question-custom` so it outweighs the global
+   `input[type='text']` rule, which would otherwise impose the full-size 16px /
+   40px field on a card whose options read at 12px. The 16px font survives on
+   narrow screens only because iOS zooms into anything smaller. */
+input.question-custom {
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+
+@media (min-width: 768px) {
+  input.question-custom {
+    font-size: 12px;
+  }
+}
+
+input.question-custom::placeholder {
+  color: var(--text-dim);
+}
+
+input.question-custom:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.question-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.question-actions .button {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.question-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.question-note.error {
+  color: var(--danger);
+}
+
+/* ---------- what a step changed ---------- */
+
+.part-patch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Keeps the tool row's shape: a step's file changes are one line of the
+   transcript until someone asks for the diff. */
+.part-tool.patch-summary {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.part-tool.patch-summary:hover,
+.part-tool.patch-summary:focus-visible {
+  border-color: var(--text-dim);
+  background: var(--surface-raised);
+}
+
+/* The chevron sits where a tool row's does; it is a disclosure rather than a
+   link onwards, so it turns to point down once the diff is open. */
+.part-tool.patch-summary .tool-open {
+  transition: transform 0.12s ease;
+}
+
+.patch-counts + .tool-open {
+  margin-left: 0;
+}
+
+.part-tool.patch-summary.open .tool-open {
+  transform: rotate(90deg);
+}
+
+.patch-counts {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.patch-add {
+  color: var(--ok);
+}
+
+.patch-del {
+  color: var(--danger);
+}
+
+.patch-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The header is sticky inside the changes panel, where the whole panel
+   scrolls; in the transcript the page scrolls, so a sticky header would ride
+   over the message above it. */
+.patch-files .diff-file-header {
+  position: static;
+}
+
+/*
+ * OpenCode writes these patches with the whole file as context, so one edit to
+ * a long file would otherwise push the rest of the conversation off the screen.
+ * The card scrolls inside itself instead, and the transcript keeps its shape.
+ */
+.patch-files .diff-file > :not(.diff-file-header) {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.message-failure {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Keep the copy action attached to the reply's text rather than the whole turn:
+   tool rows can continue below it without moving the action away from what it
+   copies. The reserved lower edge keeps the control from covering any text. */
+.message {
+  display: flex;
+  flex-direction: column;
+}
+
+.copyable-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: 22px;
+}
+
+.message-actions {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+}
+
+.user-message-actions {
+  position: static;
+}
+
+.message-actions .copy-button {
+  width: 22px;
+  height: 22px;
+}
+
+@media (hover: hover) {
+  .message-actions .copy-button {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+  }
+
+  .copyable-text:hover .copy-button,
+  .message.user:hover > .user-message-actions .copy-button,
+  .message-actions .copy-button:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* A sent message the container has not acknowledged yet. It reads as the user's
+   own words already, so it is dimmed rather than restyled. */
+.message.pending .message-body {
+  opacity: 0.6;
+}
+
+.message.pending .part-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The newest pending prompt is the one in flight, so it trails a spinner
+   right after its text instead of announcing progress in a banner. */
+.message.pending .part-text .spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-left: 8px;
+  vertical-align: -1px;
+}
+
+/* ---------- status badge ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-raised);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.badge-working .dot,
+.badge-starting .dot {
+  background: var(--accent);
+}
+
+.badge-idle .dot {
+  background: var(--ok);
+}
+
+.badge-queued .dot {
+  background: var(--info);
+}
+
+.badge-failed .dot,
+.badge-error .dot {
+  background: var(--danger);
+}
+
+/* A lost session is over, not broken: it should read as inert, not as alarm.
+   A cleaned one is the same kind of over — its container aged out. */
+.badge-lost .dot,
+.badge-cleaned .dot {
+  background: var(--text-dim);
+}
+
+.badge-deleting .dot {
+  background: var(--warn);
+}
+
+/* A running agent is the one state worth noticing from across the room. */
+.badge-working .dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Pressable, but still a badge: the affordance is the cursor and the hover,
+   because a button chrome here would compete with the header's own controls. */
+.badge-button {
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.badge-button:hover {
+  background: var(--border);
+}
+
+/* ---------- modal ---------- */
+
+/*
+  A sheet on a phone, a centred card from 640px up. The layer is a flex box in
+  both cases; only the alignment and the corners change, so there is one set of
+  boxes to reason about rather than two layouts.
+*/
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 0.4);
+}
+
+.modal-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 85vh;
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow);
+  animation: sheet-in 0.2s ease;
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (min-width: 640px) {
+  .modal-layer {
+    align-items: center;
+  }
+
+  .modal-sheet {
+    width: min(92vw, 420px);
+    max-height: 80vh;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    animation: modal-in 0.15s ease;
+  }
+
+  @keyframes modal-in {
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex: none;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  font-size: 13px;
+}
+
+.modal-body section {
+  margin-top: 14px;
+}
+
+.modal-body h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.modal-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Label on the left, value on the right, one row each — a table would be the
+   same thing with more markup. */
+.meta-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 6px 0 0;
+}
+
+.meta-list dt {
+  color: var(--text-dim);
+}
+
+.meta-list dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* The boot state owns the whole column, so its spinner is the page's subject
+   rather than a mark beside a line of text. */
+.spinner.big {
+  width: 34px;
+  height: 34px;
+  border-width: 3px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- changes panel ---------- */
+
+.changes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.changes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.changes-summary {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.diff-mode-toggle {
+  display: flex;
+}
+
+.file-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+}
+
+.file-status.status-deleted,
+.file-status.status-conflicted,
+.tree-status.status-deleted,
+.tree-status.status-conflicted {
+  color: var(--danger);
+}
+
+.file-status.status-added,
+.file-status.status-untracked,
+.tree-status.status-added,
+.tree-status.status-untracked {
+  color: var(--ok);
+}
+
+/* ---------- changed-file tree ---------- */
+
+.file-tree-root {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.file-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Nested levels indent under their folder row. */
+.file-tree .file-tree {
+  padding-left: 14px;
+}
+
+.file-tree-dir {
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.file-tree-file {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  padding: 2px 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.file-tree-file:hover .file-tree-name {
+  text-decoration: underline;
+}
+
+.tree-status {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* ---------- per-file diff cards ---------- */
+
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  overflow: clip;
+  scroll-margin-top: 8px;
+}
+
+.diff-file-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-file-path {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.diff-file-note {
+  margin: 0;
+  padding: 10px;
+  font-size: 13px;
+}
+
+/* The fallback for a diff block the parser refuses (a truncated tail). */
+.diff-raw {
+  max-height: 45vh;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+/* ---------- workspace panel ---------- */
+
+/* The directory listing has no natural length worth respecting: capped at a
+   fraction of the viewport it left the bottom of the panel empty, so it takes
+   the panel's full height and scrolls inside it instead. */
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.file-breadcrumbs,
+.file-breadcrumb {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.file-breadcrumbs {
+  flex-wrap: wrap;
+}
+
+.file-path .refresh {
+  margin-left: auto;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+}
+
+.file-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.file-entry:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.file-icon {
+  flex: 0 0 auto;
+}
+
+.file-size {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.file-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-view-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+/* The download row: alone for a binary file, after the note for a capped one. */
+.file-download {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.file-download .button {
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+/* Source lines are as wide as they are: the viewer scrolls, the page does not.
+   It is as tall as the panel for the same reason the listing is. */
+.file-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+/* ---------- phone: the sidebar becomes a drawer ---------- */
+
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(85vw, 320px);
+    transform: translateX(-100%);
+    /* Hidden rather than merely off-screen, so a closed drawer is not in the
+       tab order. */
+    visibility: hidden;
+    transition:
+      transform 0.2s ease,
+      visibility 0s 0.2s;
+  }
+
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.2s ease;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    padding: 0;
+    background: rgb(0 0 0 / 0.4);
+  }
+
+  .sidebar .resize-handle {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .hamburger {
+    display: none;
+  }
+
+  .content-header,
+  .session-column,
+  .composer-area {
+    padding-inline: 24px;
+  }
+
+  /* The iOS zoom-on-focus floor only applies where iOS is: on a wider screen
+     these can be the size they want to be. */
+  .pill-select {
+    font-size: 13px;
+  }
+
+  .composer-box .prompt {
+    font-size: 15px;
+  }
+}
+
+/*
+  Prebuilds, a settings tab: one card per prebuilt repository, the row is the
+  rebuild trigger, and the catalog lives in the add picker underneath. The
+  ladder and log only exist while a run is live (or, folded away, after a
+  failure), so the resting section is a quiet list of names and ages.
+*/
+.prebuild-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prebuild-add {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prebuild-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.prebuild-row-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.prebuild-row-title .muted {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+.prebuild-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.prebuild-ladder {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prebuild-ladder ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prebuild-ladder li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 13px;
+}
+
+.prebuild-ladder li.current {
+  background: var(--surface-raised, rgba(125, 125, 125, 0.08));
+}
+
+.prebuild-ladder li.pending {
+  opacity: 0.5;
+}
+
+.prebuild-ladder li.done .step-label::after {
+  content: ' ✓';
+  opacity: 0.7;
+}
+
+.prebuild-log {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-sunken, rgba(125, 125, 125, 0.08));
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 10rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prebuild-failure {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.prebuild-failure summary {
+  cursor: pointer;
+  color: var(--danger, #c0392b);
+}
+
+.prebuild-failure .muted {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+
+.prebuild-run-summary {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge-working .dot,
+  .row-dot.working,
+  .spinner {
+    animation: none;
+  }
+
+  .sidebar {
+    transition: none;
+  }
+
+  .session-aside {
+    animation: none;
+  }
+}

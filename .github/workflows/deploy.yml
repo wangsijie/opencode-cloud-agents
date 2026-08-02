@@ -1,0 +1,382 @@
+name: Deploy
+
+# This workflow deploys *whichever* account's infrastructure the repository it
+# runs in has credentials for. There is no repository name in here: a fork that
+# sets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` deploys its own copy,
+# and a fork that sets neither runs nothing at all. Presence of the secret is
+# the gate, because a fork never inherits the upstream's secrets — so this is
+# both what makes a fork deployable and what keeps it from deploying ours.
+on:
+  push:
+    # `main` as well as `master`, because a fork made today defaults to `main`
+    # and the first thing a new operator does is push to it.
+    branches:
+      - master
+      - main
+  # The first deploy of a fork usually has nothing to push: the code is already
+  # there. This is the button for it, and the way to force the two decisions
+  # below that are otherwise made from the diff.
+  workflow_dispatch:
+    inputs:
+      deploy_host:
+        description: Deploy the sandbox host Worker even if nothing it is built from changed
+        type: boolean
+        default: false
+      rotate_host_secrets:
+        description: Overwrite the sandbox host's R2 secrets from this repository's secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  # `secrets` is not available in a job-level `if`, so the gate has to be a job
+  # that turns secret presence into an output. It prints booleans and never a
+  # value.
+  preflight:
+    name: Decide what this repository can deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cloudflare: ${{ steps.gate.outputs.cloudflare }}
+      docker_agent: ${{ steps.gate.outputs.docker_agent }}
+    steps:
+      - name: Check which deployment targets are configured
+        id: gate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SSH_HOST: ${{ secrets.SANDBOX_AGENT_SSH_HOST }}
+          SSH_KEY: ${{ secrets.SANDBOX_AGENT_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+            echo "Cloudflare credentials are present; this repository deploys its own Workers."
+            echo "cloudflare=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID; nothing to deploy."
+            echo "See the README: add both as repository secrets to deploy your own copy."
+            echo "cloudflare=false" >> "${GITHUB_OUTPUT}"
+          fi
+          # The Docker sandbox host is entirely optional — most deployments run
+          # sessions on Cloudflare containers alone.
+          if [ -n "${SSH_HOST}" ] && [ -n "${SSH_KEY}" ]; then
+            echo "docker_agent=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "docker_agent=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  deploy:
+    name: Test and deploy
+    needs: preflight
+    if: needs.preflight.outputs.cloudflare == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # The sandbox-host decision below diffs this push against its
+          # predecessor.
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The same gates ci.yml runs for every push and pull request. They are
+      # repeated here so a deploy can never outrun a red build: this workflow
+      # is triggered by the push itself, not by CI finishing.
+      - name: Run tests
+        run: pnpm test
+
+      - name: Run typecheck
+        run: pnpm run typecheck
+
+      # Neither Wrangler configuration carries an account-specific id: the
+      # bindings name their resources and wrangler resolves them in whichever
+      # account the credentials belong to. What it will not do is *create* the
+      # D1 database — `d1 migrations apply` only looks it up, and fails the
+      # deploy with "Couldn't find a D1 DB named 'opencode-cloud'" on a fresh
+      # account. Creating them here is what makes a fork's first deploy work
+      # with no local wrangler at all. Each is checked before it is created, so
+      # a credentials problem still fails loudly instead of being swallowed by
+      # an "already exists".
+      - name: Ensure the R2 buckets and the D1 database exist
+        run: |
+          set -euo pipefail
+          for bucket in opencode-cloud-sessions opencode-cloud-backups; do
+            if pnpm wrangler r2 bucket info "${bucket}" >/dev/null 2>&1; then
+              echo "R2 bucket ${bucket} already exists."
+            else
+              echo "Creating R2 bucket ${bucket}."
+              pnpm wrangler r2 bucket create "${bucket}"
+            fi
+          done
+          if pnpm wrangler d1 info opencode-cloud >/dev/null 2>&1; then
+            echo "D1 database opencode-cloud already exists."
+          else
+            echo "Creating D1 database opencode-cloud."
+            pnpm wrangler d1 create opencode-cloud
+          fi
+        env:
+          WRANGLER_WRITE_LOGS: "false"
+
+      # `opencode-sandbox-host` is a second Worker: the Cloudflare
+      # implementation of the sandbox host protocol, which owns the session
+      # containers. It is deployed before the site because the site's service
+      # binding must never point at a Worker that does not exist yet, and only
+      # when something it is built from changed — its Dockerfile, its own
+      # sources, or the protocol both sides share.
+      #
+      # "Or when it does not exist." That clause is what a fork needs: its first
+      # push is usually an ordinary change that touches no host path, and
+      # without the host Worker the site's service binding has nothing to point
+      # at and the site deploy fails.
+      - name: Decide whether the sandbox host is affected
+        id: host
+        env:
+          BEFORE: ${{ github.event.before }}
+          FORCED: ${{ inputs.deploy_host }}
+          WRANGLER_WRITE_LOGS: "false"
+        run: |
+          set -euo pipefail
+          if [ "${FORCED}" = "true" ]; then
+            echo "Sandbox host deploy was requested explicitly."
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! pnpm wrangler deployments list -c host/wrangler.jsonc >/dev/null 2>&1; then
+            echo "The sandbox host Worker is not deployed in this account yet; deploying it."
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ -z "${BEFORE}" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "Previous commit ${BEFORE} is unavailable; deploying the sandbox host too."
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          changed="$(git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- Dockerfile docker host protocol)"
+          if [ -n "${changed}" ]; then
+            echo "Sandbox host paths changed:"
+            echo "${changed}"
+            echo "affected=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No sandbox host path changed; leaving it deployed as it is."
+            echo "affected=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Deploy the sandbox host
+        if: steps.host.outputs.affected == 'true'
+        run: pnpm run deploy:host
+
+      # Container snapshots are uploaded straight from the container to R2 with
+      # a presigned URL, so the *host* Worker needs an R2 API key pair. Setting
+      # it here is what removes the last `wrangler secret put` a new operator
+      # would otherwise have to run from a laptop.
+      #
+      # Only the missing ones are written. `wrangler secret put` publishes a new
+      # version of the Worker, which evicts its Durable Objects, so doing it on
+      # every push would disturb live sessions for nothing. Rotating a key is
+      # therefore a deliberate act: change the repository secrets and run this
+      # workflow from the Actions tab with "rotate_host_secrets" ticked.
+      - name: Sync the sandbox host's R2 secrets
+        env:
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ROTATE: ${{ inputs.rotate_host_secrets }}
+          WRANGLER_WRITE_LOGS: "false"
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_R2_ACCOUNT_ID}${R2_ACCESS_KEY_ID}${R2_SECRET_ACCESS_KEY}" ]; then
+            echo "No R2 API credentials in repository secrets; leaving the host's as they are."
+            echo "Without them the host cannot presign snapshot uploads, so a stopping"
+            echo "container cannot checkpoint its workspace."
+            exit 0
+          fi
+          # A list that could not be read is treated as empty, so the secrets
+          # are written rather than silently skipped.
+          present="$(pnpm wrangler secret list -c host/wrangler.jsonc --format json 2>/dev/null || echo '[]')"
+          has() {
+            printf '%s' "${present}" | grep -Eq "\"name\" *: *\"$1\""
+          }
+          put() {
+            name="$1"
+            value="$2"
+            if [ -z "${value}" ]; then
+              echo "::warning::${name} is not set in repository secrets; skipping."
+              return 0
+            fi
+            if [ "${ROTATE}" != "true" ] && has "${name}"; then
+              echo "${name} is already set on the sandbox host; leaving it."
+              return 0
+            fi
+            echo "Writing ${name} to the sandbox host."
+            printf '%s' "${value}" | pnpm wrangler secret put "${name}" -c host/wrangler.jsonc
+          }
+          put CLOUDFLARE_R2_ACCOUNT_ID "${CLOUDFLARE_R2_ACCOUNT_ID}"
+          put R2_ACCESS_KEY_ID "${R2_ACCESS_KEY_ID}"
+          put R2_SECRET_ACCESS_KEY "${R2_SECRET_ACCESS_KEY}"
+
+      # The site itself runs no containers any more: they all belong to the
+      # sandbox host, which is deployed above and rolls out on its own paths.
+      # So there is nothing here to decide — no image is built from this
+      # configuration, and every push deploys the Worker.
+      - name: Deploy to Cloudflare
+        run: pnpm run deploy
+
+  # The Docker sandbox host is a Mac mini, not a Worker: the agent in `agent/`
+  # runs beside a Docker daemon and answers the same protocol the Cloudflare
+  # host answers. It is deployed over SSH, after the tests above have passed,
+  # and only when something it is actually built from changed — a push that
+  # touches the site alone must not restart it.
+  docker-agent:
+    name: Deploy the Docker sandbox agent
+    needs: [preflight, deploy]
+    if: needs.preflight.outputs.docker_agent == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Where the box is, and who connects to it, are secrets like the key
+      # itself: nothing about the sandbox host is written down here.
+      SSH_HOST: ${{ secrets.SANDBOX_AGENT_SSH_HOST }}
+      SSH_PORT: ${{ secrets.SANDBOX_AGENT_SSH_PORT }}
+      SSH_USER: ${{ secrets.SANDBOX_AGENT_SSH_USER }}
+      DEPLOY_DIR: srv/opencode-cloud
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # The decision below diffs this push against its predecessor.
+          fetch-depth: 0
+
+      # Two separate answers. The agent is a few files to copy and a service to
+      # restart, which is cheap and safe — restarting it touches no container,
+      # so sessions keep running and the site reconnects. The image is a Debian
+      # build that takes minutes, and a session only picks up a new one at its
+      # next *cold* start, so rebuilding it on an unrelated push buys nothing.
+      - name: Decide what the push affects
+        id: affected
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE}" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "Previous commit ${BEFORE} is unavailable; deploying everything."
+            echo "agent=true" >> "${GITHUB_OUTPUT}"
+            echo "image=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          agent_paths="$(git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- agent docker/ssh)"
+          # The image is built from its Dockerfile and from the SSH client
+          # config and pinned known_hosts that the build context supplies.
+          image_paths="$(git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- agent/session-image docker/ssh)"
+
+          if [ -n "${agent_paths}" ]; then
+            echo "Agent paths changed:"; echo "${agent_paths}"
+            echo "agent=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No agent path changed; leaving the sandbox host as it is."
+            echo "agent=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [ -n "${image_paths}" ]; then
+            echo "Session image inputs changed:"; echo "${image_paths}"
+            echo "image=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "image=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Set up SSH
+        if: steps.affected.outputs.agent == 'true'
+        env:
+          SSH_KEY: ${{ secrets.SANDBOX_AGENT_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 -p ~/.ssh
+          printf '%s\n' "${SSH_KEY}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          cat >> ~/.ssh/config <<EOF
+          Host sandbox
+            HostName ${SSH_HOST}
+            Port ${SSH_PORT:-22}
+            User ${SSH_USER}
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+            # The runner is a fresh container, so its known_hosts is empty and
+            # the host key is taken on trust once per deploy.
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          EOF
+
+      # `--delete` is what makes the box match the commit rather than accumulate
+      # whatever every past deploy left behind. It is scoped to the two
+      # directories the agent owns; nothing else on the mini is touched.
+      - name: Sync the agent
+        if: steps.affected.outputs.agent == 'true'
+        run: |
+          set -euo pipefail
+          ssh sandbox "mkdir -p ~/${DEPLOY_DIR}/agent ~/${DEPLOY_DIR}/docker/ssh"
+          rsync -az --delete agent/ "sandbox:${DEPLOY_DIR}/agent/"
+          rsync -az --delete docker/ssh/ "sandbox:${DEPLOY_DIR}/docker/ssh/"
+
+      # Docker Desktop writes `credsStore: desktop` into ~/.docker/config.json,
+      # so a build that has to pull the base image needs its credential helper
+      # on PATH. A login shell finds it; a non-interactive SSH command does not,
+      # and the failure is an opaque "error getting credentials".
+      - name: Build the session image
+        if: steps.affected.outputs.image == 'true'
+        run: |
+          set -euo pipefail
+          ssh sandbox "export PATH=/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:\$PATH \
+            && cd ~/${DEPLOY_DIR} \
+            && docker build -f agent/session-image/Dockerfile -t opencode-session:latest ."
+
+      # `kickstart -k` kills and restarts the job. That is safe on purpose: the
+      # agent holds no session state, containers are not its children, and the
+      # site reconnects on its own.
+      - name: Restart the agent
+        if: steps.affected.outputs.agent == 'true'
+        run: ssh sandbox 'launchctl kickstart -k gui/$(id -u)/io.opencode.sandbox-agent'
+
+      # Health is checked on the box's own loopback, so the deploy needs no copy
+      # of the bearer token. A 401 here would mean the token file went missing;
+      # anything but 200 fails the deploy while the previous image is still on
+      # disk and every running container is still up.
+      - name: Verify the agent answers
+        if: steps.affected.outputs.agent == 'true'
+        run: |
+          set -euo pipefail
+          ssh sandbox 'for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            body="$(curl -sS --max-time 10 -H "Authorization: Bearer $(cat ~/.config/opencode-agent/token)" \
+              http://127.0.0.1:8787/healthz || true)"
+            case "${body}" in
+              *\"ok\":true*) echo "${body}"; exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "the agent did not answer /healthz with ok:true" >&2
+          tail -20 ~/Library/Logs/opencode-sandbox-agent.log >&2
+          exit 1'

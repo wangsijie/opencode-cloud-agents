@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for the Docker sandbox agent.
+
+  Install as a *user* agent (~/Library/LaunchAgents), not a daemon: Docker
+  Desktop runs as the logged-in user, so a root LaunchDaemon has no daemon to
+  talk to. That means the mini has to be logged in — enable automatic login and
+  "start up automatically after a power failure" in System Settings, or the
+  first reboot takes every session with it.
+
+  Replace USERNAME and the paths, then:
+
+    cp agent/launchd/io.opencode.sandbox-agent.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.opencode.sandbox-agent.plist
+    launchctl kickstart -p gui/$(id -u)/io.opencode.sandbox-agent
+
+  The token is read from a file rather than set here: this plist is world
+  readable, and a token in EnvironmentVariables is also visible in `launchctl
+  procinfo`. Write it with `chmod 600` instead (see README.md).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.opencode.sandbox-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/USERNAME/opencode-cloud/agent/server.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/opencode-cloud</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd starts with a minimal PATH; the docker CLI is not on it.
+             Docker.app's own bin belongs here too: Docker Desktop writes
+             `credsStore: desktop` into ~/.docker/config.json, and a CLI that
+             has to reach the registry — the pull for an image this box has
+             never built — fails on a missing docker-credential-desktop. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>OC_AGENT_TOKEN_FILE</key>
+        <string>/Users/USERNAME/.config/opencode-agent/token</string>
+        <key>OC_AGENT_HOST</key>
+        <string>127.0.0.1</string>
+        <key>OC_AGENT_PORT</key>
+        <string>8787</string>
+        <key>OC_AGENT_IMAGE</key>
+        <string>opencode-session:latest</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Restarting the agent does not touch a container: sessions keep running
+         and the site reconnects. Only a crash loop is worth backing off from. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/opencode-sandbox-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/opencode-sandbox-agent.log</string>
+</dict>
+</plist>
