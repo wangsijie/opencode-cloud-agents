@@ -6,10 +6,12 @@ const POLL_INTERVAL_MS = 5_000;
 /**
  * The session list, kept fresh by polling.
  *
- * Polling is safe here precisely because reading a session never touches its
- * container: the list is served from the Hub registry, so a page left open
- * cannot keep anything awake. It pauses on a hidden tab anyway, to avoid
- * pointless requests from a backgrounded phone.
+ * The Hub serves idle and sleeping rows from a D1 runtime cache, so a page
+ * left open does not fan out to every container. Only sessions still marked
+ * for status query (busy, waking, unfinished dispatch, …) are calibrated
+ * against their Durable Objects and host — and that path never wakes them.
+ * Polling pauses on a hidden tab to avoid pointless requests from a
+ * backgrounded phone.
  *
  * Refresh failures while a list is already on screen are kept quiet — a dropped
  * poll is usually a sleeping laptop, and blanking the page for it would be

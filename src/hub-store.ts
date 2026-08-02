@@ -36,6 +36,11 @@ import {
   workspaceDirectory,
   type RepoDefinition
 } from './repos';
+import {
+  markSessionStatusQuery,
+  patchSessionRuntimeStatus,
+  type SessionRuntimeStatusPatch
+} from './session-runtime-cache';
 import { SETTING_KEYS, readSetting, writeSetting } from './settings';
 import {
   cleanupCutoff,
@@ -44,6 +49,12 @@ import {
   type SessionStatePatch,
   type WorkspaceOrigin
 } from './sessions';
+
+export {
+  markSessionStatusQuery,
+  patchSessionRuntimeStatus,
+  type SessionRuntimeStatusPatch
+};
 
 const REPO_CATALOG_SETTING_KEY = 'repo-catalog';
 
@@ -184,6 +195,8 @@ export function buildNewSession(
       title: input.title,
       phase: 'queued',
       pendingPromptCount: 1,
+      // About to dispatch: the list must calibrate until idle/sleeping.
+      statusQuery: true,
       createdAt: now,
       updatedAt: now
     }

@@ -1,5 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { RuntimeLifecycle } from './instances';
+import { patchSessionRuntimeStatus } from './session-runtime-cache';
+import { runtimeLifecycleNeedsStatusQuery } from './sessions';
 
 /**
  * Semantic lifecycle policy for one OpenCode instance.
@@ -192,6 +194,8 @@ export class LifecycleCoordinator extends DurableObject<Env> {
   private wakeInProgress: Promise<LifecycleWakeResult> | undefined;
   private probeInProgress: Promise<void> | undefined;
   private stopInProgress: Promise<void> | undefined;
+  /** Last public lifecycle mirrored to D1; skips no-op writes on lease renewals. */
+  private lastSyncedLifecycle: RuntimeLifecycle | undefined;
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
@@ -1205,6 +1209,40 @@ export class LifecycleCoordinator extends DurableObject<Env> {
       await this.lifecycleState.storage.deleteAlarm();
     } else {
       await this.lifecycleState.storage.setAlarm(alarmAt);
+    }
+    await this.maybeSyncRuntimeCache(state);
+  }
+
+  /**
+   * Mirror the public runtime lifecycle onto the session row.
+   *
+   * The session list serves idle/sleeping rows from this cache without asking
+   * the host. Only writes when the public lifecycle changes, so busy-probe and
+   * lease-renewal persists do not thrash D1. Failures are swallowed: the
+   * coordinator remains authoritative, and the next list calibration repairs
+   * a missed push.
+   */
+  private async maybeSyncRuntimeCache(
+    state: StoredLifecycleState
+  ): Promise<void> {
+    const lifecycle = publicLifecycle(state.phase);
+    if (lifecycle === this.lastSyncedLifecycle) {
+      return;
+    }
+    this.lastSyncedLifecycle = lifecycle;
+    try {
+      await patchSessionRuntimeStatus(this.env, state.instanceId, {
+        runtimeLifecycle: lifecycle,
+        statusQuery: runtimeLifecycleNeedsStatusQuery(lifecycle)
+      });
+    } catch (error) {
+      // Allow a later persist (or list calibration) to retry the same value.
+      this.lastSyncedLifecycle = undefined;
+      console.warn('Failed to mirror runtime status to the session row', {
+        instanceId: state.instanceId,
+        lifecycle,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 }
