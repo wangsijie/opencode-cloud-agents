@@ -539,7 +539,13 @@ async function getSessionListView(
   record: SessionRecord,
   instance: InstanceRecord
 ): Promise<SessionView> {
-  if (!sessionNeedsLiveStatusQuery(record, instance)) {
+  // Only ready instances may use the D1 runtime cache. deleting/cleaned rows
+  // must keep the synthesized getInstanceView path so the list still shows
+  // the deleting badge and the cleaned transcript summary.
+  if (
+    instance.lifecycle === 'ready' &&
+    !sessionNeedsLiveStatusQuery(record, instance)
+  ) {
     const runtime = runtimeStatusFromSessionCache(record, instance);
     if (runtime) {
       return {

@@ -342,14 +342,30 @@ test('unfinished dispatch and hot flags keep the list calibrating', () => {
   )
 })
 
-test('non-ready hub lifecycles never need a live status fan-out', () => {
-  assert.equal(
-    sessionNeedsLiveStatusQuery(cachedSession({ statusQuery: true }), {
-      ...readyInstance,
-      lifecycle: 'cleaned'
-    }),
-    false
-  )
+test('non-ready hub lifecycles must not use the runtime cache', () => {
+  for (const lifecycle of [
+    'deleting',
+    'delete_failed',
+    'cleaning',
+    'cleaned',
+    'clean_failed'
+  ]) {
+    const instance = { ...readyInstance, lifecycle }
+    // A calibrated cold row would otherwise look cacheable — that was the bug.
+    assert.equal(
+      sessionNeedsLiveStatusQuery(
+        cachedSession({ statusQuery: false, runtimeLifecycle: 'idle' }),
+        instance
+      ),
+      true,
+      `${lifecycle} must leave the cache path`
+    )
+    assert.equal(
+      runtimeStatusFromSessionCache(cachedSession(), instance),
+      undefined,
+      `${lifecycle} must not build a cached runtime`
+    )
+  }
 })
 
 test('a filled runtime cache is enough to build a list runtime view', () => {
@@ -368,5 +384,22 @@ test('a filled runtime cache is enough to build a list runtime view', () => {
       readyInstance
     ),
     undefined
+  )
+})
+
+test('deriveSessionStatus still needs runtime.deleting for the deleting badge', () => {
+  // The list must not serve a deleting instance from cache: cached runtimes
+  // hardcode deleting:false, so the badge would stick on idle/sleeping.
+  assert.equal(
+    deriveSessionStatus('working', runtime('idle'), 'deleting'),
+    'idle'
+  )
+  assert.equal(
+    deriveSessionStatus('working', { ...runtime('idle'), deleting: true }, 'deleting'),
+    'deleting'
+  )
+  assert.equal(
+    deriveSessionStatus('working', runtime('sleeping'), 'cleaned'),
+    'cleaned'
   )
 })

@@ -314,9 +314,11 @@ export function runtimeLifecycleNeedsStatusQuery(
 }
 
 /**
- * Whether `GET /api/sessions` should fan out to this row's Durable Objects.
+ * Whether the session list must not serve this row from the D1 runtime cache.
  *
- * Non-ready Hub lifecycles already short-circuit inside `getInstanceView`.
+ * Non-ready Hub lifecycles (`deleting`, `cleaned`, …) always return true: the
+ * cache only knows the last ready-runtime snapshot, while `getInstanceView`
+ * synthesizes deleting/cleaned status (and the cleaned transcript summary).
  * Unfinished dispatch (`queued`/`starting`) always asks, even if a coordinator
  * push cleared the flag while the wake had not started yet. A never-observed
  * row asks once so the cache can be filled.
@@ -326,7 +328,7 @@ export function sessionNeedsLiveStatusQuery(
   instance: InstanceRecord
 ): boolean {
   if (instance.lifecycle !== 'ready') {
-    return false;
+    return true;
   }
   if (session.phase === 'queued' || session.phase === 'starting') {
     return true;
@@ -361,13 +363,18 @@ export function containerHintForRuntimeLifecycle(
 /**
  * Build a list-ready runtime status from the D1 cache, with no DO/host I/O.
  *
- * Returns undefined when the cache has never been filled — the caller should
- * fall through to a live query.
+ * Only valid for `ready` instances — the cache has no Hub-lifecycle signal, so
+ * deleting/cleaned rows must go through `getInstanceView`. Returns undefined
+ * when the cache has never been filled or the instance is not ready; the
+ * caller should fall through to a live query.
  */
 export function runtimeStatusFromSessionCache(
   session: SessionRecord,
   instance: InstanceRecord
 ): InstanceRuntimeStatus | undefined {
+  if (instance.lifecycle !== 'ready') {
+    return undefined;
+  }
   if (!session.statusObservedAt || session.runtimeLifecycle === undefined) {
     return undefined;
   }
