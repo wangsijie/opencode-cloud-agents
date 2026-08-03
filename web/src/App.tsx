@@ -8,7 +8,7 @@ import {
   type Catalog,
   type SessionView
 } from './api';
-import { enteredNewSessionPage } from './catalog-refresh';
+import { enteredNewSessionPage, catalogForRoute } from './catalog-refresh';
 import { AgentSessionPage } from './components/AgentSessionPage';
 import { NewSessionPage } from './components/NewSessionPage';
 import { SessionPage } from './components/SessionPage';
@@ -163,6 +163,13 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
     void loadCatalog().catch(() => undefined);
   }, [loadCatalog]);
 
+  // Hiding happens during this render, not in the refresh effect below: the
+  // effect runs after the composer has already mounted and applied defaults
+  // from whatever catalog was in state — last visit's order — and a default
+  // that is still a valid option then survives the fresh read forever. So the
+  // new-session page sees no catalog until the reordered one lands.
+  const shownCatalog = catalogForRoute(route.name, previousRoute.current, catalog);
+
   useEffect(() => {
     const enteringNewSession = enteredNewSessionPage(
       previousRoute.current,
@@ -283,7 +290,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
           />
         ) : (
           <NewSessionPage
-            catalog={catalog}
+            catalog={shownCatalog}
             catalogError={catalogError}
             onRefreshRepos={() => loadCatalog(true)}
             onCreated={(created) => {
