@@ -97,9 +97,16 @@ export function SessionPage({
   // this state and a stale effort 400s as "Unknown model variant". Cleared
   // state is `''` (not `undefined`) so a later session refresh cannot treat it
   // as "not yet loaded" and re-fill the previous model's effort.
+  // `modelVariants` is empty both before the model loads and for a model that
+  // really has no variants; only the latter may clear. Clearing while the
+  // catalog or the session read is still pending would stamp the catalog
+  // default over the variant the session stores, which the refresh's
+  // `current ?? next.variant` then refuses to correct.
   useEffect(() => {
     if (modelVariants.length === 0) {
-      setVariant('');
+      if (model && catalog) {
+        setVariant('');
+      }
       return;
     }
     setVariant((current) =>
@@ -107,7 +114,7 @@ export function SessionPage({
         ? current
         : (defaultVariant(modelVariants) ?? '')
     );
-  }, [model, modelVariants]);
+  }, [model, modelVariants, catalog]);
 
   const runtime = session?.instance.runtime.lifecycle;
   const attached = runtime !== undefined && ATTACHED.includes(runtime);
