@@ -219,7 +219,7 @@ with the same key — add it as a GitHub signing key for Verified commits.
 | Section | Key | What it is for |
 |---|---|---|
 | Environment variables | `container.env` | Injected into every container: `CLOUDFLARE_API_TOKEN` for Wrangler, MCP tokens, anything else. Values are write-only; leaving one blank keeps the stored value. |
-| Skills | `opencode.skills` | One `SKILL.md` per entry, optionally scoped to a repository. Written to `/root/.config/opencode/skills/<name>/SKILL.md` on every wake — always the global directory, never the checkout. |
+| Skills | `opencode.skills` | One `SKILL.md` per entry, optionally scoped to a repository. Written to `/root/.config/opencode/skills/<name>/SKILL.md` on every wake — always the global directory, never the checkout. Two skills ship built in and need no configuration: `expose-dev-server` (a public URL for a local port, via cloudflared) and `browse-web` (drive headless Chromium with Playwright). An entry with the same name replaces the built-in. |
 | AGENTS.md | `opencode.agents-md` | Standing instructions: one global block plus per-repository additions. Merged and written to `/root/.config/opencode/AGENTS.md`, where OpenCode reads it alongside the repository's own `AGENTS.md`. |
 | MCP auth | `opencode.mcp-auth` | For OAuth-only MCP servers: run `opencode mcp auth <name>` on your own machine and paste `~/.local/share/opencode/mcp-auth.json` here. |
 | Git identity | `git.identity` | Name and email for commits, with optional per-organisation overrides. Without it the agent cannot commit. |

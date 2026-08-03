@@ -34,7 +34,7 @@ import {
   type HostClient
 } from './host-client';
 import {
-  OPENCODE_XDG_ENV,
+  CONTAINER_RUNTIME_ENV,
   PERSISTENCE_MARKER_NAME,
   injectContainerCredentials,
   provisionRepository,
@@ -206,10 +206,11 @@ const TRANSCRIPT_MIRROR_REFRESH_MS = 60 * 1000;
  */
 const TRANSCRIPT_MIRROR_LIVE_MS = 3 * 1000;
 
-// Keep OpenCode sessions and caches inside the snapshotted directory. Now
-// defined beside the other workspace conventions, because prebuild runs
-// install under the same paths.
-const OPENCODE_ENV = OPENCODE_XDG_ENV;
+// Keep OpenCode sessions and caches inside the snapshotted directory, and point
+// Playwright back out of it at the browsers the image baked. Now defined beside
+// the other workspace conventions, because prebuild runs install under the same
+// paths.
+const OPENCODE_ENV = CONTAINER_RUNTIME_ENV;
 
 type CheckpointReason = 'manual' | 'idle-stop';
 

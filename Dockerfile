@@ -8,6 +8,7 @@ ARG NOTION_MCP_VERSION=2.5.1
 ARG FIGMA_MCP_VERSION=0.13.2
 ARG RCLONE_VERSION=1.74.4
 ARG CLOUDFLARED_VERSION=2026.7.3
+ARG PLAYWRIGHT_VERSION=1.62.1
 
 # The base image includes Git but not an SSH client. Ubuntu 22.04's gh package
 # is several years old, so install the current CLI from GitHub's official release.
@@ -79,6 +80,47 @@ RUN npm install --global \
     && test "$(wrangler --version)" = "${WRANGLER_VERSION}" \
     && command -v notion-mcp-server \
     && command -v figma-developer-mcp
+
+# Playwright, for the browse-web built-in skill (src/builtin-skills.ts): the
+# agent drives a real browser to debug a page instead of guessing from source.
+#
+# Three decisions, each of which is load-bearing:
+#
+# 1. PLAYWRIGHT_BROWSERS_PATH is pinned to a path under /usr, and it must be.
+#    Playwright's default is `$XDG_CACHE_HOME/ms-playwright`, and this runtime
+#    redirects XDG_CACHE_HOME into /workspace (OPENCODE_XDG_ENV in
+#    src/runtime-ops.ts) — so an unpinned Playwright would ignore the browsers
+#    baked in here and re-download 344 MB into the snapshotted workspace, on
+#    every session. The ENV below is what makes the baked copy the one found;
+#    it is set here for the image's own build and again on the OpenCode server
+#    (PLAYWRIGHT_ENV in src/runtime-ops.ts) because a `docker exec` on the other
+#    host does not inherit this line.
+#
+# 2. `--only-shell` installs chromium-headless-shell (340 MB) instead of the
+#    full Chrome for Testing build (984 MB). The shell serves everything an
+#    agent can act on — navigate, screenshot, evaluate, console, network — and
+#    the only thing it cannot do is `headless: false`, which nobody can watch
+#    from inside a container anyway. The skill says so, because the failure is
+#    otherwise a confusing "Executable doesn't exist".
+#
+# 3. `--with-deps` runs its own apt-get update for the browser's shared
+#    libraries and fonts, so the lists are cleaned after it rather than before.
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/ms-playwright
+RUN npm install --global "playwright@${PLAYWRIGHT_VERSION}" \
+    && test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps --only-shell --no-progress chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm \
+    # A global install is not on Node's resolution path for a script run from
+    # /workspace: `require('playwright')` needs NODE_PATH and `import` cannot be
+    # fixed by NODE_PATH at all. Symlinking into the filesystem root's
+    # node_modules puts both on the lookup chain from any working directory,
+    # with no environment variable — while still losing to a repository's own
+    # copy, which resolves first from its own tree.
+    && mkdir -p /node_modules \
+    && ln -sfn /usr/local/lib/node_modules/playwright /node_modules/playwright \
+    && ln -sfn /usr/local/lib/node_modules/playwright-core /node_modules/playwright-core \
+    && node -e "require('playwright')" \
+    && node --input-type=module -e "await import('playwright')"
 
 # The host key pin and client config are not secrets; every credential — the
 # SSH key pair, the gh login, git identity and signing, environment variables

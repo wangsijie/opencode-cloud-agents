@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
+import { BUILTIN_SKILLS } from '../src/builtin-skills.ts'
 import {
+  CONTAINER_RUNTIME_ENV,
+  OPENCODE_XDG_ENV,
+  PLAYWRIGHT_ENV,
   injectContainerCredentials,
   provisionRepository,
   readSessionChanges,
@@ -9,6 +14,11 @@ import {
   sanitizeSeededWorkspace,
   wipeSeededWorkspace
 } from '../src/runtime-ops.ts'
+
+/** The built-ins ride every batch; these tests are about the credentials. */
+const builtinPaths = new Set(
+  BUILTIN_SKILLS.map((skill) => `/root/.config/opencode/skills/${skill.name}/SKILL.md`)
+)
 
 /**
  * A host stub. `answers` maps a substring of the command to the exec result it
@@ -75,7 +85,7 @@ test('credentials are one removal, one batch and one config command', async () =
   assert.equal(host.calls.writeBatch.length, 1)
   const written = host.calls.writeBatch[0]
   assert.deepEqual(
-    written.map((file) => file.path).filter((path) => !path.includes('expose-dev-server')),
+    written.map((file) => file.path).filter((path) => !builtinPaths.has(path)),
     [
       '/root/.ssh/id_ed25519',
       '/root/.ssh/id_ed25519.pub',
@@ -299,5 +309,35 @@ test('wiping a failed seed spares the persistence marker too', async () => {
       !call.command.includes('.opencode-persistence-ready'),
       `wipe must not touch the marker: ${call.command}`
     )
+  }
+})
+
+test('the runtime environment points Playwright out of the workspace it redirects everything else into', () => {
+  // XDG_CACHE_HOME lands in the snapshotted workspace on purpose — that is what
+  // keeps a warm pnpm store across wakes. Playwright resolves its browsers to
+  // `$XDG_CACHE_HOME/ms-playwright`, so left alone it would look inside the
+  // workspace, miss the 344 MB the image baked, and re-download them per
+  // session (and snapshot the result). The pin is the whole preinstall.
+  assert.match(OPENCODE_XDG_ENV.XDG_CACHE_HOME, /^\/workspace\//)
+  assert.ok(!PLAYWRIGHT_ENV.PLAYWRIGHT_BROWSERS_PATH.startsWith('/workspace'))
+  assert.equal(
+    CONTAINER_RUNTIME_ENV.PLAYWRIGHT_BROWSERS_PATH,
+    PLAYWRIGHT_ENV.PLAYWRIGHT_BROWSERS_PATH
+  )
+
+  // Whatever the images install to has to be exactly this path, so the two
+  // Dockerfiles are read rather than trusted.
+  for (const dockerfile of ['Dockerfile', 'agent/session-image/Dockerfile']) {
+    const content = readFileSync(new URL(`../${dockerfile}`, import.meta.url), 'utf8')
+    assert.ok(
+      content.includes(`ENV PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_ENV.PLAYWRIGHT_BROWSERS_PATH}`),
+      `${dockerfile} must install browsers where the runtime looks for them`
+    )
+  }
+
+  // The XDG redirects still travel with it: a wake that dropped them would put
+  // OpenCode's own database outside the snapshot and lose conversations.
+  for (const [key, value] of Object.entries(OPENCODE_XDG_ENV)) {
+    assert.equal(CONTAINER_RUNTIME_ENV[key], value)
   }
 })

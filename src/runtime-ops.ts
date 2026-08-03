@@ -72,6 +72,37 @@ export const OPENCODE_XDG_ENV = {
 };
 
 /**
+ * Where the images baked Playwright's browsers, undoing the redirect above for
+ * this one tool.
+ *
+ * Playwright resolves its browser registry to `$XDG_CACHE_HOME/ms-playwright`,
+ * and XDG_CACHE_HOME points into the workspace — so without this the browsers
+ * installed in the image are invisible, and the first `chromium.launch()` of
+ * every session fails with "Executable doesn't exist" and an invitation to
+ * download 344 MB into the snapshot. Pinning it back to the image's path is
+ * what makes the preinstall count.
+ *
+ * It has to be passed rather than left to the Dockerfile's `ENV`: the Docker
+ * host starts OpenCode as a `docker exec` with an explicit environment, which
+ * inherits nothing from the image. Both hosts therefore get it from here.
+ */
+export const PLAYWRIGHT_ENV = {
+  PLAYWRIGHT_BROWSERS_PATH: '/usr/local/share/ms-playwright'
+};
+
+/**
+ * Everything in the server's environment that is a property of the image
+ * rather than of the operator's settings. Merged last by both callers, so —
+ * like the XDG redirects always have been — it wins over an operator variable
+ * of the same name: these paths describe where this image actually put things,
+ * and a session that disagreed with them would simply not work.
+ */
+export const CONTAINER_RUNTIME_ENV = {
+  ...OPENCODE_XDG_ENV,
+  ...PLAYWRIGHT_ENV
+};
+
+/**
  * What a prebuild seed carries that belongs to the donor session, not to the
  * repository: OpenCode's own database and state under the XDG redirects (see
  * OPENCODE_ENV in sandbox.ts). The pnpm store (`.opencode-state/data/pnpm`)

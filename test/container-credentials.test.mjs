@@ -150,6 +150,29 @@ test('built-in skills reach every container; a same-name settings skill replaces
   assert.deepEqual(replacements, [{ path: builtinPath, content: '# mine\n', mode: '644' }])
 })
 
+test('browse-web tells the agent the things the image would otherwise teach the hard way', () => {
+  const skill = credentialFiles({ env: [], skills: [] }).find(
+    (file) => file.path === `${CONTAINER_SKILLS_ROOT}/browse-web/SKILL.md`
+  )
+
+  // Preinstalled, so the agent must not reach for a download: `playwright
+  // install` would fetch 344 MB into the snapshotted workspace, per session.
+  assert.ok(skill.content.includes('preinstalled'))
+  assert.ok(skill.content.includes('playwright install'))
+
+  // Only the headless shell is baked in (Dockerfile: `--only-shell`), so
+  // `headless: false` and `channel: 'chrome'` both fail with a misleading
+  // "Executable doesn't exist" unless the skill says so first.
+  assert.ok(skill.content.includes('headless: false'))
+  assert.ok(skill.content.includes("channel: 'chrome'"))
+  assert.ok(skill.content.includes("Executable doesn't exist"))
+
+  // A screenshot nobody reads is wasted work, and one left in the checkout
+  // looks like a change the user asked for.
+  assert.ok(skill.content.includes('/tmp/page.png'))
+  assert.ok(skill.content.includes('await browser.close()'))
+})
+
 test('git identity and signing are configured only for what exists', () => {
   const commands = gitConfigCommands(full())
   assert.deepEqual(commands, [

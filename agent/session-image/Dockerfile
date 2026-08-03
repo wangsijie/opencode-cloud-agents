@@ -22,6 +22,7 @@ ARG NOTION_MCP_VERSION=2.5.1
 ARG FIGMA_MCP_VERSION=0.13.2
 ARG RCLONE_VERSION=1.74.4
 ARG CLOUDFLARED_VERSION=2026.7.3
+ARG PLAYWRIGHT_VERSION=1.62.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -103,6 +104,29 @@ RUN npm install --global \
     && test "$(wrangler --version)" = "${WRANGLER_VERSION}" \
     && command -v notion-mcp-server \
     && command -v figma-developer-mcp
+
+# Playwright, for the browse-web built-in skill. The reasoning is written out in
+# the root `Dockerfile`; the short version is that PLAYWRIGHT_BROWSERS_PATH has
+# to be pinned outside /workspace or the runtime's XDG_CACHE_HOME redirect sends
+# Playwright looking in the snapshotted workspace and it re-downloads the
+# browser per session, that `--only-shell` buys 640 MB at the cost of headed
+# mode alone, and that the /node_modules symlink is what makes a bare `import`
+# resolve from a checkout.
+#
+# This ENV is not what the session sees: OpenCode is started by `docker exec`
+# with an explicit environment (see agent/docker.mjs), so the variable reaches a
+# session through PLAYWRIGHT_ENV in src/runtime-ops.ts. It is set here for the
+# install below and for anyone who exec's into the container by hand.
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/ms-playwright
+RUN npm install --global "playwright@${PLAYWRIGHT_VERSION}" \
+    && test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps --only-shell --no-progress chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm \
+    && mkdir -p /node_modules \
+    && ln -sfn /usr/local/lib/node_modules/playwright /node_modules/playwright \
+    && ln -sfn /usr/local/lib/node_modules/playwright-core /node_modules/playwright-core \
+    && node -e "require('playwright')" \
+    && node --input-type=module -e "await import('playwright')"
 
 # The host key pin and client config are not secrets. Every credential — the SSH
 # key pair, the gh login, git identity and signing, environment variables and

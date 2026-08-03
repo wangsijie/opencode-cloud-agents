@@ -32,7 +32,7 @@ import {
 } from './prebuilds.ts';
 import { workspaceDirectory, type RepoDefinition } from './repos.ts';
 import {
-  OPENCODE_XDG_ENV,
+  CONTAINER_RUNTIME_ENV,
   PERSISTENCE_MARKER_NAME,
   injectContainerCredentials,
   provisionRepository,
@@ -250,7 +250,7 @@ export class PrebuildRunner extends DurableObject<Env> {
           `nohup sh -c 'sh ${RUN_SCRIPT_PATH} > ${RUN_LOG_PATH} 2>&1; echo $? > ${RUN_EXIT_PATH}' > /dev/null 2>&1 &`,
           'echo launched'
         ].join('\n'),
-        { env: { ...operatorEnv, ...OPENCODE_XDG_ENV }, timeoutMs: 30_000 }
+        { env: { ...operatorEnv, ...CONTAINER_RUNTIME_ENV }, timeoutMs: 30_000 }
       );
       if (!launched.success) {
         throw new Error(`Could not launch the install: ${launched.stderr}`);

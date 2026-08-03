@@ -8,8 +8,9 @@ import type { SkillSetting } from './settings';
  * rollout. A settings skill with the same name replaces the built-in, which
  * is the customization escape hatch.
  *
- * The container images carry the binaries these skills call (cloudflared in
- * both Dockerfiles); a built-in skill and its binary version move together.
+ * The container images carry the binaries these skills call (cloudflared and
+ * Playwright in both Dockerfiles); a built-in skill and its binary version
+ * move together.
  */
 export const BUILTIN_SKILLS: SkillSetting[] = [
   {
@@ -104,6 +105,121 @@ user asks.
   authentication in front.
 - The tunnel dies when this container sleeps, and a reopened tunnel gets a
   different URL.
+`
+  },
+  {
+    name: 'browse-web',
+    content: `---
+name: browse-web
+description: Drive a real Chromium browser from this container with the preinstalled Playwright — load a page, read the rendered DOM, capture console and network errors, take a screenshot. Use when debugging a web page or a local dev server, when a page's behavior depends on JavaScript, or whenever you would otherwise be guessing at what a page renders. Not for fetching plain documents, which curl does faster.
+---
+
+# Browse the web
+
+Playwright and Chromium are preinstalled. Nothing needs installing, and
+nothing needs downloading — if you find yourself running
+\`npm install playwright\` or \`playwright install\`, stop: the browser is
+already here and a download would land in the workspace and be snapshotted.
+
+Reach for this when the answer depends on what a browser *does* with a page:
+a dev server you just changed, an app whose content is rendered by JavaScript,
+a layout you want to see, an error that only appears in the console. For a
+static file or a JSON API, \`curl\` is faster and this is overkill.
+
+## Run it
+
+Write a script and run it with \`node\`. \`playwright\` resolves as a bare
+import from any directory, in both module systems, with no \`NODE_PATH\` and
+no \`package.json\`:
+
+\`\`\`bash
+cat > /tmp/browse.mjs <<'EOF'
+import { chromium } from 'playwright';
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+
+// Collect the diagnostics before navigating, or you miss the ones that fire
+// during load — which are usually the interesting ones.
+const problems = [];
+page.on('console', (m) => {
+  if (m.type() === 'error' || m.type() === 'warning') problems.push(m.type() + ': ' + m.text());
+});
+page.on('pageerror', (e) => problems.push('pageerror: ' + e.message));
+page.on('requestfailed', (r) => problems.push('requestfailed: ' + r.url() + ' ' + r.failure()?.errorText));
+
+const response = await page.goto('http://localhost:3000', { waitUntil: 'networkidle' });
+console.log('status:', response?.status());
+console.log('title:', await page.title());
+console.log('text:', (await page.locator('body').innerText()).slice(0, 2000));
+console.log('problems:', problems);
+
+await page.screenshot({ path: '/tmp/page.png', fullPage: true });
+await browser.close();
+EOF
+node /tmp/browse.mjs
+\`\`\`
+
+A repository that has its own Playwright in \`node_modules\` wins over the
+global one when the script runs inside that checkout — which is what you want
+for its tests, and a version mismatch you should expect if you mix the two.
+
+## Read the screenshot
+
+You can see images. After writing one, open it with your file-reading tool —
+a screenshot you never look at has told you nothing. \`/tmp\` is the right
+place for it: it is outside the workspace, so it is neither snapshotted nor
+mistaken for a change the user asked for. Never leave one in the repository.
+
+For a quick look with no script at all:
+
+\`\`\`bash
+playwright screenshot --viewport-size 1280,800 --full-page http://localhost:3000 /tmp/page.png
+\`\`\`
+
+## Headless only
+
+The image carries Chromium's headless shell, not the full desktop build. This
+is the one limitation worth knowing up front:
+
+- \`chromium.launch()\` — works. This is the default and what you want.
+- \`chromium.launch({ headless: false })\` — fails with
+  \`Executable doesn't exist\`. There is no display and nobody could watch it;
+  do not "fix" this by installing the full browser.
+- \`chromium.launch({ channel: 'chrome' })\` — fails the same way. Real Chrome
+  is not installed.
+
+Firefox and WebKit are not installed either. If a bug genuinely turns on
+engine differences, say so rather than downloading one.
+
+## When a page needs more than a load
+
+- **Wait for what you actually need**, not a timeout:
+  \`await page.waitForSelector('[data-loaded]')\` or a \`waitUntil\` on the
+  navigation. Sprinkling \`waitForTimeout\` produces flaky, slow scripts.
+- **Interact** with \`page.click\`, \`page.fill\`, \`page.selectOption\`; then
+  re-read the DOM or take another screenshot to confirm what changed.
+- **Evaluate in the page** with \`page.evaluate(() => ...)\` when you need a
+  value the DOM does not show, such as computed styles or app state.
+- **A trace** (\`context.tracing.start({ screenshots: true, snapshots: true })\`)
+  records a whole run to a zip, if a single screenshot is not explaining it.
+
+## Close the browser
+
+Always \`await browser.close()\`, including on the failure path — a leaked
+Chromium sits on this container's memory for as long as the session lives.
+Wrap the body in \`try\`/\`finally\` for anything longer than the snippet above.
+
+## Reaching a server
+
+\`http://localhost:<port>\` is the normal case: the browser runs in this same
+container, so a dev server you started here is directly reachable and needs no
+tunnel. Do not open one just to look at a page yourself — \`expose-dev-server\`
+is for giving the *user* a URL.
+
+Public sites work too, subject to this network. If a page hangs on
+\`networkidle\`, retry with \`waitUntil: 'domcontentloaded'\`: analytics and
+long-polling connections keep some pages from ever being idle.
 `
   }
 ];

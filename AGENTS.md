@@ -30,7 +30,8 @@ table and is edited on the Hub's `/settings` page.
 - The `opencode.skills` setting holds `SKILL.md` entries, each optionally
   scoped to one repository; the wake writes the global entries plus the
   instance repo's entries into `/root/.config/opencode/skills/` — always the
-  global directory, never the checkout.
+  global directory, never the checkout. `src/builtin-skills.ts` is written into
+  the same directory first, so a settings entry of the same name replaces one.
 
 ## Configuration changes
 
@@ -113,6 +114,34 @@ build the button first.
 
 Anything interpolated into a container shell command still goes through
 `shellQuote` in `src/session-changes.ts`.
+
+## A preinstalled tool that reads XDG is not preinstalled
+
+The images bake Playwright and its Chromium (both Dockerfiles, beside
+cloudflared). That alone buys nothing, because Playwright resolves its browsers
+to `$XDG_CACHE_HOME/ms-playwright` and this runtime points `XDG_CACHE_HOME` into
+the snapshotted workspace — so the baked copy is invisible, the first
+`chromium.launch()` fails with "Executable doesn't exist", and the obvious fix
+downloads 344 MB into the workspace of every session and snapshots it.
+
+`PLAYWRIGHT_ENV` in `src/runtime-ops.ts` pins the path back to where the image
+put it, and `CONTAINER_RUNTIME_ENV` is the merge of that with the XDG redirects
+that both the server start and the prebuild runner pass. The Dockerfile's `ENV`
+cannot carry this on its own: the Docker host starts OpenCode as a `docker exec`
+with an explicit environment and inherits nothing from the image. A test asserts
+the two Dockerfiles and `PLAYWRIGHT_ENV` name the same path.
+
+The general rule for the next tool: anything installed into the image that keeps
+state under an XDG directory needs a variable pinning it back out of
+`/workspace`, or it silently reinstalls itself per session.
+
+Two shape decisions worth keeping. Only `chromium-headless-shell` is installed
+(`--only-shell`, 344 MB against 984 MB for the full build) — so `headless: false`
+and `channel: 'chrome'` fail, and the `browse-web` skill says so, because the
+error otherwise reads like a broken image. And the library is symlinked into
+`/node_modules`, because a global npm install is not on Node's resolution path
+for a script run from a checkout: `NODE_PATH` fixes `require` and does *not* fix
+`import`. A repository's own copy still wins, resolving from its own tree first.
 
 ## Never exclude anything from the workspace snapshot
 
