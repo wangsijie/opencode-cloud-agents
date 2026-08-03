@@ -621,6 +621,15 @@ body.resizing .resize-handle {
   text-overflow: ellipsis;
 }
 
+/* The thumbtack on a pinned session. Quieter than the dot and the tag: it
+   qualifies the title, and it must never truncate or push the title aside. */
+.row-pin {
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+
 /* The sandbox host, when it is not the default one. Quieter than a `.tag`: it
    qualifies the title rather than standing beside it, and it must never be the
    thing that truncates the title it follows. */

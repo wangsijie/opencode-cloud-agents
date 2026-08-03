@@ -104,6 +104,11 @@ export interface SessionView {
    */
   unreadAt?: string;
   /**
+   * When a human pinned this session to the top of the sidebar. Absent means
+   * not pinned. Server-side, like `unreadAt`.
+   */
+  pinnedAt?: string;
+  /**
    * How the workspace was first materialized: a fresh clone, or a seed from
    * the repo's prebuild. Absent on sessions that predate the field.
    */
@@ -412,8 +417,11 @@ export interface WorkspaceFile {
 
 export const listSessions = () => call<SessionView[]>('/api/sessions');
 
-/** Rename a session. Does not touch the container. */
-export const patchSession = (id: string, input: { title?: string }) =>
+/**
+ * Rename a session, or pin it to the top of the sidebar. Does not touch the
+ * container.
+ */
+export const patchSession = (id: string, input: { title?: string; pinned?: boolean }) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(input)

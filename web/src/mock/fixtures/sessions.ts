@@ -15,7 +15,7 @@
  * | ses_error     | runtime error badge                                           |
  * | ses_deleting  | deleting row styling, sending disabled                        |
  * | ses_cleaned   | idle-swept session: cleaned card, read-only composer, mirror  |
- * | ses_docs      | sleeping session in a second repository, short mirror          |
+ * | ses_docs      | sleeping session in a second repository, short mirror, pinned  |
  * | ses_long      | long-title truncation + variant pill                          |
  * | ses_no_repo   | session started with no repository: /workspace, no Changes tab |
  * | ses_docker    | Docker host: list + header badge, volume-persistence copy      |
@@ -508,6 +508,9 @@ export function buildFixtureSessions(): MockSessionState[] {
       phase: 'working',
       status: 'sleeping',
       lastActivityAt: hoursAgo(4),
+      // Pinned: this fixture is the sidebar's Pinned group — a session an
+      // operator keeps at the top despite a week-old activity date.
+      pinnedAt: daysAgo(6),
       instance: {
         id: 'ses_docs',
         lifecycle: 'ready',

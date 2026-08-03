@@ -422,6 +422,13 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
           view.title = body.title.trim();
           view.displayTitle = body.title.trim();
         }
+        if (typeof body.pinned === 'boolean') {
+          if (body.pinned) {
+            view.pinnedAt = view.pinnedAt ?? new Date().toISOString();
+          } else {
+            delete view.pinnedAt;
+          }
+        }
         return json(view);
       }
       if (method === 'DELETE') {

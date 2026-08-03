@@ -860,7 +860,7 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
 }
 
 /**
- * Rename a session.
+ * Rename a session, or pin it to the top of the sidebar.
  *
  * A registry edit: it does not touch the container, so it works whether the
  * session is awake, asleep, or has never started.
@@ -879,19 +879,27 @@ async function patchSession(
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HttpError(400, 'Request body must be a JSON object');
   }
-  const { title } = value as { title?: unknown };
-  if (title === undefined) {
+  const { title, pinned } = value as { title?: unknown; pinned?: unknown };
+  if (title === undefined && pinned === undefined) {
     throw new HttpError(400, 'Nothing to change');
   }
 
-  const trimmed = typeof title === 'string' ? title.trim() : '';
-  if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
-    throw new HttpError(
-      400,
-      `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
-    );
+  if (title !== undefined) {
+    const trimmed = typeof title === 'string' ? title.trim() : '';
+    if (!trimmed || trimmed.length > MAX_SESSION_TITLE_LENGTH) {
+      throw new HttpError(
+        400,
+        `A title of up to ${MAX_SESSION_TITLE_LENGTH} characters is required`
+      );
+    }
+    await hubStore.renameSession(env, record.id, trimmed);
   }
-  await hubStore.renameSession(env, record.id, trimmed);
+  if (pinned !== undefined) {
+    if (typeof pinned !== 'boolean') {
+      throw new HttpError(400, 'pinned must be a boolean');
+    }
+    await hubStore.setSessionPinned(env, record.id, pinned);
+  }
   return json(await getSessionView(env, await requireSession(env, record.id)));
 }
 

@@ -8,7 +8,7 @@ import {
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
 import { useResizable } from '../useResizable';
-import { DotsIcon, PlusIcon, SettingsIcon, SignOutIcon } from './icons';
+import { DotsIcon, PinIcon, PlusIcon, SettingsIcon, SignOutIcon } from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
 
@@ -104,15 +104,36 @@ export function Sidebar({
   }
 
   // The Hub sorts by creation, but a sidebar is a history: the session touched
-  // most recently belongs at the top, or the day headings interleave.
+  // most recently belongs at the top, or the day headings interleave. A pin
+  // pulls a session out of that order into its own group on top — the list
+  // still sorts within each group by activity, so a pin is a place in the
+  // list, not a new ordering principle.
   const ordered = sessions
     ? [...sessions].sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
     : undefined;
+  const pinned = ordered?.filter((session) => session.pinnedAt) ?? [];
 
   const groups = BUCKET_ORDER.map((bucket) => ({
     bucket,
-    entries: ordered?.filter((session) => recencyBucket(session.lastActivityAt) === bucket) ?? []
+    entries:
+      ordered?.filter(
+        (session) =>
+          !session.pinnedAt && recencyBucket(session.lastActivityAt) === bucket
+      ) ?? []
   })).filter((group) => group.entries.length > 0);
+
+  const renderEntry = (session: SessionView) => (
+    <Row
+      key={session.id}
+      session={session}
+      active={session.id === activeId}
+      busy={busyId === session.id}
+      menuOpen={menuFor === session.id}
+      onOpenMenu={() => setMenuFor(session.id)}
+      onNavigate={onClose}
+      run={run}
+    />
+  );
 
   return (
     <nav
@@ -146,26 +167,23 @@ export function Sidebar({
           <p className="muted sidebar-empty">{listError}</p>
         ) : !sessions ? (
           <p className="muted sidebar-empty">Loading…</p>
-        ) : groups.length === 0 ? (
+        ) : groups.length === 0 && pinned.length === 0 ? (
           <p className="muted sidebar-empty">No sessions yet.</p>
         ) : (
-          groups.map((group) => (
-            <div key={group.bucket}>
-              <h2 className="sidebar-group-label">{RECENCY_LABELS[group.bucket]}</h2>
-              {group.entries.map((session) => (
-                <Row
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeId}
-                  busy={busyId === session.id}
-                  menuOpen={menuFor === session.id}
-                  onOpenMenu={() => setMenuFor(session.id)}
-                  onNavigate={onClose}
-                  run={run}
-                />
-              ))}
-            </div>
-          ))
+          <>
+            {pinned.length > 0 ? (
+              <div>
+                <h2 className="sidebar-group-label">Pinned</h2>
+                {pinned.map(renderEntry)}
+              </div>
+            ) : null}
+            {groups.map((group) => (
+              <div key={group.bucket}>
+                <h2 className="sidebar-group-label">{RECENCY_LABELS[group.bucket]}</h2>
+                {group.entries.map(renderEntry)}
+              </div>
+            ))}
+          </>
         )}
       </div>
 
@@ -258,6 +276,11 @@ function Row({
           <i className="row-dot working" aria-hidden="true" />
         ) : null}
         <span className="row-title">{session.displayTitle}</span>
+        {session.pinnedAt ? (
+          <span className="row-pin" title="Pinned to the top">
+            <PinIcon />
+          </span>
+        ) : null}
         {/* A cleaned session is still listed — its history remains readable —
             but the tag says up front that it is an archive, not a session to
             continue. */}
@@ -297,6 +320,17 @@ function Row({
             }}
           >
             Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              void run(session.id, () =>
+                patchSession(session.id, { pinned: !session.pinnedAt })
+              )
+            }
+          >
+            {session.pinnedAt ? 'Unpin' : 'Pin to top'}
           </button>
           {canStop ? (
             <button

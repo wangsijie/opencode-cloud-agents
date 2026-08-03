@@ -217,6 +217,15 @@ export function CloseIcon() {
   );
 }
 
+/** A thumbtack: the marker on a session pinned to the top of the sidebar. */
+export function PinIcon() {
+  return (
+    <Icon size={13}>
+      <path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+    </Icon>
+  );
+}
+
 /** The mark on the new-session page: a four-point spark, drawn filled. */
 export function SparkIcon() {
   return (

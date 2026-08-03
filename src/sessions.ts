@@ -98,6 +98,11 @@ export interface SessionRecord {
    */
   unreadAt?: string;
   /**
+   * When a human pinned this session to the top of the sidebar. Absent means
+   * not pinned. Kept in D1 so the pin follows the user across devices.
+   */
+  pinnedAt?: string;
+  /**
    * Set when a human named this session. OpenCode titles a conversation of its
    * own accord, and adopting that title is an improvement on the first line of
    * the opening prompt — but never on a name somebody chose.

@@ -353,6 +353,31 @@ export async function clearSessionUnread(env: Env, id: string): Promise<void> {
 }
 
 /**
+ * Pin a session to the top of the sidebar, or unpin it.
+ *
+ * COALESCE keeps the first pinned moment through redundant pin presses; the
+ * value only matters as a "when was it pinned" marker, and the sidebar sorts
+ * pinned sessions by activity like every other group. Like the unread marker,
+ * deliberately does not touch `updated_at`: pinning is not activity, and
+ * bumping it would reorder the recency list and reset the cleanup clock.
+ */
+export async function setSessionPinned(
+  env: Env,
+  id: string,
+  pinned: boolean
+): Promise<SessionRecord | undefined> {
+  const row = await env.DB.prepare(
+    `UPDATE sessions
+     SET pinned_at = CASE WHEN ?2 = 1 THEN COALESCE(pinned_at, ?3) ELSE NULL END
+     WHERE id = ?1
+     RETURNING *`
+  )
+    .bind(id, pinned ? 1 : 0, pinned ? new Date().toISOString() : null)
+    .first<SessionRow>();
+  return row ? rowToSession(row) : undefined;
+}
+
+/**
  * Advance (or, with `null`, clear) the transient wake step the boot screen
  * words itself with. Presentation only, so like the unread marker it never
  * touches `updated_at` — and a write that fails must never fail a wake, which

@@ -52,6 +52,7 @@ export interface SessionRow {
   last_prompt_at: string | null;
   cleaned_at: string | null;
   unread_at: string | null;
+  pinned_at: string | null;
   workspace_origin: string | null;
   boot_step: string | null;
   runtime_lifecycle: string | null;
@@ -99,6 +100,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.last_prompt_at === null ? {} : { lastPromptAt: row.last_prompt_at }),
     ...(row.cleaned_at === null ? {} : { cleanedAt: row.cleaned_at }),
     ...(row.unread_at === null ? {} : { unreadAt: row.unread_at }),
+    ...(row.pinned_at === null ? {} : { pinnedAt: row.pinned_at }),
     ...(row.title_locked ? { titleLocked: true } : {}),
     ...(row.workspace_origin === null
       ? {}
