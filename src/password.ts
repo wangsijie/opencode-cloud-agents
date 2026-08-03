@@ -5,7 +5,7 @@
  * the database rows these values live in are written by
  * [access.ts](access.ts) and [api-settings.ts](api-settings.ts).
  */
-import type { PasswordRecord } from './settings';
+import type { PasswordRecord } from './settings.ts';
 
 /**
  * Workers cap PBKDF2 at 100,000 iterations — `deriveBits` throws above it —

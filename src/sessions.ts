@@ -17,7 +17,7 @@ import type {
   InstanceRuntimeStatus,
   InstanceView,
   RuntimeLifecycle
-} from './instances';
+} from './instances.ts';
 import {
   isOpencodePlaceholderTitle,
   type TranscriptMirrorSummary

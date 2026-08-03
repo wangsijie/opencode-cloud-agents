@@ -10,15 +10,17 @@
  * The SPA shell and its assets stay public — the sign-in form is part of them,
  * and they carry nothing worth reading. Everything under `/api/` is closed.
  */
-import { isWebSocketUpgrade, json, methodNotAllowed } from './http';
+import { and, eq, gt, lt } from 'drizzle-orm';
+import { adminSessions, db } from './db/index.ts';
+import { isWebSocketUpgrade, json, methodNotAllowed } from './http.ts';
 import {
   generateSessionToken,
   hashPassword,
   hashToken,
   verifyPassword
-} from './password';
-import { SETTING_KEYS, readSetting, writeSetting } from './settings';
-import type { PasswordRecord } from './settings';
+} from './password.ts';
+import { SETTING_KEYS, readSetting, writeSetting } from './settings.ts';
+import type { PasswordRecord } from './settings.ts';
 
 const SESSION_COOKIE = 'hub_admin';
 
@@ -77,17 +79,14 @@ export async function createAdminSession(
   const token = generateSessionToken();
   const now = new Date();
   const expires = new Date(now.getTime() + SESSION_MAX_AGE * 1000);
-  await env.DB.prepare(
-    'DELETE FROM admin_sessions WHERE expires_at < ?1'
-  )
-    .bind(now.toISOString())
-    .run();
-  await env.DB.prepare(
-    `INSERT INTO admin_sessions (token_hash, created_at, expires_at)
-     VALUES (?1, ?2, ?3)`
-  )
-    .bind(await hashToken(token), now.toISOString(), expires.toISOString())
-    .run();
+  await db(env)
+    .delete(adminSessions)
+    .where(lt(adminSessions.expiresAt, now.toISOString()));
+  await db(env).insert(adminSessions).values({
+    tokenHash: await hashToken(token),
+    createdAt: now.toISOString(),
+    expiresAt: expires.toISOString()
+  });
   return { cookie: sessionCookie(token, url, SESSION_MAX_AGE) };
 }
 
@@ -96,12 +95,17 @@ async function isSignedIn(request: Request, env: Env): Promise<boolean> {
   if (!presented) {
     return false;
   }
-  const row = await env.DB.prepare(
-    'SELECT 1 AS live FROM admin_sessions WHERE token_hash = ?1 AND expires_at > ?2'
-  )
-    .bind(await hashToken(presented), new Date().toISOString())
-    .first<{ live: number }>();
-  return row !== null;
+  const [row] = await db(env)
+    .select({ tokenHash: adminSessions.tokenHash })
+    .from(adminSessions)
+    .where(
+      and(
+        eq(adminSessions.tokenHash, await hashToken(presented)),
+        gt(adminSessions.expiresAt, new Date().toISOString())
+      )
+    )
+    .limit(1);
+  return row !== undefined;
 }
 
 /**
@@ -144,9 +148,9 @@ export async function handleAuthApi(
   if (request.method === 'DELETE') {
     const presented = readCookie(request, SESSION_COOKIE);
     if (presented) {
-      await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash = ?1')
-        .bind(await hashToken(presented))
-        .run();
+      await db(env)
+        .delete(adminSessions)
+        .where(eq(adminSessions.tokenHash, await hashToken(presented)));
     }
     return json({ authenticated: false }, 200, {
       'Set-Cookie': sessionCookie('', url, 0)

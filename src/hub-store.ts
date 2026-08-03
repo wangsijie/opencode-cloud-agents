@@ -14,41 +14,57 @@
  * replication) is deliberately unused, so reads here are strongly consistent
  * with the writes that precede them.
  */
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  max,
+  ne,
+  not,
+  notInArray,
+  or,
+  sql
+} from 'drizzle-orm';
 import type { SessionProvider } from '../protocol/types.ts';
+import { db, lastActivityAt, sessions } from './db/index.ts';
 import {
   REPO_CATALOG_TTL_MS,
   fetchGithubRepoCatalog,
   orderReposByLastUse,
   withReposInUse
-} from './github-catalog';
+} from './github-catalog.ts';
 import {
   parseRepoJson,
   rowToInstance,
   rowToSession,
-  sessionPatchBindings,
+  sessionPatchAssignments,
   type SessionRow
-} from './hub-rows';
-import { HUB_DURABLE_OBJECT_ID, type InstanceRecord } from './instances';
-import type { LifecycleCoordinator } from './lifecycle';
-import type { ModelCatalog, ModelSelection } from './model-catalog';
+} from './hub-rows.ts';
+import { HUB_DURABLE_OBJECT_ID, type InstanceRecord } from './instances.ts';
+import type { LifecycleCoordinator } from './lifecycle.ts';
+import type { ModelCatalog, ModelSelection } from './model-catalog.ts';
 import {
   isSafeRepoDefinition,
   workspaceDirectory,
   type RepoDefinition
-} from './repos';
+} from './repos.ts';
 import {
   markSessionStatusQuery,
   patchSessionRuntimeStatus,
   type SessionRuntimeStatusPatch
-} from './session-runtime-cache';
-import { SETTING_KEYS, readSetting, writeSetting } from './settings';
+} from './session-runtime-cache.ts';
+import { SETTING_KEYS, readSetting, writeSetting } from './settings.ts';
 import {
   cleanupCutoff,
   type BootStep,
   type SessionRecord,
   type SessionStatePatch,
   type WorkspaceOrigin
-} from './sessions';
+} from './sessions.ts';
 
 export {
   markSessionStatusQuery,
@@ -116,16 +132,16 @@ export async function listRegistry(env: Env): Promise<RegistryEntry[]> {
 }
 
 async function listRows(env: Env): Promise<SessionRow[]> {
-  const result = await env.DB.prepare(
-    'SELECT * FROM sessions ORDER BY created_at DESC'
-  ).all<SessionRow>();
-  return result.results;
+  return db(env).select().from(sessions).orderBy(desc(sessions.createdAt));
 }
 
-async function getRow(env: Env, id: string): Promise<SessionRow | null> {
-  return env.DB.prepare('SELECT * FROM sessions WHERE id = ?1')
-    .bind(id)
-    .first<SessionRow>();
+async function getRow(env: Env, id: string): Promise<SessionRow | undefined> {
+  const [row] = await db(env)
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  return row;
 }
 
 /**
@@ -218,31 +234,29 @@ export async function insertSessionRow(
   session: NewSession
 ): Promise<void> {
   const { record, repo } = session;
-  await env.DB.prepare(
-    `INSERT INTO sessions (
-       id, name, repo_key, repo_json, provider, lifecycle,
-       directory, model, variant, title, phase, pending_prompt_count,
-       created_at, updated_at
-     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
-     ON CONFLICT (id) DO NOTHING`
-  )
-    .bind(
-      record.id,
-      session.name,
+  await db(env)
+    .insert(sessions)
+    .values({
+      id: record.id,
+      name: session.name,
       // The column is NOT NULL, so "no repository" is the empty key; the row
       // projection turns it back into an absent field.
-      repo?.repoKey ?? '',
-      repo ? JSON.stringify(repo) : null,
-      record.provider,
-      record.directory ?? workspaceDirectory(record.repoKey),
-      record.model,
-      record.variant ?? null,
-      record.title,
-      record.phase,
-      record.pendingPromptCount,
-      record.createdAt
-    )
-    .run();
+      repoKey: repo?.repoKey ?? '',
+      repoJson: repo ? JSON.stringify(repo) : null,
+      provider: record.provider,
+      lifecycle: 'ready',
+      directory: record.directory ?? workspaceDirectory(record.repoKey),
+      model: record.model,
+      variant: record.variant ?? null,
+      title: record.title,
+      phase: record.phase,
+      pendingPromptCount: record.pendingPromptCount,
+      createdAt: record.createdAt,
+      updatedAt: record.createdAt
+    })
+    // An existing row is left exactly as it is: this call is a replay, not a
+    // reset to creation values.
+    .onConflictDoNothing({ target: sessions.id });
 }
 
 /**
@@ -259,23 +273,11 @@ export async function updateSession(
   id: string,
   patch: SessionStatePatch
 ): Promise<SessionRecord | undefined> {
-  const row = await env.DB.prepare(
-    `UPDATE sessions SET
-       phase                = COALESCE(?2, phase),
-       model                = COALESCE(?3, model),
-       title                = CASE WHEN title_locked = 0 AND ?4 IS NOT NULL
-                                   THEN ?4 ELSE title END,
-       opencode_session_id  = COALESCE(?5, opencode_session_id),
-       pending_prompt_count = COALESCE(?6, pending_prompt_count),
-       last_prompt_at       = COALESCE(?7, last_prompt_at),
-       variant    = CASE ?8  WHEN 'set' THEN ?9  WHEN 'clear' THEN NULL ELSE variant    END,
-       last_error = CASE ?10 WHEN 'set' THEN ?11 WHEN 'clear' THEN NULL ELSE last_error END,
-       updated_at = ?12
-     WHERE id = ?1
-     RETURNING *`
-  )
-    .bind(id, ...sessionPatchBindings(patch), new Date().toISOString())
-    .first<SessionRow>();
+  const [row] = await db(env)
+    .update(sessions)
+    .set(sessionPatchAssignments(patch, new Date().toISOString()))
+    .where(eq(sessions.id, id))
+    .returning();
   return row ? rowToSession(row) : undefined;
 }
 
@@ -290,13 +292,11 @@ export async function renameSession(
   id: string,
   title: string
 ): Promise<SessionRecord | undefined> {
-  const row = await env.DB.prepare(
-    `UPDATE sessions SET title = ?2, title_locked = 1, updated_at = ?3
-     WHERE id = ?1
-     RETURNING *`
-  )
-    .bind(id, title, new Date().toISOString())
-    .first<SessionRow>();
+  const [row] = await db(env)
+    .update(sessions)
+    .set({ title, titleLocked: 1, updatedAt: new Date().toISOString() })
+    .where(eq(sessions.id, id))
+    .returning();
   return row ? rowToSession(row) : undefined;
 }
 
@@ -315,11 +315,10 @@ export async function markSessionUnread(
   id: string,
   at = new Date().toISOString()
 ): Promise<void> {
-  await env.DB.prepare(
-    'UPDATE sessions SET unread_at = COALESCE(unread_at, ?2) WHERE id = ?1'
-  )
-    .bind(id, at)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ unreadAt: sql`COALESCE(${sessions.unreadAt}, ${at})` })
+    .where(eq(sessions.id, id));
 }
 
 /**
@@ -335,11 +334,10 @@ export async function markSessionRead(
   id: string,
   seenAt: string
 ): Promise<void> {
-  await env.DB.prepare(
-    'UPDATE sessions SET unread_at = NULL WHERE id = ?1 AND unread_at = ?2'
-  )
-    .bind(id, seenAt)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ unreadAt: null })
+    .where(and(eq(sessions.id, id), eq(sessions.unreadAt, seenAt)));
 }
 
 /**
@@ -347,9 +345,10 @@ export async function markSessionRead(
  * looking at the session — sending a prompt, answering a question.
  */
 export async function clearSessionUnread(env: Env, id: string): Promise<void> {
-  await env.DB.prepare('UPDATE sessions SET unread_at = NULL WHERE id = ?1')
-    .bind(id)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ unreadAt: null })
+    .where(eq(sessions.id, id));
 }
 
 /**
@@ -366,14 +365,15 @@ export async function setSessionPinned(
   id: string,
   pinned: boolean
 ): Promise<SessionRecord | undefined> {
-  const row = await env.DB.prepare(
-    `UPDATE sessions
-     SET pinned_at = CASE WHEN ?2 = 1 THEN COALESCE(pinned_at, ?3) ELSE NULL END
-     WHERE id = ?1
-     RETURNING *`
-  )
-    .bind(id, pinned ? 1 : 0, pinned ? new Date().toISOString() : null)
-    .first<SessionRow>();
+  const [row] = await db(env)
+    .update(sessions)
+    .set({
+      pinnedAt: pinned
+        ? sql`COALESCE(${sessions.pinnedAt}, ${new Date().toISOString()})`
+        : null
+    })
+    .where(eq(sessions.id, id))
+    .returning();
   return row ? rowToSession(row) : undefined;
 }
 
@@ -388,9 +388,10 @@ export async function setSessionBootStep(
   id: string,
   step: BootStep | null
 ): Promise<void> {
-  await env.DB.prepare('UPDATE sessions SET boot_step = ?2 WHERE id = ?1')
-    .bind(id, step)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ bootStep: step })
+    .where(eq(sessions.id, id));
 }
 
 /**
@@ -403,11 +404,11 @@ export async function setSessionWorkspaceOrigin(
   id: string,
   origin: WorkspaceOrigin
 ): Promise<void> {
-  await env.DB.prepare(
-    'UPDATE sessions SET workspace_origin = ?2 WHERE id = ?1 AND workspace_origin IS NULL'
-  )
-    .bind(id, origin)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ workspaceOrigin: origin })
+    // The guard is the write-once: a later wake finds the column already set.
+    .where(and(eq(sessions.id, id), isNull(sessions.workspaceOrigin)));
 }
 
 /**
@@ -422,18 +423,29 @@ export async function beginDelete(
   env: Env,
   id: string
 ): Promise<InstanceRecord | undefined> {
-  const row = await env.DB.prepare(
-    `UPDATE sessions SET
-       lifecycle = 'deleting',
-       delete_operation_id = ?2,
-       lifecycle_error = NULL,
-       updated_at = ?3
-     WHERE id = ?1
-       AND NOT (lifecycle = 'deleting' AND delete_operation_id IS NOT NULL)
-     RETURNING *`
-  )
-    .bind(id, crypto.randomUUID(), new Date().toISOString())
-    .first<SessionRow>();
+  const [row] = await db(env)
+    .update(sessions)
+    .set({
+      lifecycle: 'deleting',
+      deleteOperationId: crypto.randomUUID(),
+      lifecycleError: null,
+      updatedAt: new Date().toISOString()
+    })
+    .where(
+      and(
+        eq(sessions.id, id),
+        // The claim fails when an operation is already in flight, and the
+        // caller falls through to reading that operation instead of starting
+        // a second one.
+        not(
+          and(
+            eq(sessions.lifecycle, 'deleting'),
+            isNotNull(sessions.deleteOperationId)
+          )!
+        )
+      )
+    )
+    .returning();
   const record = row ? rowToInstance(row) : await getInstance(env, id);
   if (!record) {
     return undefined;
@@ -447,22 +459,38 @@ export async function beginDelete(
 export async function nextPendingDeletion(
   env: Env
 ): Promise<InstanceRecord | undefined> {
-  const row = await env.DB.prepare(
-    `SELECT * FROM sessions
-     WHERE lifecycle = 'deleting' AND delete_operation_id IS NOT NULL
-     ORDER BY updated_at ASC
-     LIMIT 1`
-  ).first<SessionRow>();
+  const [row] = await db(env)
+    .select()
+    .from(sessions)
+    .where(claimedFor('deleting'))
+    .orderBy(sessions.updatedAt)
+    .limit(1);
   return row ? rowToInstance(row) : undefined;
 }
 
 export async function hasPendingDeletion(env: Env): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT 1 AS pending FROM sessions
-     WHERE lifecycle = 'deleting' AND delete_operation_id IS NOT NULL
-     LIMIT 1`
-  ).first<{ pending: number }>();
-  return row !== null;
+  const [row] = await db(env)
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(claimedFor('deleting'))
+    .limit(1);
+  return row !== undefined;
+}
+
+/** A row claimed by a live operation of this lifecycle — the queue's shape. */
+function claimedFor(lifecycle: 'deleting' | 'cleaning') {
+  return and(
+    eq(sessions.lifecycle, lifecycle),
+    isNotNull(sessions.deleteOperationId)
+  );
+}
+
+/** Every write that ends an attempt is fenced on the operation that claimed it. */
+function fencedOn(id: string, operationId: string) {
+  return and(
+    eq(sessions.id, id),
+    eq(sessions.deleteOperationId, operationId)
+  );
 }
 
 /**
@@ -476,12 +504,14 @@ export async function markDeleteFailed(
   operationId: string,
   error: string
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE sessions SET lifecycle = 'delete_failed', lifecycle_error = ?3, updated_at = ?4
-     WHERE id = ?1 AND delete_operation_id = ?2`
-  )
-    .bind(id, operationId, error, new Date().toISOString())
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({
+      lifecycle: 'delete_failed',
+      lifecycleError: error,
+      updatedAt: new Date().toISOString()
+    })
+    .where(fencedOn(id, operationId));
 }
 
 export async function deferDelete(
@@ -490,12 +520,13 @@ export async function deferDelete(
   operationId: string,
   message: string
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE sessions SET lifecycle_error = ?3, updated_at = ?4
-     WHERE id = ?1 AND delete_operation_id = ?2`
-  )
-    .bind(id, operationId, `${message}; retry scheduled`, new Date().toISOString())
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({
+      lifecycleError: `${message}; retry scheduled`,
+      updatedAt: new Date().toISOString()
+    })
+    .where(fencedOn(id, operationId));
 }
 
 export async function finishDelete(
@@ -504,11 +535,7 @@ export async function finishDelete(
   operationId: string
 ): Promise<void> {
   // A session and its instance share one row, so deletion is one statement.
-  await env.DB.prepare(
-    'DELETE FROM sessions WHERE id = ?1 AND delete_operation_id = ?2'
-  )
-    .bind(id, operationId)
-    .run();
+  await db(env).delete(sessions).where(fencedOn(id, operationId));
 }
 
 /**
@@ -526,34 +553,24 @@ export async function sweepIdleSessions(
   now = new Date()
 ): Promise<number> {
   const cutoff = cleanupCutoff(now);
-  const candidates = await env.DB.prepare(
-    `SELECT id FROM sessions
-     WHERE lifecycle IN ('ready', 'clean_failed')
-       AND pending_prompt_count = 0
-       AND phase NOT IN ('queued', 'starting', 'working')
-       AND updated_at < ?1
-       AND (last_prompt_at IS NULL OR last_prompt_at < ?1)`
-  )
-    .bind(cutoff)
-    .all<{ id: string }>();
+  const candidates = await db(env)
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(cleanupEligible(cutoff));
 
   let claimed = 0;
-  for (const { id } of candidates.results) {
-    const row = await env.DB.prepare(
-      `UPDATE sessions SET
-         lifecycle = 'cleaning',
-         delete_operation_id = ?2,
-         lifecycle_error = NULL
-       WHERE id = ?1
-         AND lifecycle IN ('ready', 'clean_failed')
-         AND pending_prompt_count = 0
-         AND phase NOT IN ('queued', 'starting', 'working')
-         AND updated_at < ?3
-         AND (last_prompt_at IS NULL OR last_prompt_at < ?3)
-       RETURNING id`
-    )
-      .bind(id, crypto.randomUUID(), cutoff)
-      .first<{ id: string }>();
+  for (const { id } of candidates) {
+    // The same predicate again, as a compare-and-swap: a prompt landing
+    // between the scan and this claim keeps its session.
+    const [row] = await db(env)
+      .update(sessions)
+      .set({
+        lifecycle: 'cleaning',
+        deleteOperationId: crypto.randomUUID(),
+        lifecycleError: null
+      })
+      .where(and(eq(sessions.id, id), cleanupEligible(cutoff)))
+      .returning({ id: sessions.id });
     if (!row) {
       continue;
     }
@@ -568,26 +585,43 @@ export async function sweepIdleSessions(
   return claimed;
 }
 
+/**
+ * What makes a session eligible to be cleaned: nothing is in flight, nothing is
+ * queued, and neither the row nor its last prompt has been touched since the
+ * cutoff. `cleaned` is absent from the lifecycles on purpose — a session whose
+ * container is already gone is never swept again — while `clean_failed` is
+ * present, so a failed attempt is retried on the next sweep.
+ */
+function cleanupEligible(cutoff: string) {
+  return and(
+    inArray(sessions.lifecycle, ['ready', 'clean_failed']),
+    eq(sessions.pendingPromptCount, 0),
+    notInArray(sessions.phase, ['queued', 'starting', 'working']),
+    lt(sessions.updatedAt, cutoff),
+    or(isNull(sessions.lastPromptAt), lt(sessions.lastPromptAt, cutoff))
+  );
+}
+
 /** The oldest queued cleanup, which the Hub alarm works on after deletions. */
 export async function nextPendingCleanup(
   env: Env
 ): Promise<InstanceRecord | undefined> {
-  const row = await env.DB.prepare(
-    `SELECT * FROM sessions
-     WHERE lifecycle = 'cleaning' AND delete_operation_id IS NOT NULL
-     ORDER BY updated_at ASC
-     LIMIT 1`
-  ).first<SessionRow>();
+  const [row] = await db(env)
+    .select()
+    .from(sessions)
+    .where(claimedFor('cleaning'))
+    .orderBy(sessions.updatedAt)
+    .limit(1);
   return row ? rowToInstance(row) : undefined;
 }
 
 export async function hasPendingCleanup(env: Env): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT 1 AS pending FROM sessions
-     WHERE lifecycle = 'cleaning' AND delete_operation_id IS NOT NULL
-     LIMIT 1`
-  ).first<{ pending: number }>();
-  return row !== null;
+  const [row] = await db(env)
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(claimedFor('cleaning'))
+    .limit(1);
+  return row !== undefined;
 }
 
 /** Fenced like finishDelete, but the row is kept and marked rather than gone. */
@@ -596,16 +630,15 @@ export async function finishClean(
   id: string,
   operationId: string
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE sessions SET
-       lifecycle = 'cleaned',
-       delete_operation_id = NULL,
-       lifecycle_error = NULL,
-       cleaned_at = ?3
-     WHERE id = ?1 AND delete_operation_id = ?2`
-  )
-    .bind(id, operationId, new Date().toISOString())
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({
+      lifecycle: 'cleaned',
+      deleteOperationId: null,
+      lifecycleError: null,
+      cleanedAt: new Date().toISOString()
+    })
+    .where(fencedOn(id, operationId));
 }
 
 export async function markCleanFailed(
@@ -614,12 +647,10 @@ export async function markCleanFailed(
   operationId: string,
   error: string
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE sessions SET lifecycle = 'clean_failed', lifecycle_error = ?3
-     WHERE id = ?1 AND delete_operation_id = ?2`
-  )
-    .bind(id, operationId, error)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ lifecycle: 'clean_failed', lifecycleError: error })
+    .where(fencedOn(id, operationId));
 }
 
 /**
@@ -675,15 +706,14 @@ export async function findCatalogRepo(
 export async function lastModelSelection(
   env: Env
 ): Promise<ModelSelection | undefined> {
-  const row = await env.DB.prepare(
-    `SELECT model, variant
-     FROM sessions
-     ORDER BY CASE WHEN last_prompt_at > created_at
-                   THEN last_prompt_at ELSE created_at END DESC,
-              created_at DESC,
-              id DESC
-     LIMIT 1`
-  ).first<{ model: string; variant: string | null }>();
+  const [row] = await db(env)
+    .select({ model: sessions.model, variant: sessions.variant })
+    .from(sessions)
+    // A prompt counts as use, not only creation, so going back to an old
+    // session makes its selection the current one. The trailing keys only
+    // break ties deterministically.
+    .orderBy(desc(lastActivityAt), desc(sessions.createdAt), desc(sessions.id))
+    .limit(1);
   return row
     ? { model: row.model, ...(row.variant ? { variant: row.variant } : {}) }
     : undefined;
@@ -742,11 +772,12 @@ async function readRepoCatalog(
  * currently living in becomes impossible.
  */
 async function reposInUse(env: Env): Promise<RepoDefinition[]> {
-  const result = await env.DB.prepare(
-    'SELECT repo_json FROM sessions WHERE repo_json IS NOT NULL'
-  ).all<{ repo_json: string }>();
-  return result.results
-    .map((row) => parseRepoJson(row.repo_json))
+  const rows = await db(env)
+    .select({ repoJson: sessions.repoJson })
+    .from(sessions)
+    .where(isNotNull(sessions.repoJson));
+  return rows
+    .map((row) => parseRepoJson(row.repoJson))
     .filter((repo): repo is RepoDefinition => repo !== undefined);
 }
 
@@ -759,15 +790,22 @@ async function reposInUse(env: Env): Promise<RepoDefinition[]> {
  * so MAX over the strings is MAX over the moments.
  */
 async function repoLastUse(env: Env): Promise<Map<string, string>> {
-  const result = await env.DB.prepare(
-    `SELECT repo_key,
-            MAX(CASE WHEN last_prompt_at > created_at
-                     THEN last_prompt_at ELSE created_at END) AS last_used
-     FROM sessions
-     WHERE repo_key <> ''
-     GROUP BY repo_key`
-  ).all<{ repo_key: string; last_used: string }>();
-  return new Map(result.results.map((row) => [row.repo_key, row.last_used]));
+  const rows = await db(env)
+    .select({
+      repoKey: sessions.repoKey,
+      lastUsed: max(lastActivityAt)
+    })
+    .from(sessions)
+    // The empty key is "no repository", which is not a repository to order.
+    .where(ne(sessions.repoKey, ''))
+    .groupBy(sessions.repoKey);
+  return new Map(
+    rows
+      .filter((row): row is { repoKey: string; lastUsed: string } =>
+        row.lastUsed !== null
+      )
+      .map((row) => [row.repoKey, row.lastUsed])
+  );
 }
 
 function resolveLifecycle(env: Env, id: string) {

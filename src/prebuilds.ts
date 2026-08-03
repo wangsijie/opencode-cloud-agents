@@ -12,7 +12,10 @@
  * Pure D1 reads and writes; the machinery that produces prebuilds lives in
  * [prebuild-runner.ts](prebuild-runner.ts).
  */
+import { and, desc, eq } from 'drizzle-orm';
+import type { SQLiteUpdateSetSource } from 'drizzle-orm/sqlite-core';
 import type { SessionProvider } from '../protocol/types.ts';
+import { db, prebuildRuns, prebuilds } from './db/index.ts';
 
 export interface PrebuildRecord {
   repoKey: string;
@@ -49,56 +52,46 @@ export interface PrebuildRunRecord {
   logTail?: string;
 }
 
-interface PrebuildRow {
-  repo_key: string;
-  provider: string;
-  location: string;
-  size_bytes: number | null;
-  source: string;
-  updated_at: string;
-}
+/** A `prebuilds` row as Drizzle selects it. */
+type PrebuildRow = typeof prebuilds.$inferSelect;
 
-interface PrebuildRunRow {
-  id: string;
-  repo_key: string;
-  provider: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  timings: string | null;
-  error: string | null;
-  log_tail: string | null;
-}
+/** A `prebuild_runs` row as Drizzle selects it. */
+type PrebuildRunRow = typeof prebuildRuns.$inferSelect;
 
 export async function listPrebuildRecords(env: Env): Promise<PrebuildRecord[]> {
-  const rows = await env.DB.prepare(
-    'SELECT * FROM prebuilds ORDER BY repo_key'
-  ).all<PrebuildRow>();
-  return (rows.results ?? []).map(rowToPrebuild);
+  const rows = await db(env)
+    .select()
+    .from(prebuilds)
+    .orderBy(prebuilds.repoKey);
+  return rows.map(rowToPrebuild);
 }
 
 export async function upsertPrebuildRecord(
   env: Env,
   record: PrebuildRecord
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO prebuilds (repo_key, provider, location, size_bytes, source, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-     ON CONFLICT (repo_key, provider) DO UPDATE SET
-       location = excluded.location,
-       size_bytes = excluded.size_bytes,
-       source = excluded.source,
-       updated_at = excluded.updated_at`
-  )
-    .bind(
-      record.repoKey,
-      record.provider,
-      record.location,
-      record.sizeBytes ?? null,
-      record.source,
-      record.updatedAt
-    )
-    .run();
+  const row = {
+    repoKey: record.repoKey,
+    provider: record.provider,
+    location: record.location,
+    sizeBytes: record.sizeBytes ?? null,
+    source: record.source,
+    updatedAt: record.updatedAt
+  };
+  await db(env)
+    .insert(prebuilds)
+    .values(row)
+    // The key is the pair, so the same repository under another provider is a
+    // different row rather than a conflict.
+    .onConflictDoUpdate({
+      target: [prebuilds.repoKey, prebuilds.provider],
+      set: {
+        location: row.location,
+        sizeBytes: row.sizeBytes,
+        source: row.source,
+        updatedAt: row.updatedAt
+      }
+    });
 }
 
 export async function deletePrebuildRecord(
@@ -106,11 +99,11 @@ export async function deletePrebuildRecord(
   repoKey: string,
   provider: SessionProvider
 ): Promise<void> {
-  await env.DB.prepare(
-    'DELETE FROM prebuilds WHERE repo_key = ?1 AND provider = ?2'
-  )
-    .bind(repoKey, provider)
-    .run();
+  await db(env)
+    .delete(prebuilds)
+    .where(
+      and(eq(prebuilds.repoKey, repoKey), eq(prebuilds.provider, provider))
+    );
 }
 
 /**
@@ -125,21 +118,22 @@ export async function deletePrebuildRuns(
   env: Env,
   repoKey: string
 ): Promise<void> {
-  await env.DB.prepare('DELETE FROM prebuild_runs WHERE repo_key = ?1')
-    .bind(repoKey)
-    .run();
+  await db(env).delete(prebuildRuns).where(eq(prebuildRuns.repoKey, repoKey));
 }
 
 export async function insertPrebuildRun(
   env: Env,
   run: PrebuildRunRecord
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO prebuild_runs (id, repo_key, provider, status, started_at)
-     VALUES (?1, ?2, ?3, ?4, ?5)`
-  )
-    .bind(run.id, run.repoKey, run.provider, run.status, run.startedAt)
-    .run();
+  // Only the opening fields: everything else is filled in by patches as the
+  // run progresses.
+  await db(env).insert(prebuildRuns).values({
+    id: run.id,
+    repoKey: run.repoKey,
+    provider: run.provider,
+    status: run.status,
+    startedAt: run.startedAt
+  });
 }
 
 /** Fields a run patch may touch; absent fields keep their columns. */
@@ -156,24 +150,27 @@ export async function updatePrebuildRun(
   id: string,
   patch: PrebuildRunPatch
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE prebuild_runs SET
-       status = COALESCE(?2, status),
-       finished_at = COALESCE(?3, finished_at),
-       timings = COALESCE(?4, timings),
-       error = COALESCE(?5, error),
-       log_tail = COALESCE(?6, log_tail)
-     WHERE id = ?1`
-  )
-    .bind(
-      id,
-      patch.status ?? null,
-      patch.finishedAt ?? null,
-      patch.timings === undefined ? null : JSON.stringify(patch.timings),
-      patch.error ?? null,
-      patch.logTail ?? null
-    )
-    .run();
+  // The statement this replaced wrapped every column in COALESCE against its
+  // own bind parameter, which is the SQL way of saying "leave out what the
+  // patch does not name". Building the assignment list says it directly, and
+  // means an empty patch writes nothing at all rather than rewriting the row
+  // with its own values.
+  const set: SQLiteUpdateSetSource<typeof prebuildRuns> = {
+    ...(patch.status === undefined ? {} : { status: patch.status }),
+    ...(patch.finishedAt === undefined ? {} : { finishedAt: patch.finishedAt }),
+    ...(patch.timings === undefined
+      ? {}
+      : { timings: JSON.stringify(patch.timings) }),
+    ...(patch.error === undefined ? {} : { error: patch.error }),
+    ...(patch.logTail === undefined ? {} : { logTail: patch.logTail })
+  };
+  if (Object.keys(set).length === 0) {
+    return;
+  }
+  await db(env)
+    .update(prebuildRuns)
+    .set(set)
+    .where(eq(prebuildRuns.id, id));
 }
 
 /**
@@ -183,13 +180,14 @@ export async function updatePrebuildRun(
 export async function latestPrebuildRuns(
   env: Env
 ): Promise<Map<string, PrebuildRunRecord>> {
-  const rows = await env.DB.prepare(
-    'SELECT * FROM prebuild_runs ORDER BY started_at DESC'
-  ).all<PrebuildRunRow>();
+  const rows = await db(env)
+    .select()
+    .from(prebuildRuns)
+    .orderBy(desc(prebuildRuns.startedAt));
   const latest = new Map<string, PrebuildRunRecord>();
-  for (const row of rows.results ?? []) {
-    if (!latest.has(row.repo_key)) {
-      latest.set(row.repo_key, rowToRun(row));
+  for (const row of rows) {
+    if (!latest.has(row.repoKey)) {
+      latest.set(row.repoKey, rowToRun(row));
     }
   }
   return latest;
@@ -197,26 +195,26 @@ export async function latestPrebuildRuns(
 
 function rowToPrebuild(row: PrebuildRow): PrebuildRecord {
   return {
-    repoKey: row.repo_key,
+    repoKey: row.repoKey,
     provider: row.provider as SessionProvider,
     location: row.location,
-    ...(row.size_bytes === null ? {} : { sizeBytes: row.size_bytes }),
+    ...(row.sizeBytes === null ? {} : { sizeBytes: row.sizeBytes }),
     source: row.source,
-    updatedAt: row.updated_at
+    updatedAt: row.updatedAt
   };
 }
 
 function rowToRun(row: PrebuildRunRow): PrebuildRunRecord {
   return {
     id: row.id,
-    repoKey: row.repo_key,
+    repoKey: row.repoKey,
     provider: row.provider as SessionProvider,
     status: row.status as PrebuildRunStatus,
-    startedAt: row.started_at,
-    ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
+    startedAt: row.startedAt,
+    ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
     ...(row.timings === null ? {} : { timings: parseTimings(row.timings) }),
     ...(row.error === null ? {} : { error: row.error }),
-    ...(row.log_tail === null ? {} : { logTail: row.log_tail })
+    ...(row.logTail === null ? {} : { logTail: row.logTail })
   };
 }
 

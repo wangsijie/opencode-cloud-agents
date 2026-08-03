@@ -6,12 +6,14 @@
  * cycle that would create). Cache writes deliberately leave `updated_at`
  * alone — calibration is not activity.
  */
-import type { RuntimeLifecycle } from './instances';
+import { eq } from 'drizzle-orm';
+import { db, sessions } from './db/index.ts';
+import type { RuntimeLifecycle } from './instances.ts';
 import {
   containerHintForRuntimeLifecycle,
   runtimeLifecycleNeedsStatusQuery,
   type CachedContainerStatus
-} from './sessions';
+} from './sessions.ts';
 
 /** Patch accepted by {@link patchSessionRuntimeStatus}. */
 export interface SessionRuntimeStatusPatch {
@@ -41,22 +43,15 @@ export async function patchSessionRuntimeStatus(
   const container =
     patch.container ??
     containerHintForRuntimeLifecycle(patch.runtimeLifecycle);
-  await env.DB.prepare(
-    `UPDATE sessions SET
-       runtime_lifecycle   = ?2,
-       container           = ?3,
-       status_query        = ?4,
-       status_observed_at  = ?5
-     WHERE id = ?1`
-  )
-    .bind(
-      id,
-      patch.runtimeLifecycle,
+  await db(env)
+    .update(sessions)
+    .set({
+      runtimeLifecycle: patch.runtimeLifecycle,
       container,
-      statusQuery ? 1 : 0,
-      new Date().toISOString()
-    )
-    .run();
+      statusQuery: statusQuery ? 1 : 0,
+      statusObservedAt: new Date().toISOString()
+    })
+    .where(eq(sessions.id, id));
 }
 
 /**
@@ -69,9 +64,8 @@ export async function markSessionStatusQuery(
   env: Env,
   id: string
 ): Promise<void> {
-  await env.DB.prepare(
-    'UPDATE sessions SET status_query = 1 WHERE id = ?1'
-  )
-    .bind(id)
-    .run();
+  await db(env)
+    .update(sessions)
+    .set({ statusQuery: 1 })
+    .where(eq(sessions.id, id));
 }

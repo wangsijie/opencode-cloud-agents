@@ -15,12 +15,14 @@
     "dev:web": "vite",
     "start": "pnpm run build:web && wrangler d1 migrations apply opencode-cloud --local && wrangler dev",
     "test": "node --test test/*.test.mjs",
+    "test:smoke": "node test/smoke/e2e.mjs",
     "types": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false && pnpm run types:host",
     "types:host": "WRANGLER_WRITE_LOGS=false wrangler types --strict-vars=false -c host/wrangler.jsonc host/worker-configuration.d.ts",
     "typecheck": "pnpm run types && tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p host"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.4"
+    "@opencode-ai/sdk": "1.18.4",
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "0.12.3",

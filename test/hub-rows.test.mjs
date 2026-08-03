@@ -5,7 +5,7 @@ import {
   parseRepoJson,
   rowToInstance,
   rowToSession,
-  sessionPatchBindings
+  sessionPatchAssignments
 } from '../src/hub-rows.ts'
 
 const repo = {
@@ -15,61 +15,64 @@ const repo = {
   defaultBranch: 'master'
 }
 
+// The property names are the schema's, not the column names: a row reaches
+// these projections through Drizzle now, which maps snake_case columns onto
+// camelCase fields on the way out.
 function fullRow() {
   return {
     id: 'inst-1111',
     name: 'silver-otter-abcd',
-    repo_key: 'opencode-cloud',
-    repo_json: JSON.stringify(repo),
+    repoKey: 'opencode-cloud',
+    repoJson: JSON.stringify(repo),
     provider: 'docker',
     lifecycle: 'deleting',
-    lifecycle_error: 'purge timed out',
-    delete_operation_id: 'op-1',
+    lifecycleError: 'purge timed out',
+    deleteOperationId: 'op-1',
     directory: '/workspace/opencode-cloud',
     model: 'anthropic/claude-fable-5',
     variant: 'high',
     title: 'Named by hand',
-    title_locked: 1,
-    opencode_session_id: 'ses_abc',
+    titleLocked: 1,
+    opencodeSessionId: 'ses_abc',
     phase: 'working',
-    pending_prompt_count: 2,
-    last_error: 'dispatch failed once',
-    last_prompt_at: '2026-07-27T02:00:00.000Z',
-    cleaned_at: null,
-    unread_at: '2026-07-27T03:30:00.000Z',
-    pinned_at: '2026-07-27T03:40:00.000Z',
-    workspace_origin: 'prebuild',
-    boot_step: null,
-    runtime_lifecycle: 'busy',
+    pendingPromptCount: 2,
+    lastError: 'dispatch failed once',
+    lastPromptAt: '2026-07-27T02:00:00.000Z',
+    cleanedAt: null,
+    unreadAt: '2026-07-27T03:30:00.000Z',
+    pinnedAt: '2026-07-27T03:40:00.000Z',
+    workspaceOrigin: 'prebuild',
+    bootStep: null,
+    runtimeLifecycle: 'busy',
     container: 'running',
-    status_query: 1,
-    status_observed_at: '2026-07-27T03:45:00.000Z',
-    created_at: '2026-07-27T01:00:00.000Z',
-    updated_at: '2026-07-27T04:00:00.000Z'
+    statusQuery: 1,
+    statusObservedAt: '2026-07-27T03:45:00.000Z',
+    createdAt: '2026-07-27T01:00:00.000Z',
+    updatedAt: '2026-07-27T04:00:00.000Z'
   }
 }
 
 function minimalRow() {
   return {
     ...fullRow(),
-    repo_json: null,
+    repoJson: null,
     provider: 'cloudflare',
     lifecycle: 'ready',
-    lifecycle_error: null,
-    delete_operation_id: null,
+    lifecycleError: null,
+    deleteOperationId: null,
     directory: null,
     variant: null,
-    title_locked: 0,
-    opencode_session_id: null,
-    last_error: null,
-    last_prompt_at: null,
-    unread_at: null,
-    pinned_at: null,
-    workspace_origin: null,
-    runtime_lifecycle: null,
+    titleLocked: 0,
+    opencodeSessionId: null,
+    lastError: null,
+    lastPromptAt: null,
+    unreadAt: null,
+    pinnedAt: null,
+    workspaceOrigin: null,
+    runtimeLifecycle: null,
     container: null,
-    status_query: 1,
-    status_observed_at: null
+    statusQuery: 1,
+    statusObservedAt: null
   }
 }
 
@@ -142,13 +145,13 @@ test('NULL columns become absent optional fields, not undefined values', () => {
   assert.equal(session.statusQuery, true)
 })
 
-test('status_query 0 projects as a cold session', () => {
+test('statusQuery 0 projects as a cold session', () => {
   const session = rowToSession({
     ...minimalRow(),
-    runtime_lifecycle: 'sleeping',
+    runtimeLifecycle: 'sleeping',
     container: 'stopped',
-    status_query: 0,
-    status_observed_at: '2026-07-27T05:00:00.000Z'
+    statusQuery: 0,
+    statusObservedAt: '2026-07-27T05:00:00.000Z'
   })
   assert.equal(session.runtimeLifecycle, 'sleeping')
   assert.equal(session.container, 'stopped')
@@ -160,7 +163,7 @@ test('a cleaned row carries its lifecycle and timestamp into the records', () =>
   const row = {
     ...minimalRow(),
     lifecycle: 'cleaned',
-    cleaned_at: '2026-07-28T03:23:00.000Z'
+    cleanedAt: '2026-07-28T03:23:00.000Z'
   }
   assert.equal(rowToInstance(row).lifecycle, 'cleaned')
   assert.equal(rowToSession(row).cleanedAt, '2026-07-28T03:23:00.000Z')
@@ -173,8 +176,8 @@ test('the provider column reaches both record shapes', () => {
   assert.equal(session.provider, 'cloudflare')
 })
 
-test('an empty repo_key is a session with no repository, not an empty key', () => {
-  const row = { ...minimalRow(), repo_key: '', directory: '/workspace' }
+test('an empty repoKey is a session with no repository, not an empty key', () => {
+  const row = { ...minimalRow(), repoKey: '', directory: '/workspace' }
   const instance = rowToInstance(row)
   assert.ok(!('repoKey' in instance))
   assert.ok(!('repo' in instance))
@@ -184,39 +187,48 @@ test('an empty repo_key is a session with no repository, not an empty key', () =
   assert.equal(session.directory, '/workspace')
 })
 
-test('repo_json that is broken or unsafe is dropped rather than trusted', () => {
+test('repoJson that is broken or unsafe is dropped rather than trusted', () => {
   assert.equal(parseRepoJson(null), undefined)
   assert.equal(parseRepoJson('{not json'), undefined)
   assert.equal(parseRepoJson(JSON.stringify({ repoKey: 'x' })), undefined)
   assert.deepEqual(parseRepoJson(JSON.stringify(repo)), repo)
 })
 
-test('an empty patch keeps every column', () => {
-  assert.deepEqual(sessionPatchBindings({}), [
-    null, null, null, null, null, null,
-    'keep', null,
-    'keep', null
-  ])
+// The statement these feed used to carry every field as a bind parameter and
+// let COALESCE decide what to keep; the assignments now say it directly, so
+// "keeps the column" means the key is simply not there. What each patch does to
+// a real row is asserted in hub-store.test.mjs.
+
+test('an empty patch assigns nothing but the timestamp', () => {
+  assert.deepEqual(sessionPatchAssignments({}, 'now'), { updatedAt: 'now' })
 })
 
 test('null clears variant and lastError while values set them', () => {
+  assert.deepEqual(sessionPatchAssignments({ variant: null, lastError: null }, 'now'), {
+    variant: null,
+    lastError: null,
+    updatedAt: 'now'
+  })
   assert.deepEqual(
-    sessionPatchBindings({ variant: null, lastError: null }).slice(6),
-    ['clear', null, 'clear', null]
-  )
-  assert.deepEqual(
-    sessionPatchBindings({ variant: 'high', lastError: 'boom' }).slice(6),
-    ['set', 'high', 'set', 'boom']
+    sessionPatchAssignments({ variant: 'high', lastError: 'boom' }, 'now'),
+    { variant: 'high', lastError: 'boom', updatedAt: 'now' }
   )
 })
 
 test('pendingPromptCount 0 is a real update, unlike other falsy fields', () => {
-  const bindings = sessionPatchBindings({
-    pendingPromptCount: 0,
-    model: '',
-    title: ''
-  })
-  assert.equal(bindings[4], 0)
-  assert.equal(bindings[1], null)
-  assert.equal(bindings[2], null)
+  const assignments = sessionPatchAssignments(
+    { pendingPromptCount: 0, model: '', title: '' },
+    'now'
+  )
+  assert.equal(assignments.pendingPromptCount, 0)
+  assert.ok(!('model' in assignments))
+  assert.ok(!('title' in assignments))
+})
+
+test('a title is assigned as an expression, so the lock is checked per row', () => {
+  const assignments = sessionPatchAssignments({ title: 'Chosen by OpenCode' }, 'now')
+  // Not a plain string: the lock may be taken between the read and the write,
+  // so the decision has to happen in the statement.
+  assert.notEqual(typeof assignments.title, 'string')
+  assert.ok(!('phase' in assignments))
 })

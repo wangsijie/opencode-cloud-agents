@@ -6,6 +6,8 @@
  * credentials — plus the repo catalog cache that was its first tenant. Values
  * are whole JSON documents; nothing queries into them by sub-field.
  */
+import { eq } from 'drizzle-orm';
+import { db, settings } from './db/index.ts';
 
 /** Every key the settings UI and the runtime read. */
 export const SETTING_KEYS = {
@@ -107,9 +109,11 @@ export async function readSetting<T>(
   env: Env,
   key: string
 ): Promise<T | undefined> {
-  const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?1')
-    .bind(key)
-    .first<{ value: string }>();
+  const [row] = await db(env)
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, key))
+    .limit(1);
   if (!row) {
     return undefined;
   }
@@ -125,12 +129,12 @@ export async function readSettingRow(
   env: Env,
   key: string
 ): Promise<{ value: string; updatedAt: string } | undefined> {
-  const row = await env.DB.prepare(
-    'SELECT value, updated_at FROM settings WHERE key = ?1'
-  )
-    .bind(key)
-    .first<{ value: string; updated_at: string }>();
-  return row ? { value: row.value, updatedAt: row.updated_at } : undefined;
+  const [row] = await db(env)
+    .select({ value: settings.value, updatedAt: settings.updatedAt })
+    .from(settings)
+    .where(eq(settings.key, key))
+    .limit(1);
+  return row ?? undefined;
 }
 
 export async function writeSetting(
@@ -138,14 +142,20 @@ export async function writeSetting(
   key: string,
   value: unknown
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-  )
-    .bind(key, JSON.stringify(value), new Date().toISOString())
-    .run();
+  const row = {
+    key,
+    value: JSON.stringify(value),
+    updatedAt: new Date().toISOString()
+  };
+  await db(env)
+    .insert(settings)
+    .values(row)
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: row.value, updatedAt: row.updatedAt }
+    });
 }
 
 export async function deleteSetting(env: Env, key: string): Promise<void> {
-  await env.DB.prepare('DELETE FROM settings WHERE key = ?1').bind(key).run();
+  await db(env).delete(settings).where(eq(settings.key, key));
 }

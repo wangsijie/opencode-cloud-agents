@@ -7,18 +7,14 @@ import {
   readDockerProviderConfig,
   resolveLifecycleIdleTimeoutMs
 } from '../src/sandbox-providers.ts'
+import { createSettingsEnv } from './helpers/d1.mjs'
 
-/** Just enough D1 to answer `SELECT value FROM settings WHERE key = ?1`. */
-const envWith = (settings) => ({
-  DB: {
-    prepare: () => ({
-      bind: (key) => ({
-        first: async () =>
-          key in settings ? { value: JSON.stringify(settings[key]) } : null
-      })
-    })
-  }
-})
+/**
+ * A real database with these settings stored. This used to be a stub that
+ * answered one hand-written SELECT; it is a migrated SQLite database now, so
+ * the query the code actually issues is the one under test.
+ */
+const envWith = (settings) => createSettingsEnv(settings)
 
 const configured = {
   'docker.agent-url': 'https://sandbox.example.com',

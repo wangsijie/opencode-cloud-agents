@@ -11,6 +11,7 @@ import {
   resolveHostClient,
   serviceBindingTransport
 } from '../src/host-client.ts'
+import { createSettingsEnv } from './helpers/d1.mjs'
 
 /** A transport that records what it was asked for and answers from a script. */
 function recordingTransport(handler) {
@@ -178,18 +179,12 @@ test('the remote transport bearers every request and never doubles the slash', a
   assert.equal(seen[0].init.headers.get('authorization'), 'Bearer tok-123')
 })
 
-/** Just enough D1 to answer `SELECT value FROM settings WHERE key = ?1`. */
-const envWith = (settings, extra = {}) => ({
-  DB: {
-    prepare: () => ({
-      bind: (key) => ({
-        first: async () =>
-          key in settings ? { value: JSON.stringify(settings[key]) } : null
-      })
-    })
-  },
-  ...extra
-})
+/**
+ * A real database with these settings stored. This used to be a stub that
+ * answered one hand-written SELECT; it is a migrated SQLite database now, so
+ * the query the code actually issues is the one under test.
+ */
+const envWith = (settings, extra = {}) => createSettingsEnv(settings, extra)
 
 const dockerSettings = {
   'docker.agent-url': 'https://mini.example.com',

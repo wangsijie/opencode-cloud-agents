@@ -11,23 +11,24 @@
  * must never travel, so it has its own endpoint here and its bootstrap lives
  * in [access.ts](access.ts).
  */
-import { MIN_PASSWORD_LENGTH, createAdminSession } from './access';
-import { json, methodNotAllowed } from './http';
-import { hashPassword, verifyPassword } from './password';
+import { MIN_PASSWORD_LENGTH, createAdminSession } from './access.ts';
+import { adminSessions, db, sessions } from './db/index.ts';
+import { json, methodNotAllowed } from './http.ts';
+import { hashPassword, verifyPassword } from './password.ts';
 import {
   SETTING_KEYS,
   deleteSetting,
   readSetting,
   readSettingRow,
   writeSetting
-} from './settings';
-import type { EnvVarSetting, PasswordRecord, SshKeySetting } from './settings';
+} from './settings.ts';
+import type { EnvVarSetting, PasswordRecord, SshKeySetting } from './settings.ts';
 import {
   SETTING_DESCRIPTORS,
   findDescriptor,
   validateOpencodeConfig
-} from './settings-schema';
-import { generateSshKeyPair } from './ssh-keygen';
+} from './settings-schema.ts';
+import { generateSshKeyPair } from './ssh-keygen.ts';
 
 /** One setting as the page sees it; secrets carry no `value`. */
 export interface SettingView {
@@ -239,11 +240,11 @@ async function orphanedPinnedModels(
   env: Env,
   config: { provider?: Record<string, { models?: Record<string, unknown> }> }
 ): Promise<string[]> {
-  const result = await env.DB.prepare(
-    'SELECT DISTINCT model FROM sessions'
-  ).all<{ model: string }>();
+  const rows = await db(env)
+    .selectDistinct({ model: sessions.model })
+    .from(sessions);
   const orphaned: string[] = [];
-  for (const row of result.results) {
+  for (const row of rows) {
     const separator = row.model.indexOf('/');
     if (separator <= 0) {
       continue;
@@ -288,7 +289,9 @@ async function changePassword(
     return json({ error: 'That is not the current password' }, 401);
   }
   await writeSetting(env, SETTING_KEYS.adminPassword, await hashPassword(next));
-  await env.DB.prepare('DELETE FROM admin_sessions').run();
+  // Every browser, including this one: the fresh cookie below is what keeps
+  // the caller signed in.
+  await db(env).delete(adminSessions);
   const session = await createAdminSession(env, url);
   return json({ ok: true }, 200, { 'Set-Cookie': session.cookie });
 }
