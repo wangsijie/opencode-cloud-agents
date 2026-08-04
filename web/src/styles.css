@@ -412,7 +412,11 @@ code {
 @media (min-width: 1100px) {
   .session-aside {
     position: relative;
-    width: var(--aside-width);
+    /* Docked, the panel takes its dragged width, but never so much of the row
+       that the conversation stops being readable: the subtraction leaves the
+       conversation a column of its own on a narrow window. The reserve covers
+       the sidebar beside it as well as the conversation itself. */
+    width: min(var(--aside-width), calc(100vw - 640px));
     box-shadow: none;
     animation: none;
   }

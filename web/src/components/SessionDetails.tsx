@@ -44,7 +44,11 @@ export function SessionDetails({
     storageKey: 'hub.asideWidth',
     fallback: 380,
     min: 280,
-    max: 760,
+    // A diff wants room: side-by-side hunks and long lines are the reason this
+    // panel exists, so the ceiling is wide enough to give one a real column.
+    // The conversation is protected by the viewport clamp in the stylesheet, not
+    // by keeping this number small.
+    max: 1400,
     edge: 'start'
   });
 
