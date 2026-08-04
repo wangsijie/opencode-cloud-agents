@@ -240,7 +240,7 @@ export function isCleanedLifecycle(
 }
 
 /** How long a session may sit untouched before its container is cleaned away. */
-export const CLEANUP_IDLE_DAYS = 7;
+export const CLEANUP_IDLE_DAYS = 3;
 
 /** The one answer every write path gives about a cleaned session. */
 export const CLEANED_SESSION_MESSAGE = `This session was cleaned up after ${CLEANUP_IDLE_DAYS} days of inactivity and is read-only`;

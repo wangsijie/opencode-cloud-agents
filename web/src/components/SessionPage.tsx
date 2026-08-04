@@ -516,7 +516,7 @@ export function SessionPage({
 
                   {/*
                     Cleaned is retirement, not failure: the container aged out
-                    after a week of inactivity and was removed. The history
+                    after days of inactivity and was removed. The history
                     above is the mirror, and it stays readable — but there is
                     nothing left to send to.
                   */}
@@ -524,7 +524,7 @@ export function SessionPage({
                     <section className="card">
                       <h2>This session was cleaned up</h2>
                       <p className="muted">
-                        It sat idle for over 7 days, so its container and
+                        It sat idle for over 3 days, so its container and
                         workspace were removed. The history above is the
                         preserved transcript; it stays readable but the session
                         cannot be resumed.

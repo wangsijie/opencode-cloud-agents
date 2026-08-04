@@ -457,7 +457,7 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         return json(
           {
             error:
-              'This session was cleaned up after 7 days of inactivity and is read-only'
+              'This session was cleaned up after 3 days of inactivity and is read-only'
           },
           409
         );
@@ -573,7 +573,7 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         return json(
           {
             error:
-              'This session was cleaned up after 7 days of inactivity and is read-only'
+              'This session was cleaned up after 3 days of inactivity and is read-only'
           },
           409
         );

@@ -546,7 +546,7 @@ export async function finishDelete(
  * Each claim is a compare-and-swap that re-checks eligibility, so a prompt
  * landing between the scan and the claim keeps its session. Neither the claim
  * nor its completion touches `updated_at` — cleanup is not activity, and
- * bumping it would resurface a week-dead session at the top of the list.
+ * bumping it would resurface a long-idle session at the top of the list.
  */
 export async function sweepIdleSessions(
   env: Env,

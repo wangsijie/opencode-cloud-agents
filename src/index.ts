@@ -179,7 +179,8 @@ export default {
     }
   },
 
-  // The daily sweeps. Sessions untouched for 7 days are claimed and the Hub
+  // The daily sweeps. Sessions untouched for CLEANUP_IDLE_DAYS days are claimed
+  // and the Hub
   // alarm removes the containers one at a time; the rows and their transcript
   // mirrors stay, because a cleaned session is read-only rather than gone.
   // Uploads nobody ever sent are deleted outright — an image picked in a

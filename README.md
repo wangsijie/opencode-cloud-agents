@@ -327,7 +327,7 @@ error on the record and a retry button in the list.
 - Rename, *Stop container* and *Delete* are on each row's menu in the sidebar.
 - Deleting returns immediately and then destroys the container, every snapshot
   and the transcript mirror in the background.
-- A session untouched for **7 days** has its container cleaned away by the daily
+- A session untouched for **3 days** has its container cleaned away by the daily
   sweep. It stays in the list tagged `cleaned` and its history stays readable,
   but it cannot be continued.
 - A container that died without checkpointing comes back to an empty workspace,

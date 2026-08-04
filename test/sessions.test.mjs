@@ -137,7 +137,7 @@ test('the cleanup cutoff is exactly the idle window back from now', () => {
     cleanupCutoff(now),
     new Date(now.getTime() - CLEANUP_IDLE_DAYS * 24 * 60 * 60 * 1000).toISOString()
   )
-  assert.equal(cleanupCutoff(now), '2026-07-22T12:00:00.000Z')
+  assert.equal(cleanupCutoff(now), '2026-07-26T12:00:00.000Z')
 })
 
 test('last activity is the newest timestamp on the record', () => {

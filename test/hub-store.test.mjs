@@ -519,7 +519,7 @@ test('a cleanup claim does not count as activity', async () => {
   });
 
   await sweepIdleSessions(env, now);
-  // Bumping updated_at here would resurface a week-dead session at the top.
+  // Bumping updated_at here would resurface a long-idle session at the top.
   assert.equal((await getInstance(env, id)).updatedAt, old);
 });
 

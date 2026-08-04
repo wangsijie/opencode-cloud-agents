@@ -37,9 +37,9 @@ const FILENAME_HEADER = 'x-upload-filename';
  * How long an unsent upload is kept.
  *
  * The same window the idle sweep uses, and for the same reason: a prompt that
- * has been sitting undelivered for a week belongs to a session nobody came back
- * to. Its images going away is not a loss anyone will notice, and keeping them
- * for ever would mean every abandoned draft is permanent.
+ * has been sitting undelivered for the full window belongs to a session nobody
+ * came back to. Its images going away is not a loss anyone will notice, and
+ * keeping them for ever would mean every abandoned draft is permanent.
  */
 const ORPHAN_UPLOAD_TTL_MS = CLEANUP_IDLE_DAYS * 24 * 60 * 60 * 1000;
 
