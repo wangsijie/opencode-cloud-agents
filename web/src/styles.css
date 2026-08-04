@@ -534,13 +534,21 @@ body.resizing .resize-handle {
 .sidebar-brand {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   flex: none;
   min-height: 52px;
-  padding: 8px 12px;
+  padding: 8px 8px 8px 12px;
   padding-top: max(8px, env(safe-area-inset-top));
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+.sidebar-brand-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .sidebar-new {
@@ -2639,11 +2647,28 @@ input.question-custom:focus {
   .sidebar .resize-handle {
     display: none;
   }
+
+  /* A drawer is already gone as soon as it is closed; folding it would be a
+     second control for the same thing. */
+  .sidebar-collapse {
+    display: none;
+  }
 }
 
 @media (min-width: 768px) {
   .hamburger {
     display: none;
+  }
+
+  /* Folded away rather than merely narrow: a zero-width panel keeps its rows
+     in the tab order, and the point of the fold is that the list is gone. The
+     hamburger comes back in the same breath — it is the only way back. */
+  .app.sidebar-collapsed .sidebar {
+    display: none;
+  }
+
+  .app.sidebar-collapsed .hamburger {
+    display: inline-flex;
   }
 
   .content-header,

@@ -124,6 +124,19 @@ function SettingsGate({ onSignedOut }: { onSignedOut: () => void }) {
   return <Hub onSignedOut={onSignedOut} />;
 }
 
+// Whether the session list is folded away, remembered the way the panel widths
+// are: it says how this person likes their window, which is true of every
+// session they open and belongs to the browser rather than to the Hub.
+const COLLAPSED_KEY = 'hub.sidebarCollapsed';
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The shell: past sessions on the left, one conversation on the right.
  *
@@ -140,6 +153,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogError, setCatalogError] = useState<string>();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const refreshedStale = useRef(false);
   const catalogRef = useRef<Catalog | undefined>(undefined);
   const previousRoute = useRef(route.name);
@@ -214,6 +228,23 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
     setSidebarOpen(false);
   }, [route]);
 
+  const collapseSidebar = useCallback((next: boolean) => {
+    setSidebarCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
+    } catch {
+      // A browser that refuses storage still folds the panel; it just forgets.
+    }
+  }, []);
+
+  // One control on the pages, two surfaces: on a phone it opens the drawer, on
+  // a desktop it brings a folded sidebar back. Neither state harms the other —
+  // the drawer classes only mean anything below 768px, the fold only above.
+  const openSidebar = useCallback(() => {
+    setSidebarOpen(true);
+    collapseSidebar(false);
+  }, [collapseSidebar]);
+
   const sessionsChanged = useCallback(() => void refresh(true), [refresh]);
 
   // The create response, kept until the polled list has caught up. A new
@@ -237,7 +268,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   }, [sessions, justCreated]);
 
   return (
-    <div className="app">
+    <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
         sessions={sidebarSessions}
         listError={listError}
@@ -245,6 +276,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
         refresh={refresh}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onCollapse={() => collapseSidebar(true)}
         onSignOut={async () => {
           await signOut();
           onSignedOut();
@@ -265,7 +297,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
             forced={false}
             section={route.section}
             onSelectSection={(id) => navigate(settingsPath(id))}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
             onSettingsChanged={() => undefined}
           />
         ) : route.name === 'session' && route.agent ? (
@@ -275,7 +307,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
             key={`${route.id}/${route.agent}`}
             sessionId={route.id}
             agentSessionId={route.agent}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
           />
         ) : route.name === 'session' ? (
           // Keyed to the session: switching straight from one conversation to
@@ -285,7 +317,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
             key={route.id}
             sessionId={route.id}
             catalog={catalog}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
             onSessionsChanged={sessionsChanged}
           />
         ) : (
@@ -297,7 +329,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
               setJustCreated(created);
               sessionsChanged();
             }}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
           />
         )}
       </div>

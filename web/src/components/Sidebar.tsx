@@ -8,7 +8,14 @@ import {
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
 import { useResizable } from '../useResizable';
-import { DotsIcon, PinIcon, PlusIcon, SettingsIcon, SignOutIcon } from './icons';
+import {
+  DotsIcon,
+  PinIcon,
+  PlusIcon,
+  SettingsIcon,
+  SidebarIcon,
+  SignOutIcon
+} from './icons';
 
 const RUNNING_CONTAINERS = ['running', 'healthy'];
 
@@ -24,6 +31,11 @@ const BUCKET_ORDER: RecencyBucket[] = ['today', 'yesterday', 'week', 'older'];
  * The per-row menu carries what used to be a row of buttons on a card. Those
  * actions belong to the session rather than to the conversation, which is why
  * they live here and not on the page.
+ *
+ * On a desktop the whole panel folds away, which is what the details panel on
+ * the other side already does: reading a wide diff should not cost the window
+ * its history. The phone has no such control — there the sidebar is a drawer
+ * and closing it is what the backdrop and Escape are for.
  */
 export function Sidebar({
   sessions,
@@ -32,6 +44,7 @@ export function Sidebar({
   refresh,
   open,
   onClose,
+  onCollapse,
   onSignOut
 }: {
   sessions?: SessionView[];
@@ -40,6 +53,7 @@ export function Sidebar({
   refresh: (silent?: boolean) => Promise<void>;
   open: boolean;
   onClose: () => void;
+  onCollapse: () => void;
   onSignOut: () => Promise<void>;
 }) {
   const [menuFor, setMenuFor] = useState<string>();
@@ -141,7 +155,20 @@ export function Sidebar({
       aria-label="Sessions"
       style={{ '--sidebar-width': `${width}px` } as CSSProperties}
     >
-      <div className="sidebar-brand">Cloud Agents</div>
+      <div className="sidebar-brand">
+        <span className="sidebar-brand-name">Cloud Agents</span>
+        {/* Hidden on a phone by the stylesheet, where the drawer closes on its
+            own backdrop and there is nothing to fold. */}
+        <button
+          className="icon-button sidebar-collapse"
+          type="button"
+          aria-label="Collapse sessions"
+          title="Collapse sessions"
+          onClick={onCollapse}
+        >
+          <SidebarIcon />
+        </button>
+      </div>
 
       <a
         ref={newLink}

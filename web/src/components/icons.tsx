@@ -170,6 +170,16 @@ export function PanelIcon() {
   );
 }
 
+/** Collapses and restores the session list: the same page, pane on the left. */
+export function SidebarIcon() {
+  return (
+    <Icon>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16" />
+    </Icon>
+  );
+}
+
 /**
  * A repository: the book spine GitHub uses for one, so the tag reads as a
  * repository rather than as one more word beside the title. Drawn small,
