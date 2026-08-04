@@ -587,18 +587,23 @@ export async function sweepIdleSessions(
 
 /**
  * What makes a session eligible to be cleaned: nothing is in flight, nothing is
- * queued, and neither the row nor its last prompt has been touched since the
- * cutoff. `cleaned` is absent from the lifecycles on purpose — a session whose
- * container is already gone is never swept again — while `clean_failed` is
- * present, so a failed attempt is retried on the next sweep.
+ * queued, neither the row nor its last prompt has been touched since the
+ * cutoff, and the runtime has settled on idle or sleeping — a dispatch phase
+ * alone says nothing, because `phase` stays `working` from the moment the last
+ * prompt was handed over until the next one arrives. A row whose runtime was
+ * never observed is left alone rather than guessed about. `cleaned` is absent
+ * from the lifecycles on purpose — a session whose container is already gone is
+ * never swept again — while `clean_failed` is present, so a failed attempt is
+ * retried on the next sweep.
  */
 function cleanupEligible(cutoff: string) {
   return and(
     inArray(sessions.lifecycle, ['ready', 'clean_failed']),
     eq(sessions.pendingPromptCount, 0),
-    notInArray(sessions.phase, ['queued', 'starting', 'working']),
+    notInArray(sessions.phase, ['queued', 'starting']),
     lt(sessions.updatedAt, cutoff),
-    or(isNull(sessions.lastPromptAt), lt(sessions.lastPromptAt, cutoff))
+    or(isNull(sessions.lastPromptAt), lt(sessions.lastPromptAt, cutoff)),
+    inArray(sessions.runtimeLifecycle, ['idle', 'sleeping'])
   );
 }
 

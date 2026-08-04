@@ -456,17 +456,41 @@ test('the idle sweep claims only sessions that are really idle', async () => {
     now.getTime() - (CLEANUP_IDLE_DAYS + 1) * 24 * 60 * 60 * 1000
   ).toISOString();
 
+  // A settled session whose runtime is asleep: the ordinary cleanup target,
+  // whatever its dispatch phase says (phase stays 'working' forever once the
+  // last prompt was handed over).
   const idle = await seed(env);
   await forceColumns(env, idle, {
-    phase: 'failed',
+    phase: 'working',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 0,
     updated_at: old,
     last_prompt_at: old
   });
 
+  // A busy runtime protects even an old, settled session.
   const stillWorking = await seed(env);
   await forceColumns(env, stillWorking, {
     phase: 'working',
+    runtime_lifecycle: 'busy',
+    pending_prompt_count: 0,
+    updated_at: old
+  });
+
+  // A dispatch in flight protects the session even while the runtime sleeps.
+  const dispatchInFlight = await seed(env);
+  await forceColumns(env, dispatchInFlight, {
+    phase: 'queued',
+    runtime_lifecycle: 'sleeping',
+    pending_prompt_count: 1,
+    updated_at: old
+  });
+
+  // A runtime that was never observed is not guessed about.
+  const runtimeUnknown = await seed(env);
+  await forceColumns(env, runtimeUnknown, {
+    phase: 'failed',
+    runtime_lifecycle: null,
     pending_prompt_count: 0,
     updated_at: old
   });
@@ -474,6 +498,7 @@ test('the idle sweep claims only sessions that are really idle', async () => {
   const promptQueued = await seed(env);
   await forceColumns(env, promptQueued, {
     phase: 'failed',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 1,
     updated_at: old
   });
@@ -481,6 +506,7 @@ test('the idle sweep claims only sessions that are really idle', async () => {
   const recent = await seed(env);
   await forceColumns(env, recent, {
     phase: 'failed',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 0,
     updated_at: now.toISOString()
   });
@@ -489,6 +515,7 @@ test('the idle sweep claims only sessions that are really idle', async () => {
   const promptedLately = await seed(env);
   await forceColumns(env, promptedLately, {
     phase: 'failed',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 0,
     updated_at: old,
     last_prompt_at: now.toISOString()
@@ -497,7 +524,14 @@ test('the idle sweep claims only sessions that are really idle', async () => {
   assert.equal(await sweepIdleSessions(env, now), 1);
   assert.equal(pokes.length, 1);
   assert.equal((await getInstance(env, idle)).lifecycle, 'cleaning');
-  for (const id of [stillWorking, promptQueued, recent, promptedLately]) {
+  for (const id of [
+    stillWorking,
+    dispatchInFlight,
+    runtimeUnknown,
+    promptQueued,
+    recent,
+    promptedLately
+  ]) {
     assert.equal((await getInstance(env, id)).lifecycle, 'ready');
   }
 
@@ -514,6 +548,7 @@ test('a cleanup claim does not count as activity', async () => {
   const id = await seed(env);
   await forceColumns(env, id, {
     phase: 'failed',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 0,
     updated_at: old
   });
@@ -533,6 +568,7 @@ test('a failed cleanup is swept again, a finished one is not', async () => {
   const id = await seed(env);
   await forceColumns(env, id, {
     phase: 'failed',
+    runtime_lifecycle: 'sleeping',
     pending_prompt_count: 0,
     updated_at: old
   });
