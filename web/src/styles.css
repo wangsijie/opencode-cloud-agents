@@ -783,6 +783,31 @@ body.resizing .resize-handle {
   padding: 12px 10px;
 }
 
+.sidebar-more {
+  appearance: none;
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-more:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.sidebar-more:disabled {
+  cursor: default;
+}
+
 .sidebar-backdrop {
   display: none;
 }

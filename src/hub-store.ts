@@ -30,7 +30,13 @@ import {
   sql
 } from 'drizzle-orm';
 import type { SessionProvider } from '../protocol/types.ts';
-import { db, lastActivityAt, sessions } from './db/index.ts';
+import {
+  db,
+  lastActivityAt,
+  pinnedFirst,
+  sessionActivityAt,
+  sessions
+} from './db/index.ts';
 import {
   REPO_CATALOG_TTL_MS,
   fetchGithubRepoCatalog,
@@ -120,12 +126,37 @@ export async function getSession(
 }
 
 /**
- * Both projections at once, newest first. The session list renders instance
- * state next to every session, and they come from the same row — reading them
- * as a pair is what keeps that list a single query.
+ * Both projections at once, in the sidebar's own order. The session list renders
+ * instance state next to every session, and they come from the same row —
+ * reading them as a pair is what keeps that list a single query.
+ *
+ * The order is the one the sidebar draws — pinned first, then most recently
+ * touched — because `limit` cuts the list here, and a limit applied to a
+ * different order would drop exactly the rows the sidebar wanted at the top: an
+ * old session answered a minute ago, or a pinned one from last month. Ordering
+ * and paging have to be the same question, so the client sorts what it gets and
+ * never reorders across a page boundary.
+ *
+ * Ordering on expressions gives up `idx_sessions_created_at`, so this is a scan
+ * and a sort. That is the cheap half: the route calibrates runtime status per
+ * row it returns, and not paying that for a whole history is what the limit is
+ * for.
  */
-export async function listRegistry(env: Env): Promise<RegistryEntry[]> {
-  return (await listRows(env)).map((row) => ({
+export async function listRegistry(
+  env: Env,
+  limit?: number
+): Promise<RegistryEntry[]> {
+  const query = db(env)
+    .select()
+    .from(sessions)
+    .orderBy(
+      pinnedFirst,
+      desc(sessionActivityAt),
+      desc(sessions.createdAt),
+      desc(sessions.id)
+    );
+  const rows = await (limit === undefined ? query : query.limit(limit));
+  return rows.map((row) => ({
     session: rowToSession(row),
     instance: rowToInstance(row)
   }));

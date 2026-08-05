@@ -365,7 +365,20 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
 
   // --- session collection -------------------------------------------------
   if (p === '/api/sessions' && method === 'GET') {
-    return json([...store.sessions.values()].map((entry) => entry.view));
+    // Paged in the Hub's order — pinned first, then most recently touched —
+    // because the sidebar's "show more" is only a prefix if the order the
+    // limit cuts is the order it renders.
+    const views = [...store.sessions.values()]
+      .map((entry) => entry.view)
+      .sort(
+        (a, b) =>
+          Number(Boolean(b.pinnedAt)) - Number(Boolean(a.pinnedAt)) ||
+          b.lastActivityAt.localeCompare(a.lastActivityAt)
+      );
+    const limit = Number(url.searchParams.get('limit'));
+    return json(
+      Number.isInteger(limit) && limit > 0 ? views.slice(0, limit) : views
+    );
   }
   if (p === '/api/sessions' && method === 'POST') {
     const body = parseBody(init);

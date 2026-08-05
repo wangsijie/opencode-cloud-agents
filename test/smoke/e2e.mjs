@@ -210,10 +210,37 @@ await step('the session list is served (the SELECT * ORDER BY path)', async () =
   assert.equal(status, 200, JSON.stringify(body));
   assert.ok(Array.isArray(body), JSON.stringify(body));
 
-  // Newest first, by created_at — the ordering the list depends on.
-  const created = body.map((session) => session.createdAt);
-  const sorted = [...created].sort().reverse();
-  assert.deepEqual(created, sorted, 'sessions must come back newest first');
+  // Pinned first, then most recently touched — the sidebar's order, computed
+  // in SQL over three columns, which is the part D1 could reject and SQLite
+  // accept.
+  const key = (session) =>
+    `${session.pinnedAt ? 0 : 1}${session.lastActivityAt}`;
+  const keys = body.map(key);
+  const sorted = [...body]
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.pinnedAt)) - Number(Boolean(a.pinnedAt)) ||
+        b.lastActivityAt.localeCompare(a.lastActivityAt)
+    )
+    .map(key);
+  assert.deepEqual(keys, sorted, 'sessions must come back in sidebar order');
+});
+
+await step('the session list pages, and a page is a prefix', async () => {
+  const { status, body } = await api('/api/sessions?limit=1');
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.ok(body.length <= 1, 'limit must be applied by the LIMIT clause');
+
+  const whole = await api('/api/sessions');
+  assert.deepEqual(
+    body.map((session) => session.id),
+    whole.body.slice(0, body.length).map((session) => session.id)
+  );
+
+  // A limit that is not a positive integer is ignored, not refused.
+  const junk = await api('/api/sessions?limit=nonsense');
+  assert.equal(junk.status, 200, JSON.stringify(junk.body));
+  assert.equal(junk.body.length, whole.body.length);
 });
 
 await step('the instance list is served from the same rows', async () => {
@@ -264,9 +291,16 @@ await step('a session is created, patched and deleted through Drizzle', async ()
       list.body.some((session) => session.id === id),
       'the new session must be in the list'
     );
-    // Newest first still holds with a row in the table.
-    const created_ats = list.body.map((session) => session.createdAt);
-    assert.deepEqual(created_ats, [...created_ats].sort().reverse());
+    // A session created a moment ago is the most recently touched one, so it
+    // is at the top of an unpinned list — and on the first page.
+    const unpinned = list.body.filter((session) => !session.pinnedAt);
+    assert.equal(unpinned[0].id, id, 'a new session leads the list');
+    const firstPage = await api('/api/sessions?limit=1');
+    assert.ok(
+      firstPage.body.some((session) => session.id === id) ||
+        list.body[0].pinnedAt,
+      'a new session must be on the first page unless a pin outranks it'
+    );
 
     // A rename is the UPDATE ... RETURNING path, and it takes the title lock.
     const renamed = await api(`/api/sessions/${id}`, {

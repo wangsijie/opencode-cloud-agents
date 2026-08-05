@@ -415,7 +415,18 @@ export interface WorkspaceFile {
   truncated: boolean;
 }
 
-export const listSessions = () => call<SessionView[]>('/api/sessions');
+/**
+ * The session list, pinned first and most recently touched next.
+ *
+ * `limit` is the sidebar's page, and the Hub applies it in that same order — so
+ * a page is a prefix of the list rather than a slice of some other one, and
+ * asking for a bigger page can only add rows to the end of what is already
+ * shown. Omitting it asks for everything.
+ */
+export const listSessions = (limit?: number) =>
+  call<SessionView[]>(
+    limit === undefined ? '/api/sessions' : `/api/sessions?limit=${limit}`
+  );
 
 /**
  * Rename a session, or pin it to the top of the sidebar. Does not touch the

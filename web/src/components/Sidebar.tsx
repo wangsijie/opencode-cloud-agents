@@ -8,6 +8,7 @@ import {
 import { RECENCY_LABELS, recencyBucket, type RecencyBucket } from '../format';
 import { isPlainClick, navigate, sessionPath } from '../router';
 import { useResizable } from '../useResizable';
+import { SESSION_PAGE_SIZE } from '../useSessions';
 import {
   DotsIcon,
   PinIcon,
@@ -42,6 +43,8 @@ export function Sidebar({
   listError,
   activeId,
   refresh,
+  hasMore,
+  onShowMore,
   open,
   onClose,
   onCollapse,
@@ -51,6 +54,10 @@ export function Sidebar({
   listError?: string;
   activeId?: string;
   refresh: (silent?: boolean) => Promise<void>;
+  /** More sessions exist past the page currently loaded. */
+  hasMore: boolean;
+  /** Grow the page by one more screenful. */
+  onShowMore: () => Promise<void>;
   open: boolean;
   onClose: () => void;
   onCollapse: () => void;
@@ -59,6 +66,7 @@ export function Sidebar({
   const [menuFor, setMenuFor] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [loadingMore, setLoadingMore] = useState(false);
   const newLink = useRef<HTMLAnchorElement>(null);
   const { width, handleProps } = useResizable({
     storageKey: 'hub.sidebarWidth',
@@ -210,6 +218,23 @@ export function Sidebar({
                 {group.entries.map(renderEntry)}
               </div>
             ))}
+            {/* The history is paged: the Hub sends a screenful, in this same
+                order, and this asks for the next one. It is a button rather
+                than a scroll sentinel on purpose — an infinite list would keep
+                growing the set every poll recalibrates. */}
+            {hasMore ? (
+              <button
+                className="sidebar-more"
+                type="button"
+                disabled={loadingMore}
+                onClick={() => {
+                  setLoadingMore(true);
+                  void onShowMore().finally(() => setLoadingMore(false));
+                }}
+              >
+                {loadingMore ? 'Loading…' : `Show ${SESSION_PAGE_SIZE} more`}
+              </button>
+            ) : null}
           </>
         )}
       </div>

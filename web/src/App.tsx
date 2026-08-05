@@ -158,7 +158,7 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
   const catalogRef = useRef<Catalog | undefined>(undefined);
   const previousRoute = useRef(route.name);
 
-  const { sessions, error: listError, refresh } = useSessions();
+  const { sessions, error: listError, refresh, hasMore, showMore } = useSessions();
 
   const loadCatalog = useCallback(async (refreshRepos = false) => {
     try {
@@ -274,6 +274,8 @@ function Hub({ onSignedOut }: { onSignedOut: () => void }) {
         listError={listError}
         activeId={route.name === 'session' ? route.id : undefined}
         refresh={refresh}
+        hasMore={hasMore}
+        onShowMore={showMore}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onCollapse={() => collapseSidebar(true)}

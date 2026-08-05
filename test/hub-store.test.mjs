@@ -221,6 +221,60 @@ test('the list is newest first', async () => {
   );
 });
 
+test('the registry is pinned first, then most recently touched', async () => {
+  const { env } = testEnv();
+  const oldest = await seed(env, { createdAt: '2026-07-01T00:00:00.000Z' });
+  const newest = await seed(env, { createdAt: '2026-07-03T00:00:00.000Z' });
+  const middle = await seed(env, { createdAt: '2026-07-02T00:00:00.000Z' });
+
+  const ids = async (limit) =>
+    (await listRegistry(env, limit)).map((entry) => entry.session.id);
+
+  assert.deepEqual(await ids(), [newest, middle, oldest]);
+
+  // An answer that lands in an old session moves it to the top: this is the
+  // sidebar's order, not the creation order the composer's model pick uses.
+  await updateSession(env, oldest, { lastPromptAt: '2026-07-04T00:00:00.000Z' });
+  assert.deepEqual(await ids(), [oldest, newest, middle]);
+
+  // A pin outranks all of it, and the rest keeps its order underneath.
+  await setSessionPinned(env, middle, true);
+  assert.deepEqual(await ids(), [middle, oldest, newest]);
+});
+
+test('the registry limit cuts that same order, so a page is a prefix', async () => {
+  const { env } = testEnv();
+  await seed(env, { createdAt: '2026-07-01T00:00:00.000Z' });
+  const newest = await seed(env, { createdAt: '2026-07-03T00:00:00.000Z' });
+  const middle = await seed(env, { createdAt: '2026-07-02T00:00:00.000Z' });
+
+  const page = await listRegistry(env, 2);
+  assert.deepEqual(
+    page.map((entry) => entry.session.id),
+    [newest, middle]
+  );
+  // Growing the page appends; it never reshuffles what was already shown.
+  const whole = await listRegistry(env);
+  assert.deepEqual(
+    whole.slice(0, 2).map((entry) => entry.session.id),
+    page.map((entry) => entry.session.id)
+  );
+  assert.equal(whole.length, 3);
+});
+
+test('a never-prompted session still sorts, and pages, by its own age', async () => {
+  const { env } = testEnv();
+  // MAX() propagates NULL in SQLite, so a null `last_prompt_at` would drop
+  // these rows out of the ordering entirely — and off the first page with it.
+  const older = await seed(env, { createdAt: '2026-07-01T00:00:00.000Z' });
+  const newer = await seed(env, { createdAt: '2026-07-02T00:00:00.000Z' });
+
+  assert.deepEqual(
+    (await listRegistry(env, 2)).map((entry) => entry.session.id),
+    [newer, older]
+  );
+});
+
 test('inserting the same session twice keeps the first row', async () => {
   const { env } = testEnv();
   const session = buildNewSession(

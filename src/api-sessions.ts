@@ -70,7 +70,7 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
 
   if (url.pathname === '/api/sessions') {
     if (request.method === 'GET') {
-      const entries = await hubStore.listRegistry(env);
+      const entries = await hubStore.listRegistry(env, readListLimit(url));
       return json(
         await Promise.all(
           entries.map(({ session, instance }) =>
@@ -528,6 +528,27 @@ async function requireSession(env: Env, id: string): Promise<SessionRecord> {
     }
   }
   throw new HttpError(404, 'Session not found');
+}
+
+/**
+ * How many sessions the list may return.
+ *
+ * The sidebar asks for a page and grows it a page at a time, and the number is
+ * the client's rather than a constant here: a limit costs the Hub one `LIMIT`
+ * and saves it a status calibration per row it does not serve, which is the
+ * expensive half. No limit means the whole table — what a caller with no
+ * pagination gets, and what the smoke test still reads.
+ *
+ * Anything that is not a positive integer is ignored rather than refused: a
+ * malformed query string should serve the list, not fail it.
+ */
+function readListLimit(url: URL): number | undefined {
+  const raw = url.searchParams.get('limit');
+  if (raw === null) {
+    return undefined;
+  }
+  const limit = Number(raw);
+  return Number.isInteger(limit) && limit > 0 ? limit : undefined;
 }
 
 /**

@@ -158,3 +158,20 @@ export const prebuildRuns = sqliteTable(
  */
 export const lastActivityAt = sql<string>`CASE WHEN ${sessions.lastPromptAt} > ${sessions.createdAt}
        THEN ${sessions.lastPromptAt} ELSE ${sessions.createdAt} END`;
+
+/**
+ * The sidebar's idea of "last touched", in SQL.
+ *
+ * Not {@link lastActivityAt}: that one answers "when was this repository last
+ * *worked in*" and so ignores everything but a prompt. The history has to move
+ * for an agent finishing a turn too — otherwise a session whose answer just
+ * landed sits below sessions nobody has looked at, and paging would cut it off.
+ * This is `deriveLastActivityAt` in [sessions.ts](../sessions.ts) expressed as a
+ * scalar `MAX`, and the two must agree: the server pages on this, the sidebar
+ * sorts on that. `last_prompt_at` is nullable and `MAX` is null-propagating, so
+ * the coalesce is what keeps a never-prompted session from vanishing.
+ */
+export const sessionActivityAt = sql<string>`MAX(${sessions.updatedAt}, ${sessions.createdAt}, COALESCE(${sessions.lastPromptAt}, ''))`;
+
+/** Pinned rows first, as an ascending sort key. */
+export const pinnedFirst = sql`CASE WHEN ${sessions.pinnedAt} IS NULL THEN 1 ELSE 0 END`;
