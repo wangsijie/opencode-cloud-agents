@@ -8,7 +8,7 @@ import {
 } from '../api';
 import { agentPath, isPlainClick, navigate, sessionPath } from '../router';
 import { useTranscript } from '../useTranscript';
-import { MenuIcon } from './icons';
+import { MenuIcon, RefreshIcon } from './icons';
 import { InstanceModal } from './InstanceModal';
 import { MessageList } from './MessageList';
 import { StatusBadge } from './StatusBadge';
@@ -56,7 +56,9 @@ export function AgentSessionPage({
   const {
     messages,
     state,
-    error: transcriptError
+    error: transcriptError,
+    refreshing,
+    refresh: refreshTranscript
   } = useTranscript(sessionId, attached ? 'attached' : runtime, agentSessionId);
 
   const refreshSession = useCallback(async () => {
@@ -67,6 +69,11 @@ export function AgentSessionPage({
       setLoadError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [sessionId]);
+
+  const refreshAll = useCallback(() => {
+    refreshTranscript();
+    void refreshSession();
+  }, [refreshTranscript, refreshSession]);
 
   // The record still polls even though nothing here can send: the badge, and
   // the runtime key that re-attaches the stream after a wake, both come from it.
@@ -185,6 +192,18 @@ export function AgentSessionPage({
             onClick={() => setInstanceOpen(true)}
           />
         ) : null}
+        {/* Worth more here than on the session page: a subagent's history is
+            not mirrored, so a stalled stream is the only copy of it there is. */}
+        <button
+          className="icon-button"
+          type="button"
+          disabled={refreshing}
+          onClick={refreshAll}
+          aria-label="Refresh conversation"
+          title="Refresh conversation"
+        >
+          <RefreshIcon />
+        </button>
       </header>
 
       {session && instanceOpen ? (

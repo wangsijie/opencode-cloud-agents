@@ -30,7 +30,15 @@ import {
   toAttachmentPayload,
   useComposerAttachments
 } from './ComposerAttachments';
-import { ArrowUpIcon, DockerIcon, MenuIcon, PanelIcon, RepoIcon, StopIcon } from './icons';
+import {
+  ArrowUpIcon,
+  DockerIcon,
+  MenuIcon,
+  PanelIcon,
+  RefreshIcon,
+  RepoIcon,
+  StopIcon
+} from './icons';
 import { InstanceModal } from './InstanceModal';
 import { MessageList } from './MessageList';
 import { ModelSelect } from './ModelSelect';
@@ -121,7 +129,9 @@ export function SessionPage({
   const {
     messages,
     state,
-    error: transcriptError
+    error: transcriptError,
+    refreshing,
+    refresh: refreshTranscript
     // Keyed to the runtime so a wake the user just triggered re-attaches the
     // event stream at once, rather than after the browser's reconnect delay.
   } = useTranscript(sessionId, attached ? 'attached' : runtime);
@@ -137,6 +147,15 @@ export function SessionPage({
       setLoadError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [sessionId]);
+
+  // One button for "show me what is actually there". The conversation and the
+  // badge above it come from two different places — a stream and a poll — and a
+  // reader who suspects the page is stale cannot tell which of them stalled, so
+  // both are redone.
+  const refreshAll = useCallback(() => {
+    refreshTranscript();
+    void refreshSession();
+  }, [refreshTranscript, refreshSession]);
 
   // Dispatch is unfinished: the prompt is durable but the container has not
   // been handed it yet. The pending bubble's own spinner is the progress
@@ -402,6 +421,22 @@ export function SessionPage({
             onClick={() => setInstanceOpen(true)}
           />
         ) : null}
+        {/*
+          The escape hatch from a stalled stream. It sits in the header rather
+          than by the composer because it is about reading, not sending, and it
+          is always enabled: a session that failed to load is exactly when
+          retrying is worth offering.
+        */}
+        <button
+          className="icon-button"
+          type="button"
+          disabled={refreshing}
+          onClick={refreshAll}
+          aria-label="Refresh conversation"
+          title="Refresh conversation"
+        >
+          <RefreshIcon />
+        </button>
         <button
           className={`icon-button${detailsOpen ? ' active' : ''}`}
           type="button"

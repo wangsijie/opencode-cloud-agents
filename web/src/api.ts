@@ -461,6 +461,13 @@ export interface SessionEventSource {
     listener: (event: MessageEvent<string>) => void
   ): void;
   close(): void;
+  /**
+   * Set by `useTranscript` to notice a dropped stream. Optional because the
+   * mock never drops one; a real `EventSource` always has it.
+   */
+  onerror?: ((event: Event) => void) | null;
+  /** `EventSource.readyState`; `CLOSED` (2) is a reconnect the browser gave up on. */
+  readonly readyState?: number;
 }
 
 let eventSourceImpl: (url: string) => SessionEventSource = (url) =>

@@ -26,6 +26,29 @@
  */
 const RECONNECT_MS = 15_000;
 
+/**
+ * How often a live stream writes a comment frame.
+ *
+ * Nothing about this is for the browser: `EventSource` has no idle timeout of
+ * its own. It is for everything in between. A session's stream carries only
+ * that session's frames — the filter below drops the server-wide ones, and
+ * OpenCode's own keep-alives with them — so an agent thinking its way through a
+ * long tool call produces a stream that is byte-for-byte identical to a dead
+ * one. Anything on the path that reaps idle connections (a proxy, a phone's
+ * NAT) takes it, and neither side is told: the browser goes on believing it is
+ * attached, no `error` fires, and its automatic reconnect never runs. The tab
+ * sits on a transcript that stopped growing.
+ *
+ * A write every fifteen seconds is what turns that silent half-open connection
+ * into an error the browser can see and reconnect from. Comments are the SSE
+ * framing for exactly this: clients ignore a line starting with a colon, so it
+ * costs a few bytes and cannot be mistaken for an event.
+ */
+const HEARTBEAT_MS = 15_000;
+
+/** One SSE comment. Ignored by every client; only its arrival means anything. */
+const HEARTBEAT_FRAME = ': keep-alive\n\n';
+
 export type SessionEventState =
   /** Attached to a running container; OpenCode frames follow. */
   | 'live'
@@ -226,7 +249,8 @@ export function closedSessionEventStream(state: SessionStateEvent): Response {
  */
 export function forwardSessionEventStream(
   upstream: ReadableStream<Uint8Array>,
-  state: SessionStateEvent
+  state: SessionStateEvent,
+  heartbeatMs: number = HEARTBEAT_MS
 ): Response {
   const opencodeSessionId = state.opencodeSessionId;
   if (!opencodeSessionId) {
@@ -274,5 +298,86 @@ export function forwardSessionEventStream(
     }
   });
 
-  return sseResponse(upstream.pipeThrough(filter));
+  const filtered = upstream.pipeThrough(filter);
+  if (heartbeatMs <= 0) {
+    return sseResponse(filtered);
+  }
+
+  /*
+    The heartbeat is a side channel, never the main loop.
+
+    The filtered stream is still piped — the comment above is the reason, and it
+    survives here: `pipeTo` keeps a genuine socket read pending for the life of
+    the response, which is what stops the runtime from treating this as a hung
+    request. The timer only enqueues beside it. Inverting the two — a pump whose
+    loop awaits the timer and polls the upstream — is what gets cancelled
+    mid-stream.
+
+    Both sides finish through the same `close`, because either can be last: the
+    upstream ends when the container quiesces, and the browser can walk away at
+    any point, which surfaces as the pipe rejecting.
+  */
+  let stop = () => {};
+  return sseResponse(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        let open = true;
+        const timer = setInterval(() => {
+          if (!open) {
+            return;
+          }
+          try {
+            controller.enqueue(encoder.encode(HEARTBEAT_FRAME));
+          } catch {
+            // The consumer is gone; the pipe settles and finishes the cleanup.
+            open = false;
+            clearInterval(timer);
+          }
+        }, heartbeatMs);
+
+        const close = (cause?: unknown) => {
+          if (!open) {
+            return;
+          }
+          open = false;
+          clearInterval(timer);
+          if (cause === undefined) {
+            controller.close();
+            return;
+          }
+          // A browser that navigated away is the ordinary case, not a fault:
+          // the stream is already going and there is nobody left to tell.
+          try {
+            controller.error(cause);
+          } catch {
+            // Already settled by the consumer's own cancel.
+          }
+        };
+
+        // Cancelling must not wait out a heartbeat to notice.
+        stop = () => {
+          open = false;
+          clearInterval(timer);
+        };
+
+        void filtered
+          .pipeTo(
+            new WritableStream<Uint8Array>({
+              write(chunk) {
+                if (open) {
+                  controller.enqueue(chunk);
+                }
+              }
+            })
+          )
+          .then(
+            () => close(),
+            (cause) => close(cause)
+          );
+      },
+      cancel() {
+        stop();
+      }
+    })
+  );
 }

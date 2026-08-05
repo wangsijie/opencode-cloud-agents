@@ -49,6 +49,9 @@ interface OpencodeEvent {
   properties: Record<string, unknown>;
 }
 
+/** `EventSource.CLOSED`: the browser has stopped trying to reconnect. */
+const CLOSED = 2;
+
 /**
  * The transcript for one session: a full read, kept current by the event stream.
  *
@@ -72,6 +75,9 @@ export function useTranscript(
   const [state, setState] = useState<TranscriptState>();
   const [mirroredAt, setMirroredAt] = useState<string>();
   const [error, setError] = useState<string>();
+  const [refreshing, setRefreshing] = useState(false);
+  /** Bumped to force a new stream; see `refresh`. */
+  const [streamEpoch, setStreamEpoch] = useState(0);
   const building = useRef(new Map<string, Building>());
   /** The last state the event stream reported, to spot transitions. */
   const reportedState = useRef<TranscriptState | 'ended' | undefined>(undefined);
@@ -94,6 +100,24 @@ export function useTranscript(
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  /**
+   * What the reader's refresh button does.
+   *
+   * Re-reading alone would fill the page in and leave the cause in place. The
+   * transcript only stays current while the event stream does, and the state
+   * this recovers from is a stream that died without the browser noticing —
+   * suspended with the tab on a phone, or severed mid-flight by a network the
+   * `EventSource` still believes it is attached to. Nothing reports that: no
+   * `error` fires, and the browser's own reconnect never runs. So the stream is
+   * dropped and rebuilt too, and the read that goes with it closes whatever gap
+   * the dead one left.
+   */
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    setStreamEpoch((epoch) => epoch + 1);
+    void load().finally(() => setRefreshing(false));
   }, [load]);
 
   useEffect(() => {
@@ -170,8 +194,38 @@ export function useTranscript(
       apply(JSON.parse((event as MessageEvent<string>).data) as OpencodeEvent);
     });
 
-    return () => source.close();
-  }, [sessionId, agentSessionId, load, runtimeKey]);
+    /*
+      A dropped stream, now that the server's heartbeat makes one visible.
 
-  return { messages, state, mirroredAt, error, reload: load };
+      `EventSource` reconnects by itself and reports that as an error first, so
+      this must not tear anything down: the reconnect carries a fresh `hub`
+      frame, and a live one already forces the re-read that closes the gap. The
+      one case it cannot handle is `CLOSED`, where the browser has given up for
+      good and no reconnect is coming — that leaves the page frozen on a
+      transcript that has stopped growing, and only a new stream fixes it.
+
+      Deferred while the tab is hidden, because a phone drops the connection on
+      the way into the background and reconnecting there just gets it dropped
+      again; `visibilitychange` retries when it is worth doing.
+    */
+    const reopen = () => {
+      if (source.readyState !== CLOSED) {
+        return;
+      }
+      if (document.hidden) {
+        return;
+      }
+      setStreamEpoch((epoch) => epoch + 1);
+    };
+    source.onerror = reopen;
+    document.addEventListener('visibilitychange', reopen);
+
+    return () => {
+      document.removeEventListener('visibilitychange', reopen);
+      source.onerror = null;
+      source.close();
+    };
+  }, [sessionId, agentSessionId, load, runtimeKey, streamEpoch]);
+
+  return { messages, state, mirroredAt, error, refreshing, refresh, reload: load };
 }

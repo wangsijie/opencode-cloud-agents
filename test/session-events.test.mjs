@@ -5,12 +5,33 @@ import {
   SseFrameBuffer,
   classifySessionEvent,
   eventSessionId,
+  forwardSessionEventStream,
   frameBelongsToSession,
   sseFrame,
   sseFrameData
 } from '../src/session-events.ts'
 
 const frame = (payload) => 'data: ' + JSON.stringify(payload)
+
+/** A stream of chunks a test can feed and close by hand. */
+function controllable() {
+  let push
+  let finish
+  const stream = new ReadableStream({
+    start(controller) {
+      push = (text) => controller.enqueue(new TextEncoder().encode(text))
+      finish = () => controller.close()
+    }
+  })
+  return { stream, push: (text) => push(text), finish: () => finish() }
+}
+
+const STATE = {
+  state: 'live',
+  sessionId: 'inst-1',
+  opencodeSessionId: 'ses_1',
+  at: '2026-01-01T00:00:00.000Z'
+}
 
 test('frames are split on the blank line, in either newline style', () => {
   const buffer = new SseFrameBuffer()
@@ -172,4 +193,74 @@ test('hub frames are serialized as named SSE events', () => {
     sseFrame('hub', { state: 'sleeping', sessionId: 'inst-1' }),
     'event: hub\ndata: {"state":"sleeping","sessionId":"inst-1"}\n\n'
   )
+})
+
+/*
+ * The heartbeat exists because this stream is otherwise byte-for-byte identical
+ * to a dead one while an agent thinks: the filter drops everything that is not
+ * this session's, so a long tool call writes nothing at all. Without a write on
+ * a timer, nothing on the path between the container and the phone can tell the
+ * difference, and a reaped connection is never reported to either end.
+ */
+test('a live stream writes a keep-alive while the agent is silent', async () => {
+  const upstream = controllable()
+  const response = forwardSessionEventStream(upstream.stream, STATE, 10)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  // The opening frames say nothing about liveness; they are written once.
+  const opening = decoder.decode((await reader.read()).value)
+  assert.match(opening, /retry: 15000/)
+
+  const seen = []
+  // Long enough for several beats, with the upstream deliberately silent.
+  const deadline = Date.now() + 400
+  while (Date.now() < deadline) {
+    const chunk = await Promise.race([
+      reader.read().then((result) => decoder.decode(result.value ?? new Uint8Array())),
+      new Promise((resolve) => setTimeout(() => resolve(null), 200))
+    ])
+    if (chunk === null) {
+      break
+    }
+    seen.push(chunk)
+    if (seen.join('').includes(': keep-alive')) {
+      break
+    }
+  }
+  assert.ok(
+    seen.join('').includes(': keep-alive'),
+    'a silent upstream must still produce a keep-alive'
+  )
+  await reader.cancel()
+})
+
+test('the keep-alive is a comment, so it is not mistaken for an event', () => {
+  // Both halves of the reader path already agree: a comment carries no data
+  // and belongs to no session, so it can never reach the transcript or move
+  // the unread marker.
+  assert.equal(sseFrameData(': keep-alive'), undefined)
+  assert.equal(frameBelongsToSession(': keep-alive', 'ses_1'), false)
+  assert.equal(classifySessionEvent(': keep-alive', 'ses_1'), undefined)
+})
+
+test('the upstream still drives the stream, and its end still closes it', async () => {
+  const upstream = controllable()
+  const response = forwardSessionEventStream(upstream.stream, STATE, 10_000)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  // `retry:` and the opening `hub` frame are enqueued separately.
+  await reader.read()
+  await reader.read()
+
+  upstream.push(frame({ type: 'message.updated', properties: { sessionID: 'ses_1' } }) + '\n\n')
+  const forwarded = decoder.decode((await reader.read()).value)
+  assert.match(forwarded, /^event: opencode\n/)
+
+  // A container that quiesces ends its side; the browser must be told rather
+  // than left on a stream the heartbeat would otherwise hold open forever.
+  upstream.finish()
+  const ending = decoder.decode((await reader.read()).value)
+  assert.match(ending, /"state":"ended"/)
+  assert.equal((await reader.read()).done, true)
 })
