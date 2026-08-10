@@ -21,7 +21,7 @@
     "typecheck": "pnpm run types && tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p host"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.4",
+    "@opencode-ai/sdk": "1.18.15",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {

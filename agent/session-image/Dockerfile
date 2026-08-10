@@ -14,7 +14,7 @@
 # package.json: the site speaks to this server with that client.
 FROM node:22-bookworm-slim
 
-ARG OPENCODE_VERSION=1.18.4
+ARG OPENCODE_VERSION=1.18.15
 ARG GH_VERSION=2.93.0
 ARG WRANGLER_VERSION=4.112.0
 ARG PNPM_VERSION=11.17.0

@@ -9,15 +9,15 @@ importers:
   .:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: 1.18.4
-        version: 1.18.4
+        specifier: 1.18.15
+        version: 1.18.15
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2
     devDependencies:
       '@cloudflare/sandbox':
         specifier: 0.12.3
-        version: 0.12.3(@opencode-ai/sdk@1.18.4)(@xterm/xterm@5.5.0)
+        version: 0.12.3(@opencode-ai/sdk@1.18.15)(@xterm/xterm@5.5.0)
       '@git-diff-view/react':
         specifier: ^0.1.7
         version: 0.1.7(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -496,8 +496,8 @@ packages:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
 
-  '@opencode-ai/sdk@1.18.4':
-    resolution: {integrity: sha512-p/3P0KtWknoLvpsk8QrUzCKd4Q1A5Z3RmACEvwuQBGxnUy4AGo379lUYMgt7fczFn53079oroLuo6BosQri+HA==}
+  '@opencode-ai/sdk@1.18.15':
+    resolution: {integrity: sha512-8sfo9nGiVwesAZW9Wqkvynyn7w4wYaHx1O9qOHpYL65+Bs2XUpHP3kBbZe58gjQydFgk6I74kUF7sqCiPu2arQ==}
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
@@ -2085,14 +2085,14 @@ snapshots:
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
-  '@cloudflare/sandbox@0.12.3(@opencode-ai/sdk@1.18.4)(@xterm/xterm@5.5.0)':
+  '@cloudflare/sandbox@0.12.3(@opencode-ai/sdk@1.18.15)(@xterm/xterm@5.5.0)':
     dependencies:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
       capnweb: 0.8.0
       hono: 4.12.31
     optionalDependencies:
-      '@opencode-ai/sdk': 1.18.4
+      '@opencode-ai/sdk': 1.18.15
       '@xterm/xterm': 5.5.0
 
   '@cloudflare/unenv-preset@2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260714.1)':
@@ -2383,7 +2383,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@opencode-ai/sdk@1.18.4':
+  '@opencode-ai/sdk@1.18.15':
     dependencies:
       cross-spawn: 7.0.6
 
