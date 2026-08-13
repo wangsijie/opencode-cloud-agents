@@ -6,6 +6,7 @@ import {
   type SessionView
 } from '../api';
 import { navigate, sessionPath } from '../router';
+import { useDraft } from '../useDraft';
 import {
   AttachButton,
   AttachmentChips,
@@ -53,7 +54,8 @@ export function NewSessionPage({
   const [repoKey, setRepoKey] = useState<string>();
   const [model, setModel] = useState('');
   const [variant, setVariant] = useState('');
-  const [prompt, setPrompt] = useState('');
+  // The one composer that has no session to key on yet, so it gets a fixed key.
+  const [prompt, setPrompt] = useDraft('new');
   // Resolved from the catalog's preference order once it lands — docker first
   // when configured, otherwise cloudflare. undefined until then so a hard-coded
   // cloudflare does not stick past a catalog that prefers docker.

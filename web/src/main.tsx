@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { pruneDrafts } from './useDraft';
 import './styles.css';
 import './markdown.css';
 import 'katex/dist/katex.min.css';
@@ -18,6 +19,9 @@ async function boot() {
     const { installMocks } = await import('./mock');
     installMocks();
   }
+  // Drafts are abandoned silently and sessions are many, so the only moment
+  // anything sweeps them is here.
+  pruneDrafts();
   createRoot(container!).render(
     <StrictMode>
       <App />

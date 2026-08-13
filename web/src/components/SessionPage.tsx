@@ -23,6 +23,7 @@ import {
   type OptimisticPrompt
 } from '../optimistic';
 import { isPlainClick, navigate } from '../router';
+import { useDraft } from '../useDraft';
 import { useTranscript } from '../useTranscript';
 import {
   AttachButton,
@@ -81,7 +82,9 @@ export function SessionPage({
   const [session, setSession] = useState<SessionView>();
   const [loadError, setLoadError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  const [prompt, setPrompt] = useState('');
+  // Kept in the browser so leaving the page — for the settings, for another
+  // conversation — does not throw away half a typed prompt.
+  const [prompt, setPrompt] = useDraft(`session.${sessionId}`);
   const [model, setModel] = useState<string>();
   const [variant, setVariant] = useState<string>();
   const [busy, setBusy] = useState(false);
