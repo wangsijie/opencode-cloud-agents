@@ -51,8 +51,10 @@ export function PillSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [alignEnd, setAlignEnd] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const selected = options?.find((option) => option.value === value);
   const label = loading ? (loadingLabel ?? 'Loading…') : (selected?.label ?? placeholder);
@@ -98,6 +100,23 @@ export function PillSelect({
       listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' });
     }
   }, [open, active]);
+
+  // The panel is only as wide as its content, so a pill near the right edge —
+  // which on a phone is most of them — would push it past the viewport and
+  // scroll the page sideways. Measure once on open and anchor from the other
+  // side instead.
+  useEffect(() => {
+    if (!open) {
+      setAlignEnd(false);
+      return;
+    }
+    const panel = panelRef.current;
+    if (!panel) {
+      return;
+    }
+    const overflows = panel.getBoundingClientRect().right > window.innerWidth - 8;
+    setAlignEnd(overflows);
+  }, [open]);
 
   function dismiss() {
     setOpen(false);
@@ -147,7 +166,11 @@ export function PillSelect({
       {open ? (
         // The panel owns the keys for everything inside it, including the
         // search field, so arrows and Enter mean the same wherever focus sits.
-        <div className="pill-menu-panel" onKeyDown={onKeyDown}>
+        <div
+          className={`pill-menu-panel${alignEnd ? ' align-end' : ''}`}
+          ref={panelRef}
+          onKeyDown={onKeyDown}
+        >
           {search || action ? (
             <div className="pill-menu-search">
               {search ? (

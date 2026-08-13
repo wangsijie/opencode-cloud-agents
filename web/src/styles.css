@@ -1166,13 +1166,19 @@ summary:focus-visible {
 }
 
 /* Opens upwards: the composer sits low on the page on a phone, and the panel
-   would otherwise unfold under the keyboard. */
+   would otherwise unfold under the keyboard.
+
+   Width follows the content — a two-option host picker is a narrow panel, not a
+   320px one — capped so a long repository name still wraps inside the viewport
+   instead of widening the document. */
 .pill-menu-panel {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
   z-index: 10;
-  width: min(320px, calc(100vw - 48px));
+  width: max-content;
+  min-width: 100%;
+  max-width: min(320px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1181,6 +1187,11 @@ summary:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+}
+
+.pill-menu-panel.align-end {
+  left: auto;
+  right: 0;
 }
 
 .pill-menu-search {
