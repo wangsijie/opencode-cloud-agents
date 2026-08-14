@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * An unsent composer draft.
@@ -25,21 +25,19 @@ export function useDraft(key: string) {
   // and push the entry's age forward for nothing.
   const written = useRef(text);
 
-  useEffect(() => {
-    if (written.current === text) {
-      return;
-    }
-    written.current = text;
-    try {
-      if (text) {
-        localStorage.setItem(storageKey, JSON.stringify({ text, at: Date.now() }));
-      } else {
-        localStorage.removeItem(storageKey);
-      }
-    } catch {
-      // A browser that refuses storage still composes; it just forgets.
-    }
-  }, [storageKey, text]);
+  const setDraft = useCallback(
+    (value: string | ((current: string) => string)) => {
+      setText((current) => {
+        const next = typeof value === 'function' ? value(current) : value;
+        if (written.current !== next) {
+          written.current = next;
+          write(storageKey, next);
+        }
+        return next;
+      });
+    },
+    [storageKey]
+  );
 
   // Switching composers under one mount (which nothing does today, but the key
   // is a prop) must show that composer's draft, not the previous one's.
@@ -54,7 +52,7 @@ export function useDraft(key: string) {
     setText(stored);
   }, [storageKey]);
 
-  return [text, setText] as const;
+  return [text, setDraft] as const;
 }
 
 const PREFIX = 'hub.draft.';
@@ -84,6 +82,18 @@ function read(storageKey: string) {
     // Unavailable or unparseable storage is an empty composer, not an error.
   }
   return '';
+}
+
+function write(storageKey: string, text: string) {
+  try {
+    if (text) {
+      localStorage.setItem(storageKey, JSON.stringify({ text, at: Date.now() }));
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  } catch {
+    // A browser that refuses storage still composes; it just forgets.
+  }
 }
 
 /** Drop drafts nobody has come back to. Called once, when the shell loads. */
