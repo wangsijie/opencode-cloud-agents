@@ -14,6 +14,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * on mount, removed the moment the box is empty — which is exactly what
  * sending does, since a sent prompt clears the composer.
  *
+ * The write happens in the setter itself, not inside a `setState` updater.
+ * A successful new-session submit navigates away in the same turn, and React
+ * discards the unmounting page's pending update — so an updater that was the
+ * only thing calling `removeItem` left `hub.draft.new` behind.
+ *
  * It is deliberately not sessionStorage. A draft that survives the tab being
  * closed is the case that matters most, and a draft is scoped to its session
  * anyway, not to the tab that happened to type it.
@@ -27,14 +32,15 @@ export function useDraft(key: string) {
 
   const setDraft = useCallback(
     (value: string | ((current: string) => string)) => {
-      setText((current) => {
-        const next = typeof value === 'function' ? value(current) : value;
-        if (written.current !== next) {
-          written.current = next;
-          write(storageKey, next);
-        }
-        return next;
-      });
+      // `written` is the source of truth for a functional update: it is what
+      // storage already holds, and unlike a setState updater it still runs if
+      // this page unmounts in the same turn (a new-session submit does).
+      const next = typeof value === 'function' ? value(written.current) : value;
+      if (written.current !== next) {
+        written.current = next;
+        write(storageKey, next);
+      }
+      setText(next);
     },
     [storageKey]
   );

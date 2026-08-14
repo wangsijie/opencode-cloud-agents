@@ -150,6 +150,11 @@ export function NewSessionPage({
     setBusy(true);
     setError(undefined);
     const attachments = attachmentsApi.attachments;
+    // Drop the draft before the request, the way a session send does: once the
+    // Hub has accepted this prompt it is no longer a draft, and waiting until
+    // after `createSession` races the navigate that unmounts this page.
+    setPrompt('');
+    attachmentsApi.clear();
     try {
       const effort =
         variant && modelVariants.some((entry) => entry.id === variant)
@@ -165,11 +170,11 @@ export function NewSessionPage({
           ? { attachments: toAttachmentPayload(attachments) }
           : {})
       });
-      setPrompt('');
-      attachmentsApi.clear();
       onCreated(created);
       navigate(sessionPath(created.id));
     } catch (cause) {
+      setPrompt((current) => (current ? current : text));
+      attachmentsApi.restore(attachments);
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
