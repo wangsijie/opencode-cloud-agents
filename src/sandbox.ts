@@ -31,6 +31,7 @@ import {
   isContainerNotRunning,
   opencodeServerEnv,
   resolveHostClient,
+  type HostCallStats,
   type HostClient
 } from './host-client';
 import {
@@ -700,6 +701,10 @@ export class Sandbox extends DurableObject<Env> {
       // an unconfigured deployment must fail the wake here, not after a boot.
       const opencodeConfig = await loadOpencodeConfig(this.persistenceEnv);
       const host = await this.host();
+      // Nothing else touches this host while a wake runs — it holds the
+      // lifecycle mutation lock — so the window this opens belongs to the wake
+      // alone.
+      host.resetCallStats();
 
       const restoreStartedAt = Date.now();
       await this.ensureWorkspaceRestored();
@@ -750,12 +755,15 @@ export class Sandbox extends DurableObject<Env> {
         runtimeEpoch: input.runtimeEpoch,
         revision
       });
-      await this.recordWakeTimings({
-        ...timings,
-        totalMs: since(startedAt),
-        at: new Date().toISOString(),
-        cold
-      });
+      await this.recordWakeTimings(
+        {
+          ...timings,
+          totalMs: since(startedAt),
+          at: new Date().toISOString(),
+          cold
+        },
+        host.callStats
+      );
       return await this.inspectExecutionIfRunning();
     } catch (error) {
       await this.setRuntimeGate({ phase: 'sleeping', revision });
@@ -803,15 +811,13 @@ export class Sandbox extends DurableObject<Env> {
       await this.persistenceState.storage.delete(SEED_PENDING_STORAGE_KEY);
     }
 
-    if (checkout.repoKey) {
-      const existing = await this.onHost(() =>
-        host.exists(`${checkout.directory}/.git`)
-      );
-      if (!existing.exists) {
-        await this.noteBootStep('cloning');
-      }
-    }
-    const result = await provisionRepository(host, checkout);
+    // The boot step rides `provisionRepository`'s own look at the checkout
+    // rather than a second `exists` of the same path: that answer costs a round
+    // trip to the host, and asking for it twice is a round trip spent on a
+    // question already answered.
+    const result = await provisionRepository(host, checkout, {
+      onClone: () => this.noteBootStep('cloning')
+    });
     if (result.cloned) {
       await this.noteWorkspaceOrigin('clone');
     }
@@ -849,10 +855,34 @@ export class Sandbox extends DurableObject<Env> {
    * Kept on the Sandbox rather than the coordinator because this object is the
    * one that performs the stages, and it rides out to the UI on the runtime
    * status the session list already reads — so measuring costs no extra call.
+   *
+   * Also written to the log, which the stored copy cannot replace: the record
+   * holds only the *last* wake of one instance, and the question a slow start
+   * raises is comparative — across instances, across hosts, and across a
+   * change. `wrangler tail` is where that comparison can actually be made, and
+   * one line per wake is small enough to be worth its place there.
+   *
+   * The host call stats do not join the stored timings, because they answer a
+   * different question than the one the UI asks. `hostMinMs` is the cheapest
+   * round trip of the wake — near enough the wire latency between this object
+   * and the host — and it is what separates "the host is slow" from "the host
+   * is far away". That belongs to whoever is reading logs, not to the session
+   * page.
    */
-  private async recordWakeTimings(timings: WakeTimings): Promise<void> {
+  private async recordWakeTimings(
+    timings: WakeTimings,
+    hostCalls: HostCallStats
+  ): Promise<void> {
     this.lastWake = timings;
     await this.persistenceState.storage.put(WAKE_TIMINGS_STORAGE_KEY, timings);
+    console.log('Wake timings', {
+      instanceId: this.instanceIdentity?.id,
+      provider: this.instanceIdentity?.provider,
+      ...timings,
+      hostCalls: hostCalls.calls,
+      hostMs: hostCalls.totalMs,
+      ...(hostCalls.minMs === undefined ? {} : { hostMinMs: hostCalls.minMs })
+    });
   }
 
   async getExecutionSnapshotIfRunning(
@@ -2511,8 +2541,22 @@ export class Sandbox extends DurableObject<Env> {
     }
     await this.setHostRuntime({ running: true });
 
-    const marker = await this.onHost(() => host.exists(PERSISTENCE_MARKER));
-    if (marker.exists) {
+    // Is this the workspace the session has been working in, or a new one?
+    //
+    // On a host without snapshots the `ensure` has already answered that:
+    // `workspaceCreated` means the named volume did not exist a moment ago,
+    // which is the same fact the marker records and is the *only* way that
+    // storage can be new. Reading the marker back would be a second round trip
+    // to a host that may be an ocean away, for an answer already in hand.
+    //
+    // An ephemeral host still has to be asked. Its writable filesystem is new
+    // on every boot while its workspace-shaped answer is not, so there the
+    // marker is the only thing that distinguishes a fresh image from the
+    // snapshot this instance has already had restored into it.
+    const provisioned = host.supportsSnapshots
+      ? (await this.onHost(() => host.exists(PERSISTENCE_MARKER))).exists
+      : !ensured.workspaceCreated;
+    if (provisioned) {
       return;
     }
 

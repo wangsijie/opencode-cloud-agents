@@ -62,7 +62,7 @@ const CHECKOUT = {
   sessionId: 'lively-otter'
 }
 
-test('credentials are one removal, one batch and one config command', async () => {
+test('credentials with no stored MCP auth are one script and one batch', async () => {
   const host = stubHost()
   const env = await injectContainerCredentials(
     host,
@@ -76,11 +76,13 @@ test('credentials are one removal, one batch and one config command', async () =
     CHECKOUT
   )
 
-  assert.equal(host.calls.exec.length, 2)
+  // Every command that does not depend on the batch rides in front of it, so
+  // the whole injection is two round trips rather than three.
+  assert.equal(host.calls.exec.length, 1)
   assert.match(host.calls.exec[0].command, /^rm -rf '\/root\/\.config\/opencode\/skills'/)
   assert.match(host.calls.exec[0].command, /rm -f '\/root\/\.config\/opencode\/AGENTS\.md'/)
-  assert.match(host.calls.exec[1].command, /git config --global user\.name 'Bot'/)
-  assert.match(host.calls.exec[1].command, /commit\.gpgsign true/)
+  assert.match(host.calls.exec[0].command, /git config --global user\.name 'Bot'/)
+  assert.match(host.calls.exec[0].command, /commit\.gpgsign true/)
 
   assert.equal(host.calls.writeBatch.length, 1)
   const written = host.calls.writeBatch[0]
@@ -103,13 +105,14 @@ test('credentials are one removal, one batch and one config command', async () =
 test('no credentials at all still clears what a previous wake wrote', async () => {
   const host = stubHost()
   const env = await injectContainerCredentials(host, { env: [], skills: [] }, {})
-  assert.equal(host.calls.exec.length, 2)
+  assert.equal(host.calls.exec.length, 1)
   assert.match(host.calls.exec[0].command, /^rm -rf/)
   // No stored MCP auth: a store seeded by an earlier wake is removed, one
-  // OpenCode created on its own is left alone — the marker decides.
+  // OpenCode created on its own is left alone — the marker decides. Nothing
+  // about that clear waits on the batch, so it rides the leading script.
   assert.match(
-    host.calls.exec[1].command,
-    /^if \[ -e '\/workspace\/\.opencode-state\/data\/opencode\/\.mcp-auth\.seeded' \]/
+    host.calls.exec[0].command,
+    / && if \[ -e '\/workspace\/\.opencode-state\/data\/opencode\/\.mcp-auth\.seeded' \]/
   )
   // The built-in skills still ride the batch — they are not credentials.
   assert.equal(host.calls.writeBatch.length, 1)
@@ -137,7 +140,10 @@ test('a stored MCP auth store is staged in the batch and installed by the guarde
   )
   assert.equal(staged.mode, '600')
 
+  // The seed is the one command that has to wait for the batch that stages the
+  // store, so it — and only it — is a second round trip.
   assert.equal(host.calls.exec.length, 2)
+  assert.match(host.calls.exec[0].command, /^rm -rf/)
   const script = host.calls.exec[1].command
   assert.ok(script.includes(`!= '2026-07-29T00:00:00Z'`))
   assert.ok(
@@ -158,6 +164,30 @@ test('a fresh workspace is cloned at the pinned default branch', async () => {
     host.calls.exec[0].command,
     /^git clone --depth 1 --branch 'main' 'git@github.com:owner\/repo\.git' '\/workspace\/owner\/repo'$/
   )
+})
+
+test('onClone fires before a clone and never for a restored checkout', async () => {
+  // The caller used to answer this with an `exists` of its own, which is a
+  // second round trip for a question this function already asks.
+  const fresh = stubHost()
+  const order = []
+  await provisionRepository(fresh, CHECKOUT, {
+    onClone: async () => {
+      order.push(`hook after ${fresh.calls.exec.length} exec`)
+    }
+  })
+  assert.deepEqual(order, ['hook after 0 exec'])
+  assert.equal(fresh.calls.exists.length, 1)
+
+  const restored = stubHost({}, { '/workspace/owner/repo/.git': true })
+  let fired = false
+  const { fetching } = await provisionRepository(restored, CHECKOUT, {
+    onClone: async () => {
+      fired = true
+    }
+  })
+  await fetching
+  assert.equal(fired, false)
 })
 
 test('a restored checkout is fetched, and the fetch is handed back unawaited', async () => {

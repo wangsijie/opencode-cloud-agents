@@ -155,11 +155,21 @@ export interface RuntimeCheckout {
  * deletions, which is why the skills tree is removed wholesale first rather
  * than merged into.
  *
- * Three round trips regardless of how many skills are configured: the removal,
- * the batch (whose host creates parents and applies each `mode` — `writeFile`
- * promises nothing about permissions and OpenSSH refuses a private key others
- * could read), and one script for the git configuration plus the MCP auth
- * seed. The seed is the one exception to "everything lives under `/root`": it
+ * Two round trips in the ordinary case, regardless of how many skills are
+ * configured: one script, then the batch (whose host creates parents and
+ * applies each `mode` — `writeFile` promises nothing about permissions and
+ * OpenSSH refuses a private key others could read).
+ *
+ * Only the ordering is load-bearing, and only in two places: the skills tree
+ * must be removed *before* the batch refills it, and the MCP auth seed must run
+ * *after* the batch has staged the store it installs. Everything else — the git
+ * configuration, and the clear that removes a store whose setting is gone — has
+ * no such dependency and rides the leading script, which is what lets a
+ * deployment with no stored MCP auth do this in two calls rather than three.
+ * Each of those calls is a round trip to a host that may be an ocean away, so
+ * the ones that buy nothing are worth not making.
+ *
+ * The seed is the one exception to "everything lives under `/root`": it
  * installs the staged store into the snapshotted workspace, guarded so an
  * unchanged setting never overwrites tokens OpenCode has refreshed there.
  *
@@ -170,12 +180,20 @@ export async function injectContainerCredentials(
   settings: ContainerCredentialSettings,
   checkout: { repoKey?: string; repo?: RepoDefinition }
 ): Promise<Record<string, string>> {
-  await mustExec(
-    host,
-    `rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)} && rm -f ${shellQuote(
-      CONTAINER_AGENTS_MD_PATH
-    )}`
-  );
+  // The instance is bound to one repository, so the identity choice — a
+  // per-organization override or the base one — is made here, not by git.
+  const repoOwner = checkout.repo
+    ? repoOwnerFromCloneUrl(checkout.repo.cloneUrl)
+    : undefined;
+  const leading = [
+    `rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)}`,
+    `rm -f ${shellQuote(CONTAINER_AGENTS_MD_PATH)}`,
+    ...gitConfigCommands(settings, repoOwner),
+    // Nothing to install means nothing to wait for the batch on, so the
+    // cleanup of a previously seeded store goes here too.
+    ...(settings.mcpAuth ? [] : [mcpAuthClearCommand()])
+  ];
+  await mustExec(host, leading.join(' && '));
 
   const files = credentialFiles(settings, checkout.repoKey);
   if (files.length > 0) {
@@ -191,18 +209,9 @@ export async function injectContainerCredentials(
     );
   }
 
-  // The instance is bound to one repository, so the identity choice — a
-  // per-organization override or the base one — is made here, not by git.
-  const repoOwner = checkout.repo
-    ? repoOwnerFromCloneUrl(checkout.repo.cloneUrl)
-    : undefined;
-  const commands = gitConfigCommands(settings, repoOwner);
-  commands.push(
-    settings.mcpAuth
-      ? mcpAuthSeedCommand(settings.mcpAuth.token)
-      : mcpAuthClearCommand()
-  );
-  await mustExec(host, commands.join(' && '));
+  if (settings.mcpAuth) {
+    await mustExec(host, mcpAuthSeedCommand(settings.mcpAuth.token));
+  }
   return containerEnv(settings);
 }
 
@@ -219,10 +228,16 @@ export async function injectContainerCredentials(
  * back on its own would await it here and cost the caller exactly the overlap
  * this exists to buy. Nothing the OpenCode server needs depends on the refs it
  * updates, so the caller runs the two together.
+ *
+ * `onClone` is awaited once this has established there is no checkout and
+ * before the clone starts. It is a hook rather than something the caller does
+ * for itself because deciding it needs one more `exists` round trip to the same
+ * host this function is about to ask anyway.
  */
 export async function provisionRepository(
   host: RuntimeHost,
-  checkout: RuntimeCheckout
+  checkout: RuntimeCheckout,
+  hooks: { onClone?: () => Promise<void> } = {}
 ): Promise<{ fetching?: Promise<void>; cloned?: boolean }> {
   const { repo, repoKey, directory, sessionId } = checkout;
   if (!repoKey) {
@@ -264,6 +279,7 @@ export async function provisionRepository(
       `Instance ${sessionId} has no checkout and no pinned repository for ${repoKey}; wake refused`
     );
   }
+  await hooks.onClone?.();
   const cloned = await host.exec(
     `git clone --depth 1 --branch ${shellQuote(repo.defaultBranch)} ${shellQuote(
       repo.cloneUrl

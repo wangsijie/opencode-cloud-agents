@@ -70,6 +70,26 @@ test('every operation maps to its protocol route', async () => {
   )
 })
 
+test('call stats count every protocol call, failures included', async () => {
+  const { host } = client((path) =>
+    path.endsWith('/files/exists')
+      ? new Response('{"code":"HOST_ERROR","message":"nope"}', { status: 500 })
+      : jsonOk({ ok: true })
+  )
+  assert.deepEqual(host.callStats, { calls: 0, totalMs: 0 })
+
+  await host.ensure()
+  // A call that spent the round trip and then failed still spent it; a window
+  // that dropped those would read as faster than the wake actually was.
+  await assert.rejects(host.exists('/a'))
+  assert.equal(host.callStats.calls, 2)
+  assert.ok(host.callStats.minMs !== undefined)
+  assert.ok(host.callStats.minMs <= host.callStats.totalMs)
+
+  host.resetCallStats()
+  assert.deepEqual(host.callStats, { calls: 0, totalMs: 0 })
+})
+
 test('a session id that could escape its path segment is refused', () => {
   assert.throws(
     () => new HostClient(recordingTransport(() => jsonOk({})), '../x', {

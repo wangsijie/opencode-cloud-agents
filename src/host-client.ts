@@ -122,6 +122,25 @@ export function remoteTransport(
 }
 
 /**
+ * What the protocol calls between two {@link HostClient.resetCallStats} marks
+ * cost, in wall clock.
+ *
+ * `minMs` is the interesting one. Every route here is one request and one
+ * response, so the cheapest call observed is the closest thing to a bare round
+ * trip that costs nothing extra to measure — an `exists` is a few tens of
+ * milliseconds of work on the host and everything else is the wire. Which is
+ * the number that decides whether a slow wake is the host being slow or the
+ * host being far away, and it is not a question a `/healthz` probe should be
+ * added to answer, because the probe would itself be one more round trip.
+ */
+export interface HostCallStats {
+  calls: number;
+  totalMs: number;
+  /** `undefined` before the first call completes. */
+  minMs?: number;
+}
+
+/**
  * One session's host, bound to one transport.
  *
  * Every method maps to exactly one protocol route. Failures raise
@@ -134,6 +153,9 @@ export class HostClient {
   private readonly transport: HostTransport;
   private readonly capabilities: HostCapabilities;
   private readonly image: string | undefined;
+  private calls = 0;
+  private callTotalMs = 0;
+  private callMinMs: number | undefined;
 
   constructor(
     transport: HostTransport,
@@ -160,6 +182,29 @@ export class HostClient {
   /** Whether this host holds per-repo prebuilds and can seed from them. */
   get supportsPrebuilds(): boolean {
     return this.capabilities.prebuilds;
+  }
+
+  /** What the protocol calls since the last reset cost. */
+  get callStats(): HostCallStats {
+    return {
+      calls: this.calls,
+      totalMs: this.callTotalMs,
+      ...(this.callMinMs === undefined ? {} : { minMs: this.callMinMs })
+    };
+  }
+
+  /**
+   * Start a fresh measurement window.
+   *
+   * A client is cached across requests, so the window has to be opened by
+   * whoever wants to attribute a stretch of work — in practice the wake, which
+   * holds the lifecycle mutation lock and is therefore the only thing calling
+   * this host while it runs.
+   */
+  resetCallStats(): void {
+    this.calls = 0;
+    this.callTotalMs = 0;
+    this.callMinMs = undefined;
   }
 
   healthz(): Promise<HealthzResponse> {
@@ -325,16 +370,26 @@ export class HostClient {
     path: string,
     body?: unknown
   ): Promise<T> {
-    const response = await this.transport.fetch(path, {
-      method,
-      ...(body === undefined
-        ? {}
-        : {
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body)
-          })
-    });
-    const text = await response.text();
+    // Measured around the whole exchange, failures included: a call that ends
+    // in a `HostError` still spent the round trip, and a window that quietly
+    // dropped those would read as faster than the wake actually was.
+    const startedAt = Date.now();
+    let response: Response;
+    let text: string;
+    try {
+      response = await this.transport.fetch(path, {
+        method,
+        ...(body === undefined
+          ? {}
+          : {
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body)
+            })
+      });
+      text = await response.text();
+    } finally {
+      this.recordCall(Date.now() - startedAt);
+    }
     if (!response.ok) {
       throw hostErrorFrom(response.status, text, `${method} ${path}`);
     }
@@ -346,6 +401,14 @@ export class HostClient {
         `Host answered ${method} ${path} with a non-JSON body`,
         response.status
       );
+    }
+  }
+
+  private recordCall(durationMs: number): void {
+    this.calls += 1;
+    this.callTotalMs += durationMs;
+    if (this.callMinMs === undefined || durationMs < this.callMinMs) {
+      this.callMinMs = durationMs;
     }
   }
 }
