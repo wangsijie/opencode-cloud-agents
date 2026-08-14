@@ -99,7 +99,7 @@ variables → Actions*, then run the **Deploy** workflow from the Actions tab wi
 | `CLOUDFLARE_R2_ACCOUNT_ID` | for snapshots | Account id for the R2 S3 API — the same value as above. |
 | `R2_ACCESS_KEY_ID` | for snapshots | R2 API token (R2 → API → Manage API tokens → *Object Read & Write*). |
 | `R2_SECRET_ACCESS_KEY` | for snapshots | Its secret half, shown once. |
-| `SANDBOX_AGENT_SSH_{HOST,PORT,USER,KEY}` | no | Only to also deploy the [Docker sandbox host](#running-sessions-on-your-own-machine-docker-host). |
+| `SANDBOX_AGENT_SSH_{HOST,PORT,USER,KEY}` | no | Only to also deploy a [Docker sandbox host](#running-sessions-on-your-own-machines-docker-hosts). A second box is `SANDBOX_AGENT_2_SSH_*`, and so on: the deploy fans out over whichever prefixes have secrets. |
 
 The API token (My Profile → API Tokens → Create Token → Custom token) needs
 these account permissions — the *Edit Cloudflare Workers* template covers only

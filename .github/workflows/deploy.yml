@@ -44,15 +44,21 @@ jobs:
     timeout-minutes: 5
     outputs:
       cloudflare: ${{ steps.gate.outputs.cloudflare }}
-      docker_agent: ${{ steps.gate.outputs.docker_agent }}
+      docker_hosts: ${{ steps.gate.outputs.docker_hosts }}
     steps:
       - name: Check which deployment targets are configured
         id: gate
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SSH_HOST: ${{ secrets.SANDBOX_AGENT_SSH_HOST }}
-          SSH_KEY: ${{ secrets.SANDBOX_AGENT_SSH_KEY }}
+          # One pair per box. The rest of a host's description — where its
+          # sources live, which init system restarts it — is repository
+          # knowledge and is written below; only "does this repository have
+          # the keys to it" is a secret.
+          HOST_1: ${{ secrets.SANDBOX_AGENT_SSH_HOST }}
+          KEY_1: ${{ secrets.SANDBOX_AGENT_SSH_KEY }}
+          HOST_2: ${{ secrets.SANDBOX_AGENT_2_SSH_HOST }}
+          KEY_2: ${{ secrets.SANDBOX_AGENT_2_SSH_KEY }}
         run: |
           set -euo pipefail
           if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${CLOUDFLARE_ACCOUNT_ID}" ]; then
@@ -63,13 +69,44 @@ jobs:
             echo "See the README: add both as repository secrets to deploy your own copy."
             echo "cloudflare=false" >> "${GITHUB_OUTPUT}"
           fi
-          # The Docker sandbox host is entirely optional — most deployments run
-          # sessions on Cloudflare containers alone.
-          if [ -n "${SSH_HOST}" ] && [ -n "${SSH_KEY}" ]; then
-            echo "docker_agent=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "docker_agent=false" >> "${GITHUB_OUTPUT}"
+
+          # Docker sandbox hosts are entirely optional — most deployments run
+          # sessions on Cloudflare containers alone — and there may be several,
+          # so this emits the matrix rather than a boolean. A box whose secrets
+          # are absent is simply not in it; with none at all the deploy job has
+          # nothing to expand and is skipped.
+          #
+          # `secret` is the prefix of that host's four `_SSH_*` secrets. `dir`
+          # is where its sources live, taken verbatim by both ssh and rsync, so
+          # a relative one resolves against the login user's home. `init` picks
+          # the restart and the log tail. `docker_path` is prepended to PATH
+          # for the image build: Docker Desktop puts its CLI somewhere a
+          # non-interactive shell does not look, and a Linux box needs nothing.
+          hosts='[]'
+          add() {
+            hosts="$(printf '%s' "${hosts}" | jq -c ". + [${1}]")"
+          }
+          if [ -n "${HOST_1}" ] && [ -n "${KEY_1}" ]; then
+            add '{
+              "name": "mac-mini",
+              "secret": "SANDBOX_AGENT",
+              "dir": "srv/opencode-cloud",
+              "init": "launchd",
+              "docker_path": "/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin"
+            }'
           fi
+          if [ -n "${HOST_2}" ] && [ -n "${KEY_2}" ]; then
+            add '{
+              "name": "devbox",
+              "secret": "SANDBOX_AGENT_2",
+              "dir": "/srv/opencode-cloud",
+              "init": "systemd",
+              "docker_path": ""
+            }'
+          fi
+          echo "Docker sandbox hosts this repository can reach:"
+          printf '%s' "${hosts}" | jq -r 'if length == 0 then "  (none)" else .[].name end'
+          echo "docker_hosts=${hosts}" >> "${GITHUB_OUTPUT}"
 
   deploy:
     name: Test and deploy
@@ -244,25 +281,38 @@ jobs:
       - name: Deploy to Cloudflare
         run: pnpm run deploy
 
-  # The Docker sandbox host is a Mac mini, not a Worker: the agent in `agent/`
-  # runs beside a Docker daemon and answers the same protocol the Cloudflare
-  # host answers. It is deployed over SSH, after the tests above have passed,
-  # and only when something it is actually built from changed — a push that
-  # touches the site alone must not restart it.
+  # A Docker sandbox host is a box, not a Worker: the agent in `agent/` runs
+  # beside a Docker daemon and answers the same protocol the Cloudflare host
+  # answers. It is deployed over SSH, after the tests above have passed, and
+  # only when something it is actually built from changed — a push that touches
+  # the site alone must not restart it.
+  #
+  # One job per box, from the matrix preflight built. `fail-fast: false` is the
+  # point of the matrix: the boxes are independent — separate volumes, separate
+  # sessions, separate names in `docker.hosts` — so one being unreachable must
+  # leave the others deployed rather than cancel them. A failed leg is a box
+  # running the previous commit, which is a state the site handles, not an
+  # outage.
   docker-agent:
-    name: Deploy the Docker sandbox agent
+    name: Deploy the sandbox agent to ${{ matrix.host.name }}
     needs: [preflight, deploy]
-    if: needs.preflight.outputs.docker_agent == 'true'
+    if: needs.preflight.outputs.docker_hosts != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(needs.preflight.outputs.docker_hosts) }}
+
     env:
-      # Where the box is, and who connects to it, are secrets like the key
-      # itself: nothing about the sandbox host is written down here.
-      SSH_HOST: ${{ secrets.SANDBOX_AGENT_SSH_HOST }}
-      SSH_PORT: ${{ secrets.SANDBOX_AGENT_SSH_PORT }}
-      SSH_USER: ${{ secrets.SANDBOX_AGENT_SSH_USER }}
-      DEPLOY_DIR: srv/opencode-cloud
+      # Where a box is, and who connects to it, are secrets like the key
+      # itself: nothing about a sandbox host is written down here. The matrix
+      # carries only which secret names to read.
+      SSH_HOST: ${{ secrets[format('{0}_SSH_HOST', matrix.host.secret)] }}
+      SSH_PORT: ${{ secrets[format('{0}_SSH_PORT', matrix.host.secret)] }}
+      SSH_USER: ${{ secrets[format('{0}_SSH_USER', matrix.host.secret)] }}
+      DEPLOY_DIR: ${{ matrix.host.dir }}
 
     steps:
       - name: Check out repository
@@ -312,7 +362,7 @@ jobs:
       - name: Set up SSH
         if: steps.affected.outputs.agent == 'true'
         env:
-          SSH_KEY: ${{ secrets.SANDBOX_AGENT_SSH_KEY }}
+          SSH_KEY: ${{ secrets[format('{0}_SSH_KEY', matrix.host.secret)] }}
         run: |
           set -euo pipefail
           mkdir -m 700 -p ~/.ssh
@@ -333,50 +383,77 @@ jobs:
 
       # `--delete` is what makes the box match the commit rather than accumulate
       # whatever every past deploy left behind. It is scoped to the two
-      # directories the agent owns; nothing else on the mini is touched.
+      # directories the agent owns; nothing else on the box is touched.
       - name: Sync the agent
         if: steps.affected.outputs.agent == 'true'
         run: |
           set -euo pipefail
-          ssh sandbox "mkdir -p ~/${DEPLOY_DIR}/agent ~/${DEPLOY_DIR}/docker/ssh"
+          ssh sandbox "mkdir -p ${DEPLOY_DIR}/agent ${DEPLOY_DIR}/docker/ssh"
           rsync -az --delete agent/ "sandbox:${DEPLOY_DIR}/agent/"
           rsync -az --delete docker/ssh/ "sandbox:${DEPLOY_DIR}/docker/ssh/"
 
       # Docker Desktop writes `credsStore: desktop` into ~/.docker/config.json,
       # so a build that has to pull the base image needs its credential helper
       # on PATH. A login shell finds it; a non-interactive SSH command does not,
-      # and the failure is an opaque "error getting credentials".
+      # and the failure is an opaque "error getting credentials". A Linux box
+      # needs no such prefix and the matrix gives it an empty one.
       - name: Build the session image
         if: steps.affected.outputs.image == 'true'
+        env:
+          DOCKER_PATH: ${{ matrix.host.docker_path }}
         run: |
           set -euo pipefail
-          ssh sandbox "export PATH=/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:\$PATH \
-            && cd ~/${DEPLOY_DIR} \
+          # An empty prefix must not become a leading empty PATH entry, which
+          # means the working directory.
+          prefix=""
+          if [ -n "${DOCKER_PATH}" ]; then
+            prefix="${DOCKER_PATH}:"
+          fi
+          ssh sandbox "export PATH='${prefix}'\$PATH \
+            && cd '${DEPLOY_DIR}' \
             && docker build -f agent/session-image/Dockerfile -t opencode-session:latest ."
 
-      # `kickstart -k` kills and restarts the job. That is safe on purpose: the
-      # agent holds no session state, containers are not its children, and the
-      # site reconnects on its own.
+      # Killing and restarting the agent is safe on purpose: it holds no session
+      # state, containers are not its children, and the site reconnects.
       - name: Restart the agent
         if: steps.affected.outputs.agent == 'true'
-        run: ssh sandbox 'launchctl kickstart -k gui/$(id -u)/io.opencode.sandbox-agent'
+        env:
+          INIT: ${{ matrix.host.init }}
+        run: |
+          set -euo pipefail
+          case "${INIT}" in
+            launchd) ssh sandbox 'launchctl kickstart -k gui/$(id -u)/io.opencode.sandbox-agent' ;;
+            systemd) ssh sandbox 'systemctl restart opencode-sandbox-agent' ;;
+            *) echo "unknown init system ${INIT}" >&2; exit 1 ;;
+          esac
 
       # Health is checked on the box's own loopback, so the deploy needs no copy
       # of the bearer token. A 401 here would mean the token file went missing;
-      # anything but 200 fails the deploy while the previous image is still on
+      # anything but 200 fails this leg while the previous image is still on
       # disk and every running container is still up.
       - name: Verify the agent answers
         if: steps.affected.outputs.agent == 'true'
+        env:
+          INIT: ${{ matrix.host.init }}
         run: |
           set -euo pipefail
-          ssh sandbox 'for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          case "${INIT}" in
+            launchd) logs='tail -20 ~/Library/Logs/opencode-sandbox-agent.log' ;;
+            systemd) logs='journalctl -u opencode-sandbox-agent -n 20 --no-pager' ;;
+          esac
+          # The script is piped in and quoted, so nothing in it is expanded
+          # here; the one thing that differs per box arrives as a variable the
+          # remote shell evals only on the failure path.
+          ssh sandbox "OC_LOGS='${logs}' sh -s" <<'REMOTE'
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
             body="$(curl -sS --max-time 10 -H "Authorization: Bearer $(cat ~/.config/opencode-agent/token)" \
               http://127.0.0.1:8787/healthz || true)"
             case "${body}" in
-              *\"ok\":true*) echo "${body}"; exit 0 ;;
+              *'"ok":true'*) echo "${body}"; exit 0 ;;
             esac
             sleep 2
           done
           echo "the agent did not answer /healthz with ok:true" >&2
-          tail -20 ~/Library/Logs/opencode-sandbox-agent.log >&2
-          exit 1'
+          eval "${OC_LOGS}" >&2
+          exit 1
+          REMOTE

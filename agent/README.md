@@ -12,6 +12,11 @@ own name, its own token and its own volumes, and a session that lands on it
 stays on it. Setting up a second box is this file from the top, with a
 different id at step 5.
 
+Once it is up, give the deploy its keys — `SANDBOX_AGENT_2_SSH_{HOST,PORT,USER,KEY}`
+as repository secrets, and an entry in the matrix in
+[`deploy.yml`](../.github/workflows/deploy.yml) — or the box quietly stays on
+whatever commit was rsynced onto it by hand.
+
 It is a *primitive server*. It holds no session state, no credentials at rest,
 and no business logic — the site worker owns the runtime gate, the epoch, the
 transcript mirror and every lifecycle decision. Two files:

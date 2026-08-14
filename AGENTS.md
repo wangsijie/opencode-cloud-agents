@@ -280,14 +280,27 @@ every call that starts or stops a container and calibrated against
 read, and the entry to every stop path. Do not reintroduce a synchronous
 container check; there is nothing local left to ask.
 
-## The third host ships over SSH
+## The other hosts ship over SSH
 
 [`agent/`](agent/README.md) is the Docker implementation of the same protocol: a
 zero-dependency Node server that runs `oc-session-<id>` containers against a
 local daemon, reached over public HTTPS with a bearer token. It is not a Worker,
 so it is not deployed by `wrangler`: the `docker-agent` job in
-[`deploy.yml`](.github/workflows/deploy.yml) rsyncs it onto the operator's box
-and restarts its launchd job.
+[`deploy.yml`](.github/workflows/deploy.yml) rsyncs it onto the operator's boxes
+and restarts each one's service.
+
+Boxes, plural, and the same agent on all of them. The job is a matrix the
+preflight builds: one entry per box whose `<PREFIX>_SSH_{HOST,PORT,USER,KEY}`
+secrets exist, `SANDBOX_AGENT` and `SANDBOX_AGENT_2` today. Everything else
+about a box — where its sources live, whether launchd or systemd restarts it,
+what its image build needs on `PATH` — is repository knowledge and is written
+in the matrix; only "does this repository have the keys to it" is a secret.
+Adding a third box is four secrets and one entry.
+
+`fail-fast: false` is the point of the matrix. The boxes are independent —
+separate volumes, separate sessions, separate names in `docker.hosts` — so one
+being unreachable must leave the others deployed. A failed leg is a box running
+the previous commit, which is a state the site already handles, not an outage.
 
 That job asks two questions, not one. Anything under `agent/` or `docker/ssh/`
 syncs and restarts — cheap, and safe by design, because restarting the agent
