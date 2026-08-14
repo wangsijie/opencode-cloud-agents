@@ -6,11 +6,12 @@
  * take a little longer. Container-only endpoints answer 409 while a session is
  * asleep, exactly like the Worker.
  */
-import type {
-  MessageAttachment,
-  SessionProvider,
-  WorkspaceEntry,
-  WorkspaceListing
+import {
+  prebuildKey,
+  type MessageAttachment,
+  type SessionProvider,
+  type WorkspaceEntry,
+  type WorkspaceListing
 } from '../api';
 import { prebuildState, startMockRun } from './fixtures/prebuilds';
 import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
@@ -155,6 +156,28 @@ function downloadFile(root: MockWorkspaceDir, path: string): Response {
 // ---------------------------------------------------------------------------
 // Settings
 
+/** A `docker.hosts` entry as the mock store keeps it: no token, ever. */
+interface MockDockerHost {
+  id: string;
+  label?: string;
+  baseUrl: string;
+  image?: string;
+  idleTimeoutMinutes?: number;
+  tokenConfigured?: boolean;
+}
+
+/**
+ * The hosts the mock considers configured. Derived from the stored setting the
+ * same way the Worker derives it, so removing one in the settings section takes
+ * it out of the composer's picker and the prebuilds page on the next read.
+ */
+function dockerHosts(): MockDockerHost[] {
+  const setting = store.settings.find((entry) => entry.key === 'docker.hosts');
+  return setting?.configured && Array.isArray(setting.value)
+    ? (setting.value as MockDockerHost[])
+    : [];
+}
+
 function putSetting(key: string, body: Record<string, unknown>): Response {
   const setting = store.settings.find((entry) => entry.key === key);
   if (!setting) {
@@ -171,12 +194,24 @@ function putSetting(key: string, body: Record<string, unknown>): Response {
   setting.updatedAt = new Date().toISOString();
   // Mirror the Worker's exposure rules: secrets store nothing readable,
   // partial settings store the public half only.
-  if (
-    key === 'github.token' ||
-    key === 'docker.agent-token' ||
-    key === 'opencode.mcp-auth'
-  ) {
+  if (key === 'github.token' || key === 'opencode.mcp-auth') {
     delete setting.value;
+  } else if (key === 'docker.hosts') {
+    // Partial like the Worker's: the list reads back without its tokens, and
+    // a blank one keeps whatever was stored under the same id.
+    const stored = new Map(
+      (Array.isArray(setting.value) ? (setting.value as MockDockerHost[]) : []).map(
+        (host) => [host.id, host.tokenConfigured === true]
+      )
+    );
+    setting.value = (value as (MockDockerHost & { token?: string })[]).map(
+      ({ token, ...host }) => ({
+        ...host,
+        tokenConfigured:
+          (typeof token === 'string' && token.length > 0) ||
+          stored.get(host.id) === true
+      })
+    );
   } else if (key === 'container.ssh-key') {
     setting.value = {
       publicKey:
@@ -273,36 +308,59 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
   if (p === '/api/prebuilds' && method === 'GET') {
     return json({
       prebuilds: [...prebuildState.prebuilds.values()],
-      runs: Object.fromEntries(prebuildState.runs)
+      runs: Object.fromEntries(prebuildState.runs),
+      // The buildable hosts, from the same settings the catalog reads: remove
+      // one in the section above and its group goes read-only here.
+      hosts: dockerHosts().map((host) => ({
+        provider: `docker:${host.id}` as SessionProvider,
+        label: host.label ?? host.id
+      }))
     });
   }
   if (p === '/api/prebuilds' && method === 'POST') {
-    const { repoKey } = parseBody(init);
+    const { repoKey, provider } = parseBody(init);
     if (typeof repoKey !== 'string' || repoKey.length === 0) {
       return json({ error: 'Unknown repository' }, 400);
     }
-    if (prebuildState.runs.get(repoKey)?.status === 'running') {
+    const host = (typeof provider === 'string'
+      ? provider
+      : `docker:${dockerHosts()[0]?.id}`) as SessionProvider;
+    if (!dockerHosts().some((entry) => `docker:${entry.id}` === host)) {
+      return json({ error: `Docker sandbox host "${host}" is not configured` }, 409);
+    }
+    if (prebuildState.runs.get(prebuildKey(host, repoKey))?.status === 'running') {
       return json(
-        { error: 'A prebuild run is already underway for this repository' },
+        {
+          error:
+            'A prebuild run is already underway for this repository on this host'
+        },
         409
       );
     }
-    return json({ runId: startMockRun(repoKey) }, 202);
+    return json({ runId: startMockRun(repoKey, host) }, 202);
   }
   {
     const match = /^\/api\/prebuilds\/(.+)$/.exec(p);
     if (match && method === 'DELETE') {
       const repoKey = decodeURIComponent(match[1]);
-      if (prebuildState.runs.get(repoKey)?.status === 'running') {
+      const provider = url.searchParams.get('provider');
+      if (provider === null) {
+        return json(
+          { error: 'Name the host to delete from with ?provider=' },
+          400
+        );
+      }
+      const key = prebuildKey(provider as SessionProvider, repoKey);
+      if (prebuildState.runs.get(key)?.status === 'running') {
         return json(
           { error: 'A prebuild run is underway; wait for it to finish' },
           409
         );
       }
-      prebuildState.prebuilds.delete(repoKey);
+      prebuildState.prebuilds.delete(key);
       // As the Hub does: the run goes too, or a failed one keeps the repo on
       // the list with nothing left to delete.
-      prebuildState.runs.delete(repoKey);
+      prebuildState.runs.delete(key);
       return json({ removed: true });
     }
   }
@@ -313,15 +371,16 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       store.catalog.reposFetchedAt = new Date().toISOString();
       store.catalog.reposStale = false;
     }
-    // Derived rather than fixed, like the Hub's: clearing the Docker settings
-    // in the section above takes the provider out of the composer's picker on
-    // the next read, which is the state worth being able to walk into.
-    const configured = (key: string) =>
-      store.settings.find((entry) => entry.key === key)?.configured === true;
-    store.catalog.providers =
-      configured('docker.agent-url') && configured('docker.agent-token')
-        ? ['docker', 'cloudflare']
-        : ['cloudflare'];
+    // Derived rather than fixed, like the Hub's: removing a host in the
+    // section above takes it out of the composer's picker on the next read,
+    // which is the state worth being able to walk into.
+    store.catalog.providers = [
+      ...dockerHosts().map((host) => ({
+        provider: `docker:${host.id}` as SessionProvider,
+        label: host.label ?? host.id
+      })),
+      { provider: 'cloudflare' as SessionProvider, label: 'Cloudflare' }
+    ];
     return json(store.catalog);
   }
 
@@ -390,9 +449,9 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     // catalog, so a session on an unconfigured host is a 400 rather than a
     // session that can never wake.
     const provider = (body.provider ??
-      store.catalog.providers[0] ??
+      store.catalog.providers[0]?.provider ??
       'cloudflare') as SessionProvider;
-    if (!store.catalog.providers.includes(provider)) {
+    if (!store.catalog.providers.some((option) => option.provider === provider)) {
       return json({ error: 'Unknown provider' }, 400);
     }
     const session = createSessionState({

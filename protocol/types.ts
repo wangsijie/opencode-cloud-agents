@@ -13,7 +13,43 @@
  * source of truth for request/response shapes.
  */
 
-export type SessionProvider = 'cloudflare' | 'docker';
+/**
+ * Which sandbox host runs a session's container.
+ *
+ * `cloudflare` is the host worker deployed from this repository — there is
+ * exactly one. Docker hosts are the operator's own boxes and there may be
+ * several, so a Docker provider names which one: `docker:<hostId>`, the id
+ * being the one stored in the `docker.hosts` setting.
+ *
+ * Bare `docker` is the spelling from before multiple hosts, still written on
+ * every session created then. It resolves to the first configured host, which
+ * is the one those sessions were created against. New sessions are never
+ * stored with it.
+ */
+export type SessionProvider = 'cloudflare' | 'docker' | `docker:${string}`;
+
+/** Prefix a provider carries when it names one of the operator's Docker hosts. */
+export const DOCKER_PROVIDER_PREFIX = 'docker:';
+
+/** Whether this provider runs on a Docker host — either spelling. */
+export function isDockerProvider(provider: string): boolean {
+  return provider === 'docker' || provider.startsWith(DOCKER_PROVIDER_PREFIX);
+}
+
+/**
+ * The host id a Docker provider names, or `undefined` for bare `docker` —
+ * which names no host in particular and means "the first one configured".
+ */
+export function dockerHostId(provider: string): string | undefined {
+  return provider.startsWith(DOCKER_PROVIDER_PREFIX)
+    ? provider.slice(DOCKER_PROVIDER_PREFIX.length)
+    : undefined;
+}
+
+/** The provider value for one configured Docker host. */
+export function dockerProvider(hostId: string): SessionProvider {
+  return `${DOCKER_PROVIDER_PREFIX}${hostId}`;
+}
 
 /** Session ids must match this before they touch a path segment. */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

@@ -1,12 +1,27 @@
 import { useMemo } from 'react';
-import type { SessionProvider } from '../api';
+import { isDockerProvider, type SessionProvider, type SessionProviderOption } from '../api';
 import { PillSelect } from './PillSelect';
 
-/** How each host is named wherever a session shows the one it runs on. */
-export const PROVIDER_LABELS: Record<SessionProvider, string> = {
-  cloudflare: 'Cloudflare',
-  docker: 'Docker'
-};
+/**
+ * How a host is named where the catalog is not at hand — a session page
+ * showing the host its own session runs on, an instance modal.
+ *
+ * Docker hosts are the operator's, so their real names live in settings and
+ * ride along with the catalog; all this can say without one is that the
+ * session is on Docker. Falls back to the id, which is at least the operator's
+ * own word for the box.
+ */
+export function providerLabel(provider: SessionProvider): string {
+  if (provider === 'cloudflare') {
+    return 'Cloudflare';
+  }
+  if (provider === 'docker') {
+    return 'Docker';
+  }
+  return isDockerProvider(provider)
+    ? `Docker · ${provider.slice('docker:'.length)}`
+    : provider;
+}
 
 /**
  * Which sandbox host a new session runs on.
@@ -22,16 +37,16 @@ export function ProviderSelect({
   disabled,
   onChange
 }: {
-  providers: readonly SessionProvider[];
+  providers: readonly SessionProviderOption[];
   value: SessionProvider;
   disabled?: boolean;
   onChange: (provider: SessionProvider) => void;
 }) {
   const options = useMemo(
     () =>
-      providers.map((provider) => ({
-        value: provider,
-        label: PROVIDER_LABELS[provider] ?? provider
+      providers.map((option) => ({
+        value: option.provider,
+        label: option.label
       })),
     [providers]
   );

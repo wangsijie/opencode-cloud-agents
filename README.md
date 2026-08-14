@@ -355,7 +355,7 @@ and install.
 
 ---
 
-## Running sessions on your own machine (Docker host)
+## Running sessions on your own machines (Docker hosts)
 
 Sessions can run in Docker on a machine you own instead of Cloudflare
 containers. The workspace lives on a named volume there, so it survives a stop
@@ -363,15 +363,22 @@ with no snapshot to restore — wakes are faster and deletes need no R2 sweep.
 
 [`agent/README.md`](agent/README.md) has the full setup. In short: build the
 session image, write a bearer token, run the agent under launchd, put a TLS
-terminator in front, then fill in Settings → **Docker host**:
+terminator in front, then add the box under Settings → **Docker hosts**:
 
-- `docker.agent-url` — the HTTPS origin, no path
-- `docker.agent-token` — the token from the box
-- `docker.image` — optional, defaults to `opencode-session:latest`
-- `docker.idle-timeout-minutes` — optional, defaults to 30
+- **id** — lowercase letters, digits and dashes; a session stores `docker:<id>`,
+  so this is the one field that cannot change afterwards
+- **label** — what the composer's picker calls it; optional, defaults to the id
+- **agent URL** — the HTTPS origin, no path
+- **agent token** — the token from the box; write-only, blank keeps what is stored
+- **session image** — optional, defaults to `opencode-session:latest`
+- **idle timeout** — optional minutes, defaults to 30
 
-Both the URL and the token must be set before Docker appears as a provider on the
-composer; once it does, it becomes the default for new sessions. Settings are
-cached inside each live session for 60 seconds, so a change takes up to a minute
-to take effect. Delete Docker sessions from the Hub *before* clearing these
-settings, or the deletes hang with no host to reach.
+Any number of hosts, each its own entry: the list order is the order the
+composer offers them in, and the first is where a new session lands unless
+another is picked (Cloudflare is always available, last). Both the URL and the
+token must be set before a host is offered at all. Prebuilds are per host — a
+prebuild is a volume on one box — so a repository can hold one on each.
+
+Settings are cached inside each live session for 60 seconds, so a change takes
+up to a minute to take effect. Delete a host's sessions from the Hub *before*
+removing it, or the deletes hang with no host to reach.

@@ -3,8 +3,10 @@
  * installs its dependencies, and promotes the result as the repo's prebuild.
  * See docs/prebuild-design.md, "Dedicated prebuild runs".
  *
- * One Durable Object per repository (`getByName(repoKey)`), which is what
- * makes "one run per repo at a time" true by construction. The pipeline is
+ * One Durable Object per (host, repository) — `getByName('docker:<id>/<repo>')`
+ * — which is what makes "one run per repo per host at a time" true by
+ * construction. A prebuild is a volume on one box, so the same repository may
+ * be building on two hosts at once and neither run knows about the other. The pipeline is
  * alarm-driven: short steps run inline in one alarm invocation, the install —
  * the long one — runs detached inside the container and is polled, so no
  * single invocation has to survive for the length of a `pnpm install`. Every
@@ -18,6 +20,8 @@
  * OpenCode server, so the promoted workspace carries no conversation state.
  */
 import { DurableObject } from 'cloudflare:workers';
+
+import type { SessionProvider } from '../protocol/types.ts';
 
 import {
   containerEnv,
@@ -82,6 +86,12 @@ interface RunState {
   runId: string;
   repoKey: string;
   repo: RepoDefinition;
+  /**
+   * Which Docker host this run builds on. Absent on a run that was underway
+   * when this field arrived, which is read as the first configured host —
+   * the only one such a run could have been placed on.
+   */
+  provider?: SessionProvider;
   /** The throwaway host session the run drives. */
   sessionId: string;
   step: RunStep;
@@ -96,6 +106,8 @@ export interface StartPrebuildRunInput {
   runId: string;
   repoKey: string;
   repo: RepoDefinition;
+  /** The Docker host to build on; the API resolves it before calling. */
+  provider: SessionProvider;
 }
 
 export type StartPrebuildRunResult =
@@ -118,6 +130,7 @@ export class PrebuildRunner extends DurableObject<Env> {
       runId: input.runId,
       repoKey: input.repoKey,
       repo: input.repo,
+      provider: input.provider,
       // Deterministic, and sliced so the id stays inside the protocol's
       // 64-char session-id bound for the longest legal repo key.
       sessionId: `pbr-${input.repoKey.slice(0, 56)}`,
@@ -130,7 +143,7 @@ export class PrebuildRunner extends DurableObject<Env> {
     await insertPrebuildRun(this.env, {
       id: input.runId,
       repoKey: input.repoKey,
-      provider: 'docker',
+      provider: input.provider,
       status: 'running',
       startedAt: new Date().toISOString()
     });
@@ -175,7 +188,11 @@ export class PrebuildRunner extends DurableObject<Env> {
   }
 
   private async runStep(state: RunState): Promise<void> {
-    const host = await resolveHostClient(this.env, state.sessionId, 'docker');
+    const host = await resolveHostClient(
+      this.env,
+      state.sessionId,
+      providerOf(state)
+    );
     switch (state.step) {
       case 'provision':
         return this.provision(state, host);
@@ -319,7 +336,7 @@ export class PrebuildRunner extends DurableObject<Env> {
     state.timings.promoteMs = Date.now() - startedAt;
     await upsertPrebuildRecord(this.env, {
       repoKey: state.repoKey,
-      provider: 'docker',
+      provider: providerOf(state),
       // Mirrors `prebuildVolumeName` in agent/docker.mjs.
       location: `oc-prebuild-${state.repoKey}`,
       ...(promoted.sizeBytes !== undefined
@@ -360,7 +377,11 @@ export class PrebuildRunner extends DurableObject<Env> {
     await this.ctx.storage.delete(RUN_STORAGE_KEY);
     await this.ctx.storage.deleteAlarm();
     try {
-      const host = await resolveHostClient(this.env, state.sessionId, 'docker');
+      const host = await resolveHostClient(
+        this.env,
+        state.sessionId,
+        providerOf(state)
+      );
       await host.remove();
     } catch (error) {
       console.warn('Prebuild run cleanup failed', error);
@@ -452,6 +473,15 @@ echo "== install done"
  */
 async function loadOperatorEnv(env: Env): Promise<Record<string, string>> {
   return containerEnv(await loadContainerCredentials(env));
+}
+
+/**
+ * The host a run builds on. Bare `docker` is what a run started before hosts
+ * were several carries, and it resolves to the first configured one — which is
+ * the only host it could have been placed on.
+ */
+function providerOf(state: RunState): SessionProvider {
+  return state.provider ?? 'docker';
 }
 
 function describeError(error: unknown): string {

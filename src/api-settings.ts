@@ -22,7 +22,12 @@ import {
   readSettingRow,
   writeSetting
 } from './settings.ts';
-import type { EnvVarSetting, PasswordRecord, SshKeySetting } from './settings.ts';
+import type {
+  DockerHostSetting,
+  EnvVarSetting,
+  PasswordRecord,
+  SshKeySetting
+} from './settings.ts';
 import {
   SETTING_DESCRIPTORS,
   findDescriptor,
@@ -124,10 +129,16 @@ function exposedValue(key: string, value: unknown): unknown {
     case SETTING_KEYS.skills:
     case SETTING_KEYS.agentsMd:
     case SETTING_KEYS.gitIdentity:
-    case SETTING_KEYS.dockerAgentUrl:
-    case SETTING_KEYS.dockerImage:
-    case SETTING_KEYS.dockerIdleTimeoutMinutes:
       return value;
+    case SETTING_KEYS.dockerHosts: {
+      // Everything about a host reads back except the bearer, which the page
+      // shows as configured-or-not and sends back empty when untouched.
+      const list = Array.isArray(value) ? (value as DockerHostSetting[]) : [];
+      return list.map(({ token, ...rest }) => ({
+        ...rest,
+        tokenConfigured: typeof token === 'string' && token.length > 0
+      }));
+    }
     case SETTING_KEYS.sshKey: {
       const record = value as Partial<SshKeySetting> | undefined;
       return record ? { publicKey: record.publicKey } : undefined;
@@ -184,6 +195,9 @@ async function putSetting(
   if (key === SETTING_KEYS.containerEnv) {
     value = await mergeEnvValues(env, value);
   }
+  if (key === SETTING_KEYS.dockerHosts) {
+    value = await mergeDockerHostTokens(env, value);
+  }
 
   const errors = descriptor.validate(value);
   if (errors.length > 0) {
@@ -228,6 +242,30 @@ async function mergeEnvValues(env: Env, value: unknown): Promise<unknown> {
     typeof entry?.name === 'string' && entry.value === ''
       ? { name: entry.name, value: existing.get(entry.name) ?? '' }
       : entry
+  );
+}
+
+/**
+ * Host tokens are write-only, so the page sends an empty one for a host it did
+ * not retype. Those keep the token stored under the same id; a host whose id
+ * is new has nothing to keep and must carry its own, which the validator then
+ * insists on.
+ */
+async function mergeDockerHostTokens(
+  env: Env,
+  value: unknown
+): Promise<unknown> {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const stored =
+    (await readSetting<DockerHostSetting[]>(env, SETTING_KEYS.dockerHosts)) ??
+    [];
+  const existing = new Map(stored.map((host) => [host.id, host.token]));
+  return (value as Partial<DockerHostSetting>[]).map((host) =>
+    typeof host?.id === 'string' && (host.token === '' || host.token === undefined)
+      ? { ...host, token: existing.get(host.id) ?? '' }
+      : host
   );
 }
 

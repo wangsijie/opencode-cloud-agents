@@ -187,8 +187,17 @@ test('the remote transport bearers every request and never doubles the slash', a
 const envWith = (settings, extra = {}) => createSettingsEnv(settings, extra)
 
 const dockerSettings = {
-  'docker.agent-url': 'https://mini.example.com',
-  'docker.agent-token': 'tok-123'
+  'docker.hosts': [
+    { id: 'mini', baseUrl: 'https://mini.example.com', token: 'tok-123' }
+  ]
+}
+
+/** The same deployment with a second box, to prove the id is what picks. */
+const twoHosts = {
+  'docker.hosts': [
+    { id: 'mini', baseUrl: 'https://mini.example.com', token: 'tok-123' },
+    { id: 'shop', baseUrl: 'https://shop.example.com', token: 'tok-456' }
+  ]
 }
 
 test('a cloudflare session resolves onto the binding, with snapshots', async () => {
@@ -221,9 +230,18 @@ test('a docker session resolves onto the agent, without snapshots', async () => 
   }
   try {
     const host = await resolveHostClient(
-      envWith({ ...dockerSettings, 'docker.image': 'acme/session:v2' }),
+      envWith({
+        'docker.hosts': [
+          {
+            id: 'mini',
+            baseUrl: 'https://mini.example.com',
+            token: 'tok-123',
+            image: 'acme/session:v2'
+          }
+        ]
+      }),
       'sess-1',
-      'docker'
+      'docker:mini'
     )
     assert.equal(host.supportsSnapshots, false)
     await host.ensure()
@@ -244,7 +262,7 @@ test('an explicit image beats the configured default', async () => {
     return Promise.resolve(jsonOk({ running: true }))
   }
   try {
-    const host = await resolveHostClient(envWith(dockerSettings), 'sess-1', 'docker')
+    const host = await resolveHostClient(envWith(dockerSettings), 'sess-1', 'docker:mini')
     await host.ensure({ image: 'acme/session:pinned' })
   } finally {
     globalThis.fetch = originalFetch
@@ -261,6 +279,53 @@ test('a docker session on an unconfigured deployment fails legibly', async () =>
   )
   assert.ok(error instanceof HostUnavailableError)
   assert.match(error.message, /not configured/)
+})
+
+test('the provider names which host, and a removed one fails by name', async () => {
+  const seen = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (url, init) => {
+    seen.push({ url, init })
+    return Promise.resolve(jsonOk({ running: true }))
+  }
+  try {
+    const host = await resolveHostClient(envWith(twoHosts), 'sess-1', 'docker:shop')
+    await host.ensure()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(seen[0].url, 'https://shop.example.com/sessions/sess-1/ensure')
+  assert.equal(seen[0].init.headers.get('authorization'), 'Bearer tok-456')
+
+  // A session whose host left settings says so, naming the host it wants.
+  const error = await resolveHostClient(
+    envWith(twoHosts),
+    'sess-1',
+    'docker:gone'
+  ).then(
+    () => undefined,
+    (thrown) => thrown
+  )
+  assert.ok(error instanceof HostUnavailableError)
+  assert.match(error.message, /gone/)
+})
+
+test('bare docker, the pre-multi-host spelling, takes the first host', async () => {
+  const seen = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (url, init) => {
+    seen.push({ url, init })
+    return Promise.resolve(jsonOk({ running: true }))
+  }
+  try {
+    // Which is the box the migration put first, so a session created before
+    // hosts were several keeps reaching the one it has always run on.
+    const host = await resolveHostClient(envWith(twoHosts), 'sess-1', 'docker')
+    await host.ensure()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(seen[0].url, 'https://mini.example.com/sessions/sess-1/ensure')
 })
 
 test('an unknown provider is not a host at all', async () => {

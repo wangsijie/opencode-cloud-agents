@@ -9,6 +9,7 @@ import {
 import {
   abortSession,
   getSession,
+  isDockerProvider,
   markSessionRead,
   patchSession,
   retrySession,
@@ -45,6 +46,7 @@ import { MessageList } from './MessageList';
 import { ModelSelect } from './ModelSelect';
 import { SessionDetails } from './SessionDetails';
 import { defaultVariant, VariantSelect } from './VariantSelect';
+import { providerLabel } from './ProviderSelect';
 import { StatusBadge } from './StatusBadge';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -405,12 +407,12 @@ export function SessionPage({
                 a border around a lone glyph reads as a button that does
                 nothing, and this only states a fact — what it changes about
                 the session is in the instance modal. */}
-            {session.provider === 'docker' ? (
+            {isDockerProvider(session.provider) ? (
               <span
                 className="heading-mark"
-                title="Runs on the Docker sandbox host"
+                title={`Runs on ${providerLabel(session.provider)}`}
                 role="img"
-                aria-label="Runs on the Docker sandbox host"
+                aria-label={`Runs on ${providerLabel(session.provider)}`}
               >
                 <DockerIcon />
               </span>
@@ -525,7 +527,7 @@ export function SessionPage({
                         {/* Same loss, reached a different way: a Docker session
                             keeps its workspace on a volume rather than in a
                             snapshot, so there is no checkpoint to blame. */}
-                        {session?.provider === 'docker'
+                        {session && isDockerProvider(session.provider)
                           ? 'Its workspace volume was recreated, so OpenCode no longer has this conversation.'
                           : 'Its container restarted without a workspace checkpoint, so OpenCode no longer has this conversation.'}{' '}
                         The history above is the last mirror the Hub exported; it

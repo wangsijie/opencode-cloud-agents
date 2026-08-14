@@ -2,105 +2,169 @@
  * Which sandbox providers this deployment can actually run a session on.
  *
  * Cloudflare is always available — the site worker ships with its own sandbox
- * host. Docker is opt-in and only counts as available once an operator has
- * stored both halves of the agent's address: the origin to call and the bearer
- * token to call it with. The image is optional; a missing one falls back to
- * `DEFAULT_DOCKER_IMAGE`.
+ * host. Docker hosts are the operator's own boxes, stored as a list under
+ * `docker.hosts`, and there may be any number of them: each entry becomes one
+ * provider, `docker:<id>`. An entry counts only once it carries both halves of
+ * the agent's address, the origin to call and the bearer token to call it
+ * with; the image and the idle window are optional and fall back to the
+ * defaults in [settings.ts](settings.ts).
  *
- * Everything that decides "may this session be docker?" — the catalog endpoint
- * the composer reads, the create-session validator — goes through here, so
- * there is one answer to that question.
+ * Everything that decides "which host may this session be on?" — the catalog
+ * endpoint the composer reads, the create-session validator, the prebuild
+ * routes — goes through here, so there is one answer to that question.
  */
-import type { SessionProvider } from '../protocol/types.ts';
+import {
+  dockerHostId,
+  dockerProvider,
+  isDockerProvider,
+  type SessionProvider
+} from '../protocol/types.ts';
 import {
   DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES,
   DEFAULT_DOCKER_IMAGE,
   SETTING_KEYS,
-  readSetting
+  readSetting,
+  type DockerHostSetting
 } from './settings.ts';
 
 /** Matches `LIFECYCLE_IDLE_TIMEOUT_MS` in lifecycle.ts — keep in sync. */
 const CLOUDFLARE_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** What the Docker transport needs to reach the agent. */
+/** What the Docker transport needs to reach one host, with defaults applied. */
 export interface DockerProviderConfig {
+  /** The host's id; `provider` is this with the `docker:` prefix. */
+  id: string;
+  provider: SessionProvider;
+  label: string;
   /** Origin only, no trailing path — the client appends protocol routes. */
   baseUrl: string;
   token: string;
   image: string;
+  idleTimeoutMinutes: number;
 }
 
 /**
- * The stored Docker configuration, or `undefined` when the provider is not
- * configured. A half-configured provider (URL but no token, or the reverse) is
- * not configured: calling the agent without the bearer would only 401.
+ * Every configured Docker host, in stored order — which is the order the
+ * composer offers them in, and whose first entry is the default.
+ *
+ * A half-configured entry (URL but no token, or the reverse) is dropped rather
+ * than returned: calling the agent without the bearer would only 401, and an
+ * entry that cannot work must not appear in a picker.
  */
-export async function readDockerProviderConfig(
+export async function listDockerHosts(
   env: Env
-): Promise<DockerProviderConfig | undefined> {
-  const [baseUrl, token, image] = await Promise.all([
-    readSetting<string>(env, SETTING_KEYS.dockerAgentUrl),
-    readSetting<string>(env, SETTING_KEYS.dockerAgentToken),
-    readSetting<string>(env, SETTING_KEYS.dockerImage)
-  ]);
-  if (
-    typeof baseUrl !== 'string' ||
-    baseUrl.trim().length === 0 ||
-    typeof token !== 'string' ||
-    token.trim().length === 0
-  ) {
-    return undefined;
+): Promise<DockerProviderConfig[]> {
+  const stored = await readSetting<DockerHostSetting[]>(
+    env,
+    SETTING_KEYS.dockerHosts
+  );
+  if (!Array.isArray(stored)) {
+    return [];
   }
-  return {
-    baseUrl: baseUrl.trim().replace(/\/+$/, ''),
-    token: token.trim(),
-    image:
-      typeof image === 'string' && image.trim().length > 0
-        ? image.trim()
-        : DEFAULT_DOCKER_IMAGE
-  };
+  const hosts: DockerProviderConfig[] = [];
+  const seen = new Set<string>();
+  for (const entry of stored) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
+    const baseUrl = typeof entry?.baseUrl === 'string' ? entry.baseUrl.trim() : '';
+    const token = typeof entry?.token === 'string' ? entry.token.trim() : '';
+    if (id === '' || baseUrl === '' || token === '' || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const image = typeof entry.image === 'string' ? entry.image.trim() : '';
+    const minutes = entry.idleTimeoutMinutes;
+    const label = typeof entry.label === 'string' ? entry.label.trim() : '';
+    hosts.push({
+      id,
+      provider: dockerProvider(id),
+      label: label === '' ? id : label,
+      baseUrl: baseUrl.replace(/\/+$/, ''),
+      token,
+      image: image === '' ? DEFAULT_DOCKER_IMAGE : image,
+      idleTimeoutMinutes:
+        typeof minutes === 'number' &&
+        Number.isInteger(minutes) &&
+        minutes >= 1 &&
+        minutes <= 1440
+          ? minutes
+          : DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES
+    });
+  }
+  return hosts;
 }
 
-export async function isDockerProviderConfigured(env: Env): Promise<boolean> {
-  return (await readDockerProviderConfig(env)) !== undefined;
+/**
+ * The host a provider names, or `undefined` when it names none.
+ *
+ * Bare `docker` is the provider every session created before multiple hosts
+ * carries. It resolves to the first configured host, which on a deployment
+ * that had one is the one those sessions have always run on — the migration in
+ * `migrations/0009_docker_hosts.sql` puts it there deliberately.
+ */
+export async function resolveDockerHost(
+  env: Env,
+  provider: SessionProvider
+): Promise<DockerProviderConfig | undefined> {
+  if (!isDockerProvider(provider)) {
+    return undefined;
+  }
+  const hosts = await listDockerHosts(env);
+  const id = dockerHostId(provider);
+  return id === undefined ? hosts[0] : hosts.find((host) => host.id === id);
 }
 
 /**
  * The providers a new session may be created on, in preference order.
  *
- * Docker leads when configured: the operator stood up a host of their own, so
- * new sessions default there. Cloudflare stays available as the fallback.
+ * Docker hosts lead when any are configured: the operator stood up boxes of
+ * their own, so new sessions default to the first of them. Cloudflare stays
+ * available as the fallback, last.
  */
 export async function listSessionProviders(
   env: Env
 ): Promise<SessionProvider[]> {
-  return (await isDockerProviderConfigured(env))
-    ? ['docker', 'cloudflare']
-    : ['cloudflare'];
+  const hosts = await listDockerHosts(env);
+  return [...hosts.map((host) => host.provider), 'cloudflare'];
+}
+
+/** One offer in the composer's host picker: the value and what to call it. */
+export interface SessionProviderOption {
+  provider: SessionProvider;
+  label: string;
+}
+
+/**
+ * The same list with the names to show. Labels come from settings for Docker
+ * hosts, so a deployment with three boxes can call them what its operator
+ * calls them rather than "Docker", "Docker" and "Docker".
+ */
+export async function listSessionProviderOptions(
+  env: Env
+): Promise<SessionProviderOption[]> {
+  const hosts = await listDockerHosts(env);
+  return [
+    ...hosts.map((host) => ({ provider: host.provider, label: host.label })),
+    { provider: 'cloudflare' as const, label: 'Cloudflare' }
+  ];
 }
 
 /**
  * Idle-stop window for a new instance. Cloudflare keeps the hard-coded ten
- * minutes; Docker reads `docker.idle-timeout-minutes` (default 30). Captured
- * once at lifecycle init so a settings edit does not move a live deadline.
+ * minutes; a Docker host reads its own `idleTimeoutMinutes` (default 30).
+ * Captured once at lifecycle init so a settings edit does not move a live
+ * deadline. A provider whose host has since been removed falls back to the
+ * default rather than raising: this decides a deadline, not a wake, and the
+ * wake is where a missing host is reported.
  */
 export async function resolveLifecycleIdleTimeoutMs(
   env: Env,
   provider: SessionProvider
 ): Promise<number> {
-  if (provider !== 'docker') {
+  if (!isDockerProvider(provider)) {
     return CLOUDFLARE_IDLE_TIMEOUT_MS;
   }
-  const minutes = await readSetting<number>(
-    env,
-    SETTING_KEYS.dockerIdleTimeoutMinutes
+  const host = await resolveDockerHost(env, provider);
+  return (
+    (host?.idleTimeoutMinutes ?? DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES) * 60 * 1000
   );
-  const resolved =
-    typeof minutes === 'number' &&
-    Number.isInteger(minutes) &&
-    minutes >= 1 &&
-    minutes <= 1440
-      ? minutes
-      : DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES;
-  return resolved * 60 * 1000;
 }

@@ -1,11 +1,18 @@
 /**
  * Prebuild fixtures: one repo with a warm prebuild, one whose last run
- * failed, the rest untouched. Triggering a build walks a scripted pipeline —
- * clone, install, promote — on a brisk clock so the page's step ladder and
- * log tail are watchable without a Docker host.
+ * failed, the rest untouched — all on the first mock host, so the second one
+ * shows the empty side of a two-host list. Triggering a build walks a scripted
+ * pipeline — clone, install, promote — on a brisk clock so the page's step
+ * ladder and log tail are watchable without a Docker host.
+ *
+ * Keyed the way the Hub keys them: `<provider>/<repoKey>`, because the same
+ * repository can hold a prebuild on every host.
  */
-import type { PrebuildRunView, PrebuildView } from '../../api';
+import { prebuildKey, type PrebuildRunView, type PrebuildView, type SessionProvider } from '../../api';
 import { hoursAgo, minutesAgo } from './util';
+
+/** The host the fixtures live on; matches the first entry in the settings fixture. */
+const MOCK_HOST: SessionProvider = 'docker:mac-mini';
 
 interface PrebuildState {
   prebuilds: Map<string, PrebuildView>;
@@ -15,10 +22,10 @@ interface PrebuildState {
 export const prebuildState: PrebuildState = {
   prebuilds: new Map([
     [
-      'acme/webapp',
+      prebuildKey(MOCK_HOST, 'acme/webapp'),
       {
         repoKey: 'acme/webapp',
-        provider: 'docker' as const,
+        provider: MOCK_HOST,
         location: 'oc-prebuild-acme-webapp',
         sizeBytes: 1_430_000_000,
         source: 'run',
@@ -28,11 +35,11 @@ export const prebuildState: PrebuildState = {
   ]),
   runs: new Map([
     [
-      'acme/webapp',
+      prebuildKey(MOCK_HOST, 'acme/webapp'),
       {
         id: 'run-webapp-1',
         repoKey: 'acme/webapp',
-        provider: 'docker' as const,
+        provider: MOCK_HOST,
         status: 'succeeded' as const,
         startedAt: hoursAgo(2),
         finishedAt: hoursAgo(2),
@@ -41,11 +48,11 @@ export const prebuildState: PrebuildState = {
       }
     ],
     [
-      'acme/api-server',
+      prebuildKey(MOCK_HOST, 'acme/api-server'),
       {
         id: 'run-api-1',
         repoKey: 'acme/api-server',
-        provider: 'docker' as const,
+        provider: MOCK_HOST,
         status: 'failed' as const,
         startedAt: minutesAgo(50),
         finishedAt: minutesAgo(45),
@@ -59,22 +66,26 @@ export const prebuildState: PrebuildState = {
 };
 
 /** Kick off a scripted run: each stage lands on a timer, then the registry updates. */
-export function startMockRun(repoKey: string): string {
+export function startMockRun(
+  repoKey: string,
+  provider: SessionProvider = MOCK_HOST
+): string {
   const runId = `run-${Math.random().toString(36).slice(2, 8)}`;
+  const key = prebuildKey(provider, repoKey);
   const run: PrebuildRunView = {
     id: runId,
     repoKey,
-    provider: 'docker',
+    provider,
     status: 'running',
     startedAt: new Date().toISOString(),
     timings: {},
     logTail: `Cloning into '/workspace/${repoKey}'...`
   };
-  prebuildState.runs.set(repoKey, run);
+  prebuildState.runs.set(key, run);
 
   const stage = (afterMs: number, apply: () => void) =>
     setTimeout(() => {
-      if (prebuildState.runs.get(repoKey)?.id !== runId) return;
+      if (prebuildState.runs.get(key)?.id !== runId) return;
       apply();
     }, afterMs);
 
@@ -90,9 +101,9 @@ export function startMockRun(repoKey: string): string {
     run.timings = { ...run.timings, promoteMs: 5_000, totalMs: 19_000 };
     run.status = 'succeeded';
     run.finishedAt = new Date().toISOString();
-    prebuildState.prebuilds.set(repoKey, {
+    prebuildState.prebuilds.set(key, {
       repoKey,
-      provider: 'docker',
+      provider,
       location: `oc-prebuild-${repoKey.replaceAll('/', '-')}`,
       sizeBytes: 980_000_000,
       source: 'run',

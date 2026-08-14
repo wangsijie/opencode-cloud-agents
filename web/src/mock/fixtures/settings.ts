@@ -134,39 +134,32 @@ export function buildSettings(): SettingView[] {
         ]
       }
     },
-    // Configured, which is what puts Docker in the mock catalog's providers
-    // and the composer's picker beside it.
+    // Two hosts, configured, which is what puts them both in the mock
+    // catalog's providers and gives the composer a picker to show.
     {
-      key: 'docker.agent-url',
+      key: 'docker.hosts',
       group: 'docker',
-      label: 'Docker agent URL',
+      label: 'Docker hosts',
       required: false,
       configured: true,
       updatedAt: daysAgo(1),
-      value: 'https://docker-agent.example.com'
-    },
-    {
-      key: 'docker.agent-token',
-      group: 'docker',
-      label: 'Docker agent token',
-      required: false,
-      configured: true,
-      updatedAt: daysAgo(1)
-      // Secret exposure: no value, ever.
-    },
-    {
-      key: 'docker.image',
-      group: 'docker',
-      label: 'Docker session image',
-      required: false,
-      configured: false
-    },
-    {
-      key: 'docker.idle-timeout-minutes',
-      group: 'docker',
-      label: 'Docker idle timeout (minutes)',
-      required: false,
-      configured: false
+      // Partial exposure: everything but each host's bearer token.
+      value: [
+        {
+          id: 'mac-mini',
+          label: 'Mac mini',
+          baseUrl: 'https://docker-agent.example.com',
+          tokenConfigured: true
+        },
+        {
+          id: 'workshop',
+          label: 'Workshop',
+          baseUrl: 'https://workshop.example.com',
+          image: 'ghcr.io/acme/opencode-session:v2',
+          idleTimeoutMinutes: 120,
+          tokenConfigured: true
+        }
+      ]
     }
   ];
 }

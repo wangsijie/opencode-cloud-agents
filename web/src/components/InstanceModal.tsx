@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { SessionView } from '../api';
+import { isDockerProvider, type SessionView } from '../api';
 import {
   formatDuration,
   formatIdleShutdown,
@@ -8,7 +8,7 @@ import {
   STATUS_LABELS
 } from '../format';
 import { CloseIcon } from './icons';
-import { PROVIDER_LABELS } from './ProviderSelect';
+import { providerLabel } from './ProviderSelect';
 
 /**
  * What the container has been doing, behind the status badge.
@@ -46,7 +46,7 @@ export function InstanceModal({
   // workspace when the container stops. Cloudflare containers are ephemeral and
   // the workspace survives as a snapshot taken at idle; the Docker agent keeps
   // it on a named volume that outlives every container it runs.
-  const snapshots = session.provider !== 'docker';
+  const snapshots = !isDockerProvider(session.provider);
 
   return (
     <div className="modal-layer">
@@ -83,7 +83,7 @@ export function InstanceModal({
             <dt>Shuts down</dt>
             <dd>{formatIdleShutdown(session)}</dd>
             <dt>Sandbox</dt>
-            <dd>{PROVIDER_LABELS[session.provider] ?? session.provider}</dd>
+            <dd>{providerLabel(session.provider)}</dd>
             <dt>Workspace</dt>
             <dd>
               {snapshots

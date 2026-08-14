@@ -241,8 +241,8 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   // that validates against it, not on every poll.
   const catalog = await loadModelCatalog(env);
   // Which hosts this deployment can actually place a session on. Read per
-  // create — the answer is two settings rows and creates are rare — so that
-  // configuring the Docker agent takes effect without a redeploy.
+  // create — the answer is one settings row and creates are rare — so that
+  // configuring a Docker host takes effect without a redeploy.
   const providers = await listSessionProviders(env);
   const input = await readCreateSessionInput(request, env, catalog, providers);
   // Resolved against GitHub's catalog once, here, and then pinned onto the
@@ -393,8 +393,8 @@ async function readCreateSessionInput(
   if (!text) {
     throw new HttpError(400, 'A prompt of up to 32000 characters is required');
   }
-  // Omitting the field takes the preferred host — providers[0], which is
-  // docker when configured and otherwise cloudflare. An explicit value that
+  // Omitting the field takes the preferred host — providers[0], which is the
+  // first configured Docker host and otherwise cloudflare. An explicit value that
   // is not on offer is refused here so the session is never created on a host
   // that cannot wake.
   const wantsProvider =

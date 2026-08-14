@@ -75,8 +75,8 @@ site's settings table and is written into the container on each wake.
 ### 2. Write the token
 
 Generate a long random token and store it where only the agent's user can read
-it. It goes in two places: this file, and the site's `docker.agent-token`
-setting.
+it. It goes in two places: this file, and this host's entry in the site's
+`docker.hosts` setting.
 
 ```bash
 mkdir -p ~/.config/opencode-agent
@@ -144,16 +144,23 @@ to polling, and the transcript's `reason` stops saying `live`.
 
 ### 5. Point the site at it
 
-On the Hub's `/settings` page, under **Docker**:
+On the Hub's `/settings` page, under **Docker hosts**, add an entry:
 
-- `docker.agent-url` — `https://sandbox.example.com` (origin only, no path)
-- `docker.agent-token` — the token from step 2
-- `docker.image` — optional; defaults to `opencode-session:latest`
+- **id** — `mac-mini`, say: lowercase letters, digits and dashes. Sessions
+  store `docker:<id>`, so pick it once — it cannot be changed afterwards
+  without orphaning every session on this box.
+- **label** — what the composer's picker calls it; optional, defaults to the id
+- **agent URL** — `https://sandbox.example.com` (origin only, no path)
+- **agent token** — the token from step 2
+- **session image** — optional; defaults to `opencode-session:latest`
+- **idle timeout** — optional minutes; defaults to 30
 
-Both the URL and the token must be set before `docker` appears as a provider on
-the new-session form. The site caches the resolved configuration inside each
-session's Durable Object for **60 seconds**, so a settings change takes up to a
-minute to reach a live session.
+Both the URL and the token must be set before the host appears as a provider on
+the new-session form. Add as many hosts as you run: the list order is the order
+they are offered in, and the first is the default for a new session. The site
+caches the resolved configuration inside each session's Durable Object for
+**60 seconds**, so a settings change takes up to a minute to reach a live
+session.
 
 ## Verifying
 
@@ -203,7 +210,7 @@ Sessions in flight see up to a minute of 401s (the site's settings cache) and
 recover on their own; nothing is lost, because a failed wake leaves the
 workspace on its volume.
 
-**Upgrading the image.** Build the new tag, then set `docker.image` to it. A
+**Upgrading the image.** Build the new tag, then set this host's image to it. A
 session picks it up at its next *cold* start: `ensure` replaces a stopped
 container whose image no longer matches, and leaves a running one alone — an
 upgrade is not worth killing a live session for. To force it, stop the session

@@ -112,7 +112,13 @@ await step('the settings list reads back through Drizzle', async () => {
 });
 
 await step('a setting round trips: upsert, read, overwrite, delete', async () => {
-  const key = 'docker.image';
+  // `git.identity` is the scratch key: optional, plain exposure — so whatever
+  // the deployment already has reads back in full and is put back at the end.
+  // This runs against a real deployment; the step must leave no trace. It used
+  // to use `docker.image`, which was a whole setting of its own and is now one
+  // field inside `docker.hosts` — a list this must not go near, because
+  // clearing it would strand every Docker session on the box.
+  const key = 'git.identity';
   const put = async (value) =>
     api(`/api/settings/${encodeURIComponent(key)}`, {
       method: 'PUT',
@@ -122,21 +128,22 @@ await step('a setting round trips: upsert, read, overwrite, delete', async () =>
     const { body } = await api('/api/settings');
     return body.settings.find((entry) => entry.key === key);
   };
+  const original = (await read())?.value;
 
-  const first = await put('smoke-image:v1');
+  const first = await put({ name: 'Smoke', email: 'smoke@example.com' });
   assert.equal(first.status, 200, JSON.stringify(first.body));
   let entry = await read();
   assert.equal(entry.configured, true);
-  assert.equal(entry.value, 'smoke-image:v1');
+  assert.equal(entry.value.email, 'smoke@example.com');
   const firstUpdatedAt = entry.updatedAt;
   assert.ok(firstUpdatedAt);
 
   // The ON CONFLICT path: the same key must be replaced, never duplicated.
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const second = await put('smoke-image:v2');
+  const second = await put({ name: 'Smoke II', email: 'smoke2@example.com' });
   assert.equal(second.status, 200);
   entry = await read();
-  assert.equal(entry.value, 'smoke-image:v2');
+  assert.equal(entry.value.email, 'smoke2@example.com');
   assert.ok(entry.updatedAt >= firstUpdatedAt, 'the upsert must move updated_at');
 
   const cleared = await put(null);
@@ -144,6 +151,12 @@ await step('a setting round trips: upsert, read, overwrite, delete', async () =>
   entry = await read();
   assert.equal(entry.configured, false);
   assert.ok(!('value' in entry));
+
+  // Put the deployment back the way it was found.
+  if (original !== undefined) {
+    const restored = await put(original);
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+  }
 });
 
 await step('a required setting refuses to be cleared', async () => {

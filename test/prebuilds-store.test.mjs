@@ -5,6 +5,10 @@
  * the composite `(repo_key, provider)` primary key the registry upsert conflicts
  * on, and the `COALESCE` patch on a run, which lets a caller touch one field
  * without clearing the rest.
+ *
+ * The provider is a whole host now (`docker:<id>`), not just "docker", so the
+ * pair is what everything here is keyed by — a repository can hold a prebuild
+ * on every host and each is its own row, its own history and its own delete.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -112,7 +116,7 @@ test('a run is inserted with only its opening fields set', async () => {
   });
 
   const latest = await latestPrebuildRuns(env);
-  assert.deepEqual(latest.get('opencode-cloud'), {
+  assert.deepEqual(latest.get('docker/opencode-cloud'), {
     id: 'run-1',
     repoKey: 'opencode-cloud',
     provider: 'docker',
@@ -132,7 +136,7 @@ test('a run patch touches only the fields it names', async () => {
   });
 
   await updatePrebuildRun(env, 'run-1', { logTail: 'installing…' });
-  let run = (await latestPrebuildRuns(env)).get('opencode-cloud');
+  let run = (await latestPrebuildRuns(env)).get('docker/opencode-cloud');
   assert.equal(run.logTail, 'installing…');
   assert.equal(run.status, 'running');
   assert.ok(!('finishedAt' in run));
@@ -142,7 +146,7 @@ test('a run patch touches only the fields it names', async () => {
     finishedAt: '2026-07-01T00:05:00.000Z',
     timings: { cloneMs: 1200, installMs: 30_000, totalMs: 31_200 }
   });
-  run = (await latestPrebuildRuns(env)).get('opencode-cloud');
+  run = (await latestPrebuildRuns(env)).get('docker/opencode-cloud');
   assert.equal(run.status, 'succeeded');
   assert.equal(run.finishedAt, '2026-07-01T00:05:00.000Z');
   assert.deepEqual(run.timings, {
@@ -158,6 +162,30 @@ test('a patch of a run id that does not exist changes nothing', async () => {
   const env = createTestEnv();
   await updatePrebuildRun(env, 'no-such-run', { status: 'failed' });
   assert.equal((await latestPrebuildRuns(env)).size, 0);
+});
+
+test('the same repository on two hosts keeps two runs', async () => {
+  const env = createTestEnv();
+  for (const provider of ['docker:mini', 'docker:shop']) {
+    await insertPrebuildRun(env, {
+      id: `run-${provider}`,
+      repoKey: 'opencode-cloud',
+      provider,
+      status: 'running',
+      startedAt: '2026-07-01T00:00:00.000Z'
+    });
+  }
+  const latest = await latestPrebuildRuns(env);
+  assert.equal(latest.size, 2);
+  assert.equal(latest.get('docker:mini/opencode-cloud').id, 'run-docker:mini');
+  assert.equal(latest.get('docker:shop/opencode-cloud').id, 'run-docker:shop');
+
+  // Deleting one host's history leaves the other host's alone, the same way
+  // the registry rows are per host.
+  await deletePrebuildRuns(env, 'opencode-cloud', 'docker:mini');
+  const remaining = await latestPrebuildRuns(env);
+  assert.equal(remaining.size, 1);
+  assert.ok(remaining.has('docker:shop/opencode-cloud'));
 });
 
 test('only the newest run per repository is reported', async () => {
@@ -185,8 +213,8 @@ test('only the newest run per repository is reported', async () => {
 
   const latest = await latestPrebuildRuns(env);
   assert.equal(latest.size, 2);
-  assert.equal(latest.get('opencode-cloud').id, 'run-new');
-  assert.equal(latest.get('other-repo').id, 'other-run');
+  assert.equal(latest.get('docker/opencode-cloud').id, 'run-new');
+  assert.equal(latest.get('docker/other-repo').id, 'other-run');
 });
 
 test('deleting a repo run history leaves other repositories alone', async () => {
@@ -206,10 +234,10 @@ test('deleting a repo run history leaves other repositories alone', async () => 
     startedAt: '2026-07-01T00:00:00.000Z'
   });
 
-  await deletePrebuildRuns(env, 'opencode-cloud');
+  await deletePrebuildRuns(env, 'opencode-cloud', 'docker');
   const latest = await latestPrebuildRuns(env);
   assert.equal(latest.size, 1);
-  assert.ok(latest.has('other-repo'));
+  assert.ok(latest.has('docker/other-repo'));
 });
 
 test('timings that are not valid JSON degrade to an empty object', async () => {
@@ -225,6 +253,6 @@ test('timings that are not valid JSON degrade to an empty object', async () => {
     .bind('run-1', 'not json')
     .run();
 
-  const run = (await latestPrebuildRuns(env)).get('opencode-cloud');
+  const run = (await latestPrebuildRuns(env)).get('docker/opencode-cloud');
   assert.deepEqual(run.timings, {});
 });

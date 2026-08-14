@@ -23,9 +23,22 @@ export type SessionStatus =
  * Mirrors `SessionProvider` in `protocol/types.ts`.
  *
  * Which sandbox host runs the container — not the model's provider prefix.
- * Chosen when the session is created and fixed for its life.
+ * Chosen when the session is created and fixed for its life. `cloudflare` is
+ * the built-in host; a Docker host is `docker:<id>`, naming one of the
+ * operator's boxes, and bare `docker` is what sessions created before there
+ * could be several still carry.
  */
-export type SessionProvider = 'cloudflare' | 'docker';
+export type SessionProvider = 'cloudflare' | 'docker' | `docker:${string}`;
+
+/** Whether this provider runs on a Docker host — either spelling. */
+export const isDockerProvider = (provider: SessionProvider) =>
+  provider === 'docker' || provider.startsWith('docker:');
+
+/** One host on offer: the value to send, and what to call it. */
+export interface SessionProviderOption {
+  provider: SessionProvider;
+  label: string;
+}
 
 /** Mirrors `RuntimeLifecycle` in the Worker's `src/instances.ts`. */
 export type RuntimeLifecycle =
@@ -148,13 +161,14 @@ export interface Catalog {
     variant?: string;
   };
   /**
-   * The sandbox hosts a new session may run on, in preference order.
+   * The sandbox hosts a new session may run on, in preference order, each with
+   * the name to show for it.
    *
-   * Always contains `cloudflare`. `docker` leads the list once an operator has
-   * stored the agent's URL and token (and is the composer's default); until
-   * then the picker is hidden because there is only one host to pick.
+   * Always ends with `cloudflare`. Every configured Docker host leads the list
+   * (the first being the composer's default); with only one entry the picker is
+   * hidden, because there is nothing to pick.
    */
-  providers: SessionProvider[];
+  providers: SessionProviderOption[];
   /** When the Hub last read the repository list from GitHub. */
   reposFetchedAt?: string;
   /** The stored list is past its TTL: worth one refresh once the page is up. */
@@ -730,21 +744,31 @@ export interface PrebuildRunView {
 
 export interface PrebuildsView {
   prebuilds: PrebuildView[];
-  /** Newest run per repo, keyed by repo. */
+  /**
+   * Newest run per (host, repo), keyed by `<provider>/<repoKey>` — the same
+   * string the Worker's `prebuildKey` builds. A repository can be prebuilt on
+   * every host, so the repo key alone would collide.
+   */
   runs: Record<string, PrebuildRunView>;
+  /** The Docker hosts that can be built on now, named. */
+  hosts: SessionProviderOption[];
 }
+
+/** The key a prebuild and its run are addressed by. Mirrors `prebuildKey`. */
+export const prebuildKey = (provider: SessionProvider, repoKey: string) =>
+  `${provider}/${repoKey}`;
 
 export const fetchPrebuilds = () => call<PrebuildsView>('/api/prebuilds');
 
-export const startPrebuild = (repoKey: string) =>
+export const startPrebuild = (repoKey: string, provider: SessionProvider) =>
   call<{ runId: string }>('/api/prebuilds', {
     method: 'POST',
-    body: JSON.stringify({ repoKey })
+    body: JSON.stringify({ repoKey, provider })
   });
 
-export const deletePrebuild = (repoKey: string) =>
+export const deletePrebuild = (repoKey: string, provider: SessionProvider) =>
   call<{ removed: boolean }>(
-    `/api/prebuilds/${encodeURIComponent(repoKey)}`,
+    `/api/prebuilds/${encodeURIComponent(repoKey)}?provider=${encodeURIComponent(provider)}`,
     { method: 'DELETE' }
   );
 

@@ -47,10 +47,12 @@ import {
   type SnapshotRestoreResponse,
   type StopResponse,
   type SessionProvider,
-  type WriteBatchResponse
+  type WriteBatchResponse,
+  dockerHostId,
+  isDockerProvider
 } from '../protocol/types.ts';
 import { RUNTIME_EPOCH_HEADER } from './instance-runtime.ts';
-import { readDockerProviderConfig } from './sandbox-providers.ts';
+import { resolveDockerHost } from './sandbox-providers.ts';
 
 /**
  * The origin every protocol request is addressed to.
@@ -368,10 +370,11 @@ export class HostUnavailableError extends Error {
  * `cloudflare` is the service binding to the sandbox host worker, whose
  * capabilities are fixed by its implementation rather than read at request
  * time: it is deployed from this repository in lockstep with this file, and a
- * `/healthz` round trip on every wake would buy nothing. `docker` is the
- * opposite case — an operator-supplied origin, token and image, all of which
- * can change under a live session — so it is read from settings here, and the
- * caller is the one that decides how long to hold the result.
+ * `/healthz` round trip on every wake would buy nothing. A `docker:<id>`
+ * provider is the opposite case — an operator-supplied origin, token and
+ * image, all of which can change under a live session, and now one of several
+ * hosts — so the entry is read from settings here, and the caller is the one
+ * that decides how long to hold the result.
  *
  * Its capabilities are declared, not probed, for the same reason: `snapshots:
  * false` is a property of the Docker design (the workspace lives on a named
@@ -390,18 +393,21 @@ export async function resolveHostClient(
       { snapshots: true, prebuilds: false }
     );
   }
-  if (provider === 'docker') {
-    const config = await readDockerProviderConfig(env);
-    if (!config) {
+  if (isDockerProvider(provider)) {
+    const host = await resolveDockerHost(env, provider);
+    if (!host) {
+      // Either no Docker host is configured at all, or this session's host was
+      // removed or had its id edited — from here those are the same thing, and
+      // both are fixed on the settings page.
       throw new HostUnavailableError(
-        'This session runs on the Docker sandbox host, which is not configured. Set the agent URL and token in settings.'
+        `This session runs on Docker sandbox host "${dockerHostId(provider) ?? 'default'}", which is not configured. Add it back on the settings page.`
       );
     }
     return new HostClient(
-      remoteTransport(config.baseUrl, config.token),
+      remoteTransport(host.baseUrl, host.token),
       sessionId,
       { snapshots: false, prebuilds: true },
-      config.image
+      host.image
     );
   }
   throw new Error(`Unsupported sandbox provider: ${String(provider)}`);

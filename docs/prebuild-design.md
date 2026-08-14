@@ -67,11 +67,18 @@ seeded workspace is reconciled by `git fetch` + an incremental install.
 ## Dedicated prebuild runs (built first)
 
 **Trigger.** `POST /api/prebuilds` with `{repoKey, provider}` → `202 {runId}`.
-`GET /api/prebuilds` lists the registry plus each repo's latest run (status,
-step timings, error, install log tail) — that read is the whole observability
-story. One run per repo at a time; a second trigger while one is running is
-refused. `DELETE /api/prebuilds/:repoKey` removes the artifact and the
-registry row — mostly a testing affordance. The UI is its own page, below.
+`GET /api/prebuilds` lists the registry plus each (host, repo)'s latest run
+(status, step timings, error, install log tail) — that read is the whole
+observability story. One run per repo *per host* at a time; a second trigger
+while one is running is refused. `DELETE /api/prebuilds/:repoKey?provider=…`
+removes the artifact and the registry row — mostly a testing affordance. The
+UI is its own page, below.
+
+A prebuild is a volume on one machine, so the provider is a whole host
+(`docker:<id>`) and everything above is addressed by the pair: the registry
+row, the run history, the Durable Object that serializes runs, the delete. A
+repository can hold a prebuild on every Docker host, and the page groups the
+list by host.
 
 **Pipeline.** A run is a throwaway instance that deliberately never starts the
 OpenCode server:
@@ -141,8 +148,9 @@ button that starts the first run. A row therefore also appears for a repo whose
 latest run is `running` or `failed` — a first build is watchable from the moment
 it is added, and a failed attempt that produced nothing leaves its error on
 screen instead of vanishing. Deleting is what takes a repo off the list, so
-`DELETE /api/prebuilds/:repoKey` forgets the run history along with the
-registry row; otherwise a failure would be an undeletable row. Per row:
+`DELETE /api/prebuilds/:repoKey?provider=…` forgets that host's run history
+along with its registry row; otherwise a failure would be an undeletable row.
+Per row:
 
 - **Repo name**, and the prebuild state: `built 2 h ago · cloudflare · 1.4 GB`
   (relative time from the registry's `updated_at`; size recorded at promote —
@@ -153,9 +161,10 @@ registry row; otherwise a failure would be an undeletable row. Per row:
   omitted — the registry row plus the latest run answer every question the
   operator actually has; `prebuild_runs` keeps history for debugging via D1.
 - **Rebuild button.** Disabled with a spinner-label while that repo's
-  run is active. Provider: defaults to the same rule session creation uses;
-  when Docker is configured too, the row reuses the existing `ProviderSelect`
-  next to the button.
+  run is active — and disabled outright in the group of a host that has since
+  been removed from settings, where the rows survive only so they can be
+  deleted. Which host a *new* prebuild goes on is picked beside the add
+  control, and only when there is more than one to pick.
 - **While a run is active**, the row expands into the step ladder — `clone →
   install → snapshot → promote`, each step showing its elapsed/final duration
   from the run record's `timings`, plus the live install log tail. This is the

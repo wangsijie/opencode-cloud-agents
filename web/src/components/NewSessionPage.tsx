@@ -56,9 +56,10 @@ export function NewSessionPage({
   const [variant, setVariant] = useState('');
   // The one composer that has no session to key on yet, so it gets a fixed key.
   const [prompt, setPrompt] = useDraft('new');
-  // Resolved from the catalog's preference order once it lands — docker first
-  // when configured, otherwise cloudflare. undefined until then so a hard-coded
-  // cloudflare does not stick past a catalog that prefers docker.
+  // Resolved from the catalog's preference order once it lands — the first
+  // configured Docker host when there is one, otherwise cloudflare. undefined
+  // until then so a hard-coded cloudflare does not stick past a catalog that
+  // prefers a Docker host.
   const [provider, setProvider] = useState<SessionProvider>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -87,19 +88,19 @@ export function NewSessionPage({
     );
   }, [repos]);
 
-  // A provider can leave the catalog under an open tab — clearing the Docker
-  // settings is all it takes — and starting a session on one the Hub would
-  // refuse is a 400 in place of a session. First paint takes providers[0]
-  // (preference order); a deliberate pick sticks until it leaves the list.
+  // A provider can leave the catalog under an open tab — removing a Docker
+  // host is all it takes — and starting a session on one the Hub would refuse
+  // is a 400 in place of a session. First paint takes providers[0] (preference
+  // order); a deliberate pick sticks until it leaves the list.
   const providers = catalog?.providers;
   useEffect(() => {
     if (!providers || providers.length === 0) {
       return;
     }
     setProvider((current) =>
-      current && providers.includes(current)
+      current && providers.some((option) => option.provider === current)
         ? current
-        : (providers[0] ?? 'cloudflare')
+        : (providers[0]?.provider ?? 'cloudflare')
     );
   }, [providers]);
 
@@ -159,7 +160,7 @@ export function NewSessionPage({
         model,
         ...(effort ? { variant: effort } : {}),
         prompt: text,
-        provider: provider ?? providers?.[0] ?? 'cloudflare',
+        provider: provider ?? providers?.[0]?.provider ?? 'cloudflare',
         ...(attachments.length > 0
           ? { attachments: toAttachmentPayload(attachments) }
           : {})

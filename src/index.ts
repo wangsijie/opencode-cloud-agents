@@ -38,7 +38,7 @@ import {
 } from './model-catalog';
 import { PrebuildRunner } from './prebuild-runner';
 import { Sandbox } from './sandbox';
-import { listSessionProviders } from './sandbox-providers';
+import { listSessionProviderOptions } from './sandbox-providers';
 import { SessionAgent } from './session-agent';
 
 export { Hub, LifecycleCoordinator, PrebuildRunner, Sandbox, SessionAgent };
@@ -138,13 +138,15 @@ export default {
             listRepoCatalog(env, url.searchParams.get('refresh') === '1'),
             loadModelCatalog(env),
             lastModelSelection(env),
-            listSessionProviders(env)
+            listSessionProviderOptions(env)
           ]);
         return json({
           repos: catalog.repos,
           models: models.options,
-          // Where a new session may run. One entry means there is nothing to
-          // choose and the composer shows no picker at all.
+          // Where a new session may run, in preference order and named: one
+          // entry per configured Docker host, then Cloudflare. A single entry
+          // means there is nothing to choose and the composer shows no picker
+          // at all.
           providers,
           defaultSelection: resolveDefaultModelSelection(
             models,

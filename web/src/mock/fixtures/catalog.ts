@@ -45,9 +45,13 @@ export function buildCatalog(): Catalog {
         modelName: 'Gemini 3 Pro Preview (extremely long model name for truncation testing)'
       }
     ],
-    // Both hosts, docker first — same preference order as a real deployment
-    // once the agent is configured — so the composer's picker defaults to it.
-    providers: ['docker', 'cloudflare'],
+    // Every host, the Docker ones first — same preference order as a real
+    // deployment with hosts configured — so the picker defaults to the first.
+    providers: [
+      { provider: 'docker:mac-mini', label: 'Mac mini' },
+      { provider: 'docker:workshop', label: 'Workshop' },
+      { provider: 'cloudflare', label: 'Cloudflare' }
+    ],
     defaultSelection: {
       model: 'anthropic/claude-opus-4-5',
       variant: 'medium'

@@ -54,7 +54,7 @@ export const SECTIONS: Section[] = [
   { id: 'agents-md', label: 'AGENTS.md', key: 'opencode.agents-md' },
   { id: 'mcp-auth', label: 'MCP auth', key: 'opencode.mcp-auth' },
   { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
-  { id: 'docker', label: 'Docker host', key: 'docker.agent-url' },
+  { id: 'docker', label: 'Docker hosts', key: 'docker.hosts' },
   { id: 'prebuilds', label: 'Prebuilds' },
   { id: 'password', label: 'Admin password' }
 ];
@@ -271,10 +271,7 @@ export function SettingsPage({
                   />
                 ) : active === 'docker' ? (
                   <DockerSection
-                    url={byKey.get('docker.agent-url')}
-                    token={byKey.get('docker.agent-token')}
-                    image={byKey.get('docker.image')}
-                    idleTimeout={byKey.get('docker.idle-timeout-minutes')}
+                    setting={byKey.get('docker.hosts')}
                     onSaved={saved}
                   />
                 ) : active === 'prebuilds' ? (
@@ -1345,167 +1342,302 @@ function GitIdentitySection({
   );
 }
 
-/** The image the agent falls back to when `docker.image` is unset. */
+/** The image the agent falls back to when a host names none. */
 const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
 
-/** Idle-stop default when `docker.idle-timeout-minutes` is unset. */
+/** Idle-stop default when a host names no timeout. */
 const DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES = 30;
 
+/** One host as this form edits it; every field is text until it is saved. */
+interface DockerHostRow {
+  id: string;
+  label: string;
+  baseUrl: string;
+  /** Write-only, like an env var value: blank keeps what is stored. */
+  token: string;
+  image: string;
+  idleTimeout: string;
+  /** Whether a token is already stored under this id. */
+  tokenStored: boolean;
+  /** Whether this row came back from the server, which freezes its id. */
+  stored: boolean;
+}
+
+/** What `docker.hosts` reads back as: everything but the token. */
+interface DockerHostView {
+  id: string;
+  label?: string;
+  baseUrl: string;
+  image?: string;
+  idleTimeoutMinutes?: number;
+  tokenConfigured: boolean;
+}
+
+const HOST_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
 /**
- * The second sandbox host, which is opt-in.
+ * The sandbox hosts of your own, which are opt-in and may be several.
  *
- * Three settings rather than one, because the token is a secret and never reads
- * back, so it cannot share an object with the two that do. Storing the URL and
- * the token is what puts Docker in the composer's picker — the image is
- * optional and only names something other than the default.
+ * One list rather than a form per box: the order is the composer's preference
+ * order, so the first host is where a new session lands, and moving a host up
+ * is how that is changed. An id is frozen once saved — sessions store
+ * `docker:<id>` and have no other way back to their host, so editing one would
+ * strand every session on it.
  *
- * Clearing this while Docker sessions exist strands them: deleting one goes out
- * over the agent, and there would be no agent to ask. Delete the sessions
- * first, which is what the warning below says.
+ * Removing a host while its sessions exist strands them the same way: deleting
+ * a session goes out over its agent, and there would be no agent to ask.
+ * Delete the sessions first, which is what the warning below says.
  */
 function DockerSection({
-  url,
-  token,
-  image,
-  idleTimeout,
+  setting,
   onSaved
 }: {
-  url?: SettingView;
-  token?: SettingView;
-  image?: SettingView;
-  idleTimeout?: SettingView;
+  setting?: SettingView;
   onSaved: () => void;
 }) {
-  const storedUrl = typeof url?.value === 'string' ? url.value : '';
-  const storedImage = typeof image?.value === 'string' ? image.value : '';
-  const storedIdle =
-    typeof idleTimeout?.value === 'number'
-      ? String(idleTimeout.value)
-      : '';
-  const [urlText, setUrlText] = useState<string>();
-  const [tokenText, setTokenText] = useState('');
-  const [imageText, setImageText] = useState<string>();
-  const [idleText, setIdleText] = useState<string>();
+  const stored = useMemo<DockerHostRow[]>(
+    () =>
+      (Array.isArray(setting?.value) ? (setting.value as DockerHostView[]) : []).map(
+        (host) => ({
+          id: host.id,
+          label: host.label ?? '',
+          baseUrl: host.baseUrl,
+          token: '',
+          image: host.image ?? '',
+          idleTimeout:
+            typeof host.idleTimeoutMinutes === 'number'
+              ? String(host.idleTimeoutMinutes)
+              : '',
+          tokenStored: host.tokenConfigured === true,
+          stored: true
+        })
+      ),
+    [setting?.value]
+  );
+  const [rows, setRows] = useState<DockerHostRow[]>();
   const { busy, error, notice, run } = useSave();
 
-  const currentUrl = urlText ?? storedUrl;
-  const currentImage = imageText ?? storedImage;
-  const currentIdle = idleText ?? storedIdle;
-  const configured = Boolean(url?.configured && token?.configured);
+  const current = rows ?? stored;
+
+  const edit = (index: number, patch: Partial<DockerHostRow>) => {
+    setRows(current.map((row, at) => (at === index ? { ...row, ...patch } : row)));
+  };
+
+  const move = (index: number, delta: number) => {
+    const next = [...current];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) {
+      return;
+    }
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    setRows(next);
+  };
 
   return (
     <section className="settings-section">
-      <h2>Docker host</h2>
+      <h2>Docker hosts</h2>
       <p className="muted">
-        A machine of your own running the sandbox agent. Once the URL and token
-        are stored it becomes the default host for new sessions (Cloudflare
-        stays available in the picker). Workspaces live on named volumes
-        instead of snapshots, so a container can be replaced without losing the
-        checkout.
+        Machines of your own running the sandbox agent. Any number of them: each
+        becomes an entry in the composer&apos;s host picker, and the first is
+        where a new session lands unless another is picked (Cloudflare stays
+        available, last). Workspaces live on named volumes instead of snapshots,
+        so a container can be replaced without losing the checkout.
       </p>
-      <input
-        type="text"
-        placeholder="https://agent.example.com"
-        aria-label="Docker agent URL"
-        value={currentUrl}
-        disabled={busy}
-        onChange={(event) => setUrlText(event.target.value)}
-      />
-      <input
-        type="password"
-        autoComplete="off"
-        placeholder={configuredHint(token)}
-        aria-label="Docker agent token"
-        value={tokenText}
-        disabled={busy}
-        onChange={(event) => setTokenText(event.target.value)}
-      />
-      <input
-        type="text"
-        placeholder={`Session image (default ${DEFAULT_DOCKER_IMAGE})`}
-        aria-label="Docker session image"
-        value={currentImage}
-        disabled={busy}
-        onChange={(event) => setImageText(event.target.value)}
-      />
-      <input
-        type="number"
-        min={1}
-        max={1440}
-        step={1}
-        placeholder={`Idle timeout minutes (default ${DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES})`}
-        aria-label="Docker idle timeout minutes"
-        value={currentIdle}
-        disabled={busy}
-        onChange={(event) => setIdleText(event.target.value)}
-      />
+      {current.map((row, index) => (
+        <div key={index} className="settings-host">
+          <div className="settings-row">
+            <input
+              type="text"
+              placeholder="id (mac-mini)"
+              aria-label="Host id"
+              value={row.id}
+              // Frozen once saved: it is what every session on this host
+              // stores, so a rename would orphan them.
+              disabled={busy || row.stored}
+              onChange={(event) => edit(index, { id: event.target.value })}
+            />
+            <input
+              type="text"
+              placeholder="Name shown in the picker"
+              aria-label="Host label"
+              value={row.label}
+              disabled={busy}
+              onChange={(event) => edit(index, { label: event.target.value })}
+            />
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={`Move ${row.id || 'host'} up`}
+              disabled={busy || index === 0}
+              onClick={() => move(index, -1)}
+            >
+              ↑
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={`Move ${row.id || 'host'} down`}
+              disabled={busy || index === current.length - 1}
+              onClick={() => move(index, 1)}
+            >
+              ↓
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={`Remove ${row.id || 'host'}`}
+              disabled={busy}
+              onClick={() => setRows(current.filter((_, at) => at !== index))}
+            >
+              ×
+            </button>
+          </div>
+          <input
+            type="text"
+            placeholder="https://agent.example.com"
+            aria-label="Docker agent URL"
+            value={row.baseUrl}
+            disabled={busy}
+            onChange={(event) => edit(index, { baseUrl: event.target.value })}
+          />
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={
+              row.tokenStored ? 'Configured — blank keeps it' : 'Agent token'
+            }
+            aria-label="Docker agent token"
+            value={row.token}
+            disabled={busy}
+            onChange={(event) => edit(index, { token: event.target.value })}
+          />
+          <input
+            type="text"
+            placeholder={`Session image (default ${DEFAULT_DOCKER_IMAGE})`}
+            aria-label="Docker session image"
+            value={row.image}
+            disabled={busy}
+            onChange={(event) => edit(index, { image: event.target.value })}
+          />
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            placeholder={`Idle timeout minutes (default ${DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES})`}
+            aria-label="Docker idle timeout minutes"
+            value={row.idleTimeout}
+            disabled={busy}
+            onChange={(event) => edit(index, { idleTimeout: event.target.value })}
+          />
+        </div>
+      ))}
       <p className="muted">
-        {configured
-          ? 'Configured. Clearing the URL turns the provider off — delete any Docker sessions first, or they cannot be deleted at all. Idle timeout applies to new sessions only (Cloudflare stays at 10 minutes).'
-          : 'Both the URL and a token are needed before Docker is offered. Idle timeout defaults to 30 minutes when left empty.'}
+        {current.length > 0
+          ? 'Removing a host turns its provider off — delete any sessions on it first, or they cannot be deleted at all. Idle timeout applies to new sessions only (Cloudflare stays at 10 minutes).'
+          : 'With no host here the site runs every session on Cloudflare containers.'}
       </p>
       <div className="actions">
         <button
-          className="button primary"
+          className="button"
+          type="button"
           disabled={busy}
           onClick={() =>
+            setRows([
+              ...current,
+              {
+                id: '',
+                label: '',
+                baseUrl: '',
+                token: '',
+                image: '',
+                idleTimeout: '',
+                tokenStored: false,
+                stored: false
+              }
+            ])
+          }
+        >
+          Add host
+        </button>
+        <button
+          className="button primary"
+          disabled={busy || rows === undefined}
+          onClick={() =>
             void run(async () => {
-              const nextUrl = currentUrl.trim();
-              const nextImage = currentImage.trim();
-              const nextIdle = currentIdle.trim();
-              // A cleared field is `null`, which is how an optional setting is
-              // removed; the token is the exception — it never reads back, so
-              // an empty box means "leave it alone" rather than "clear it".
-              await saveSetting('docker.agent-url', nextUrl || null);
-              if (tokenText.trim()) {
-                await saveSetting('docker.agent-token', tokenText.trim());
-              }
-              await saveSetting('docker.image', nextImage || null);
-              if (nextIdle === '') {
-                await saveSetting('docker.idle-timeout-minutes', null);
-              } else {
-                const minutes = Number(nextIdle);
-                if (
-                  !Number.isInteger(minutes) ||
-                  minutes < 1 ||
-                  minutes > 1440
-                ) {
-                  throw new Error(
-                    'Idle timeout must be a whole number of minutes between 1 and 1440'
-                  );
+              const list = current.map((row) => toStoredHost(row));
+              const ids = new Set<string>();
+              for (const host of list) {
+                if (ids.has(host.id)) {
+                  throw new Error(`"${host.id}" is used by two hosts`);
                 }
-                await saveSetting('docker.idle-timeout-minutes', minutes);
+                ids.add(host.id);
               }
-              setTokenText('');
-              setUrlText(undefined);
-              setImageText(undefined);
-              setIdleText(undefined);
+              // An empty list is not a value: clearing the setting is how a
+              // deployment goes back to Cloudflare alone.
+              await saveSetting('docker.hosts', list.length > 0 ? list : null);
+              setRows(undefined);
               onSaved();
               return undefined;
             })
           }
         >
-          Save Docker host
+          Save hosts
         </button>
-        {token?.configured ? (
-          <button
-            className="button"
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await saveSetting('docker.agent-token', null);
-                onSaved();
-                return 'Token cleared';
-              })
-            }
-          >
-            Clear token
-          </button>
-        ) : null}
       </div>
       <SectionStatus error={error} notice={notice} />
     </section>
   );
+}
+
+/**
+ * One edited row as the setting stores it. The checks here are the ones worth
+ * catching before a round trip; the Worker validates the same shape again.
+ */
+function toStoredHost(row: DockerHostRow): {
+  id: string;
+  label?: string;
+  baseUrl: string;
+  token: string;
+  image?: string;
+  idleTimeoutMinutes?: number;
+} {
+  const id = row.id.trim();
+  if (!HOST_ID_PATTERN.test(id)) {
+    throw new Error(
+      `"${id || 'a host'}" is not a valid id: lowercase letters, digits and dashes, up to 32 characters`
+    );
+  }
+  const baseUrl = row.baseUrl.trim();
+  if (baseUrl === '') {
+    throw new Error(`"${id}" needs an agent URL`);
+  }
+  const token = row.token.trim();
+  if (token === '' && !row.tokenStored) {
+    throw new Error(`"${id}" needs an agent token`);
+  }
+  const idle = row.idleTimeout.trim();
+  let idleTimeoutMinutes: number | undefined;
+  if (idle !== '') {
+    const minutes = Number(idle);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      throw new Error(
+        `"${id}" needs an idle timeout that is a whole number of minutes between 1 and 1440`
+      );
+    }
+    idleTimeoutMinutes = minutes;
+  }
+  const label = row.label.trim();
+  const image = row.image.trim();
+  return {
+    id,
+    ...(label === '' ? {} : { label }),
+    baseUrl,
+    // Blank keeps what is stored: the Worker merges it back by id.
+    token,
+    ...(image === '' ? {} : { image }),
+    ...(idleTimeoutMinutes === undefined ? {} : { idleTimeoutMinutes })
+  };
 }
 
 function PasswordSection() {

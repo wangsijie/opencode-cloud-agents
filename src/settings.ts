@@ -20,10 +20,7 @@ export const SETTING_KEYS = {
   agentsMd: 'opencode.agents-md',
   mcpAuth: 'opencode.mcp-auth',
   gitIdentity: 'git.identity',
-  dockerAgentUrl: 'docker.agent-url',
-  dockerAgentToken: 'docker.agent-token',
-  dockerImage: 'docker.image',
-  dockerIdleTimeoutMinutes: 'docker.idle-timeout-minutes'
+  dockerHosts: 'docker.hosts'
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -91,14 +88,35 @@ export interface GitIdentitySetting {
 }
 
 /**
- * The image the Docker agent runs a session container from when
- * `docker.image` is unset. Built by `agent/session-image/Dockerfile`.
+ * One entry in `docker.hosts`: a box the operator runs the agent on.
+ *
+ * `id` is what a session's provider carries (`docker:<id>`), so it is the one
+ * field that must never change under a live session — the sessions on a host
+ * whose id was edited would look like sessions on a host that is gone. The
+ * label is free to change; it is only what the picker shows.
+ */
+export interface DockerHostSetting {
+  id: string;
+  /** What the composer and the session page call this host. */
+  label?: string;
+  /** Origin only, no trailing path — the client appends protocol routes. */
+  baseUrl: string;
+  token: string;
+  /** Falls back to `DEFAULT_DOCKER_IMAGE`. */
+  image?: string;
+  /** Falls back to `DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES`. */
+  idleTimeoutMinutes?: number;
+}
+
+/**
+ * The image the Docker agent runs a session container from when a host names
+ * no image of its own. Built by `agent/session-image/Dockerfile`.
  */
 export const DEFAULT_DOCKER_IMAGE = 'opencode-session:latest';
 
 /**
  * How long a Docker session may sit idle before the site stops its container,
- * when `docker.idle-timeout-minutes` is unset. Longer than Cloudflare's ten
+ * when the host names no timeout of its own. Longer than Cloudflare's ten
  * minutes because a Docker volume survives the stop and a cold start is cheap.
  */
 export const DEFAULT_DOCKER_IDLE_TIMEOUT_MINUTES = 30;

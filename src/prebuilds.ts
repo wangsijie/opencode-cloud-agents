@@ -107,18 +107,28 @@ export async function deletePrebuildRecord(
 }
 
 /**
- * Forget a repo's run history.
+ * Forget a repo's run history on one host.
  *
  * Deleting a prebuild is how a repository leaves the settings list, and the
  * list is drawn from the registry *plus* any repo whose latest run has not
  * succeeded — so a failed attempt that produced nothing would sit there
- * permanently if its runs outlived the delete.
+ * permanently if its runs outlived the delete. Scoped to the provider like the
+ * registry row it accompanies: the same repository prebuilt on another host
+ * keeps its own history.
  */
 export async function deletePrebuildRuns(
   env: Env,
-  repoKey: string
+  repoKey: string,
+  provider: SessionProvider
 ): Promise<void> {
-  await db(env).delete(prebuildRuns).where(eq(prebuildRuns.repoKey, repoKey));
+  await db(env)
+    .delete(prebuildRuns)
+    .where(
+      and(
+        eq(prebuildRuns.repoKey, repoKey),
+        eq(prebuildRuns.provider, provider)
+      )
+    );
 }
 
 export async function insertPrebuildRun(
@@ -174,8 +184,21 @@ export async function updatePrebuildRun(
 }
 
 /**
- * The newest run per repo — the only history the page shows. One query,
- * newest-first, first row per repo wins.
+ * How a (host, repository) pair is addressed wherever the two have to travel
+ * as one string: the run map below, the JSON object the API serves it as, and
+ * the PrebuildRunner Durable Object's name. Both halves are `[a-z0-9-]` (plus
+ * the provider's own colon), so the slash never appears inside either.
+ */
+export function prebuildKey(
+  provider: SessionProvider,
+  repoKey: string
+): string {
+  return `${provider}/${repoKey}`;
+}
+
+/**
+ * The newest run per repo *per host* — the only history the page shows. One
+ * query, newest-first, first row per pair wins.
  */
 export async function latestPrebuildRuns(
   env: Env
@@ -186,8 +209,9 @@ export async function latestPrebuildRuns(
     .orderBy(desc(prebuildRuns.startedAt));
   const latest = new Map<string, PrebuildRunRecord>();
   for (const row of rows) {
-    if (!latest.has(row.repoKey)) {
-      latest.set(row.repoKey, rowToRun(row));
+    const key = prebuildKey(row.provider as SessionProvider, row.repoKey);
+    if (!latest.has(key)) {
+      latest.set(key, rowToRun(row));
     }
   }
   return latest;

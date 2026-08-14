@@ -3,17 +3,20 @@ import {
   deletePrebuild,
   fetchCatalog,
   fetchPrebuilds,
+  prebuildKey,
   startPrebuild,
   type Catalog,
   type PrebuildRunView,
-  type PrebuildsView
+  type PrebuildsView,
+  type SessionProvider
 } from '../api';
 import { formatBytes, formatDuration, formatRelative } from '../format';
+import { providerLabel } from './ProviderSelect';
 import { RepoSelect } from './RepoSelect';
 
 /**
- * The prebuilds settings section: one row per *prebuilt* repository, plus a
- * picker that adds one.
+ * The prebuilds settings section: one row per *prebuilt* repository, grouped
+ * by the host the prebuild lives on, plus a picker that adds one.
  *
  * A prebuild is a warm workspace copy new sessions of the same repo are
  * seeded from (docs/prebuild-design.md); this section exists to build one by
@@ -24,6 +27,11 @@ import { RepoSelect } from './RepoSelect';
  * into the add control, where it is searchable because that is what the
  * composer's own picker is. While any run is live the whole view polls on a
  * short beat; the expanded row shows the step ladder and the install log tail.
+ *
+ * A prebuild is a volume on one box, so a repository can hold one on every
+ * Docker host and each is its own row: its own build, its own delete. A group
+ * for a host that is no longer configured is still drawn — its rows cannot be
+ * built, but they can be deleted, which is the only way they would ever leave.
  *
  * It fetches its own catalog rather than taking the Hub's: the settings page
  * also runs as the onboarding gate, where there is no Hub above it to ask.
@@ -39,14 +47,24 @@ const STEPS: { key: 'cloneMs' | 'installMs' | 'promoteMs'; label: string }[] = [
   { key: 'promoteMs', label: 'Promote' }
 ];
 
+/** One host's section of the list. */
+interface PrebuildGroup {
+  provider: SessionProvider;
+  label: string;
+  /** False for a host that has been removed from settings since. */
+  configured: boolean;
+  repos: { repoKey: string; displayName: string }[];
+}
+
 export function PrebuildsSection() {
   const [view, setView] = useState<PrebuildsView>();
   const [catalog, setCatalog] = useState<Catalog>();
   const [catalogTried, setCatalogTried] = useState(false);
   const [loadError, setLoadError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  const [busyRepo, setBusyRepo] = useState<string>();
+  const [busyKey, setBusyKey] = useState<string>();
   const [pending, setPending] = useState('');
+  const [pendingHost, setPendingHost] = useState<SessionProvider>();
 
   const load = useCallback(async () => {
     try {
@@ -102,46 +120,78 @@ export function PrebuildsSection() {
     setCatalog(await fetchCatalog(true));
   }, []);
 
-  const dockerAvailable = catalog?.providers.includes('docker') ?? false;
+  const hosts = useMemo(() => view?.hosts ?? [], [view?.hosts]);
+  const dockerAvailable = hosts.length > 0;
+
+  // Which host the add control builds on. Follows the first configured one
+  // until a deliberate pick, which then sticks while that host is still there.
+  useEffect(() => {
+    setPendingHost((current) =>
+      current && hosts.some((host) => host.provider === current)
+        ? current
+        : hosts[0]?.provider
+    );
+  }, [hosts]);
 
   /*
     The rows are the registry, plus whatever a run is currently saying —
     `running` so a first build is watchable from the moment it is added, and
     `failed` so an attempt that produced no prebuild leaves its error on screen
-    instead of disappearing. Catalog order (last-used first) where the repo is
-    still listed; anything else keeps its key as its name, because a prebuild
-    for a repo GitHub stopped listing is still real and still deletable.
+    instead of disappearing. Grouped by host, in the order settings lists them,
+    with any host that has since been removed after those. Catalog order
+    (last-used first) within a group where the repo is still listed; anything
+    else keeps its key as its name, because a prebuild for a repo GitHub
+    stopped listing is still real and still deletable.
   */
-  const rows = useMemo(() => {
-    const keys = new Set<string>();
+  const groups = useMemo<PrebuildGroup[]>(() => {
+    const byProvider = new Map<string, Set<string>>();
+    const add = (provider: string, repoKey: string) => {
+      const existing = byProvider.get(provider);
+      if (existing) {
+        existing.add(repoKey);
+      } else {
+        byProvider.set(provider, new Set([repoKey]));
+      }
+    };
     for (const prebuild of view?.prebuilds ?? []) {
-      keys.add(prebuild.repoKey);
+      add(prebuild.provider, prebuild.repoKey);
     }
-    for (const [repoKey, run] of Object.entries(view?.runs ?? {})) {
+    for (const run of Object.values(view?.runs ?? {})) {
       if (run.status !== 'succeeded') {
-        keys.add(repoKey);
+        add(run.provider, run.repoKey);
       }
     }
-    const listed = (catalog?.repos ?? []).filter((repo) => keys.has(repo.repoKey));
-    const known = new Set(listed.map((repo) => repo.repoKey));
-    const rest = [...keys]
-      .filter((repoKey) => !known.has(repoKey))
-      .sort()
-      .map((repoKey) => ({ repoKey, displayName: repoKey }));
-    return [...listed, ...rest];
-  }, [catalog, view]);
+    const configured = new Map<string, string>(
+      hosts.map((host) => [host.provider, host.label])
+    );
+    const orphaned = [...byProvider.keys()]
+      .filter((provider) => !configured.has(provider))
+      .sort();
+    return [...configured.keys(), ...orphaned]
+      .map((provider) => ({
+        provider: provider as SessionProvider,
+        label: configured.get(provider) ?? providerLabel(provider as SessionProvider),
+        configured: configured.has(provider),
+        repos: orderRepos(byProvider.get(provider) ?? new Set(), catalog)
+      }))
+      .filter((group) => group.configured || group.repos.length > 0);
+  }, [catalog, hosts, view]);
 
-  /** The catalog minus what is already on the list. */
+  /** The catalog minus what the chosen host already has on the list. */
   const addable = useMemo(() => {
-    const shown = new Set(rows.map((row) => row.repoKey));
+    const shown = new Set(
+      groups
+        .find((group) => group.provider === pendingHost)
+        ?.repos.map((row) => row.repoKey) ?? []
+    );
     return (catalog?.repos ?? []).filter((repo) => !shown.has(repo.repoKey));
-  }, [catalog, rows]);
+  }, [catalog, groups, pendingHost]);
 
-  const trigger = async (repoKey: string) => {
-    setBusyRepo(repoKey);
+  const trigger = async (provider: SessionProvider, repoKey: string) => {
+    setBusyKey(prebuildKey(provider, repoKey));
     setActionError(undefined);
     try {
-      await startPrebuild(repoKey);
+      await startPrebuild(repoKey, provider);
       // The row appears from the run this returns, so the pending choice has
       // done its job — clearing it puts the picker back at "Add a repository".
       setPending((current) => (current === repoKey ? '' : current));
@@ -149,25 +199,30 @@ export function PrebuildsSection() {
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusyRepo(undefined);
+      setBusyKey(undefined);
     }
   };
 
-  const remove = async (repoKey: string) => {
-    if (!window.confirm(`Delete the prebuild for ${repoKey}?`)) {
+  const remove = async (provider: SessionProvider, repoKey: string) => {
+    if (!window.confirm(`Delete the prebuild for ${repoKey} on ${providerLabel(provider)}?`)) {
       return;
     }
-    setBusyRepo(repoKey);
+    setBusyKey(prebuildKey(provider, repoKey));
     setActionError(undefined);
     try {
-      await deletePrebuild(repoKey);
+      await deletePrebuild(repoKey, provider);
       await load();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusyRepo(undefined);
+      setBusyKey(undefined);
     }
   };
+
+  const addBusy =
+    pendingHost !== undefined &&
+    pending !== '' &&
+    busyKey === prebuildKey(pendingHost, pending);
 
   return (
     <section className="settings-section">
@@ -175,7 +230,8 @@ export function PrebuildsSection() {
       <p className="muted">
         A prebuild is a warm workspace — checkout, node_modules, package caches
         — that new sessions of the same repository start from instead of an
-        empty volume. Docker provider only for now.
+        empty volume. It is a volume on one machine, so each Docker host keeps
+        its own. Docker provider only for now.
       </p>
 
       {loadError ? (
@@ -189,10 +245,10 @@ export function PrebuildsSection() {
         </div>
       ) : null}
       {actionError ? <p className="banner error">{actionError}</p> : null}
-      {!dockerAvailable ? (
+      {view && !dockerAvailable ? (
         <p className="banner">
-          The Docker sandbox host is not configured, so prebuilds cannot be
-          built. Set it up in the Docker host section first.
+          No Docker sandbox host is configured, so prebuilds cannot be built.
+          Add one in the Docker hosts section first.
         </p>
       ) : null}
 
@@ -200,33 +256,51 @@ export function PrebuildsSection() {
         <p className="muted">Loading…</p>
       ) : (
         <>
-          <div className="prebuild-list">
-            {rows.length === 0 ? (
-              <p className="muted">
-                No prebuilds yet. Pick a repository below to build one.
-              </p>
-            ) : (
-              rows.map((repo) => (
-                <PrebuildRow
-                  key={repo.repoKey}
-                  displayName={repo.displayName}
-                  prebuild={view?.prebuilds.find(
-                    (entry) => entry.repoKey === repo.repoKey
+          {groups.length === 0 ? null : (
+            groups.map((group) => (
+              <div key={group.provider} className="prebuild-group">
+                {/* Named only when there is more than one place a prebuild
+                    could be: with a single host the heading would repeat what
+                    the section already says. */}
+                {groups.length > 1 ? (
+                  <h3>
+                    {group.label}
+                    {group.configured ? '' : ' (removed)'}
+                  </h3>
+                ) : null}
+                <div className="prebuild-list">
+                  {group.repos.length === 0 ? (
+                    <p className="muted">
+                      No prebuilds yet. Pick a repository below to build one.
+                    </p>
+                  ) : (
+                    group.repos.map((repo) => (
+                      <PrebuildRow
+                        key={repo.repoKey}
+                        displayName={repo.displayName}
+                        prebuild={view?.prebuilds.find(
+                          (entry) =>
+                            entry.repoKey === repo.repoKey &&
+                            entry.provider === group.provider
+                        )}
+                        run={view?.runs[prebuildKey(group.provider, repo.repoKey)]}
+                        canBuild={group.configured}
+                        busy={busyKey === prebuildKey(group.provider, repo.repoKey)}
+                        onBuild={() => void trigger(group.provider, repo.repoKey)}
+                        onDelete={() => void remove(group.provider, repo.repoKey)}
+                      />
+                    ))
                   )}
-                  run={view?.runs[repo.repoKey]}
-                  canBuild={dockerAvailable}
-                  busy={busyRepo === repo.repoKey}
-                  onBuild={() => void trigger(repo.repoKey)}
-                  onDelete={() => void remove(repo.repoKey)}
-                />
-              ))
-            )}
-          </div>
+                </div>
+              </div>
+            ))
+          )}
 
           {/*
             Adding is picking a repository and pressing Add: the catalog is a
             long list to scroll and a short one to search, so this is the
-            composer's own picker rather than a second list of rows.
+            composer's own picker rather than a second list of rows. The host
+            comes with it once there is more than one to build on.
           */}
           <div className="prebuild-add">
             <RepoSelect
@@ -235,25 +309,71 @@ export function PrebuildsSection() {
               allowNone={false}
               label="Add a repository"
               loading={!catalogTried}
-              disabled={!dockerAvailable || busyRepo !== undefined}
+              disabled={!dockerAvailable || busyKey !== undefined}
               onChange={setPending}
               onRefresh={refreshCatalog}
             />
+            {hosts.length > 1 ? (
+              <select
+                aria-label="Host to build on"
+                value={pendingHost ?? ''}
+                disabled={busyKey !== undefined}
+                onChange={(event) =>
+                  setPendingHost(event.target.value as SessionProvider)
+                }
+              >
+                {hosts.map((host) => (
+                  <option key={host.provider} value={host.provider}>
+                    {host.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button
               className="button"
               type="button"
               disabled={
-                !dockerAvailable || pending === '' || busyRepo !== undefined
+                !dockerAvailable ||
+                pendingHost === undefined ||
+                pending === '' ||
+                busyKey !== undefined
               }
-              onClick={() => void trigger(pending)}
+              onClick={() => {
+                if (pendingHost) {
+                  void trigger(pendingHost, pending);
+                }
+              }}
             >
-              {busyRepo === pending && pending !== '' ? 'Adding…' : 'Add'}
+              {addBusy ? 'Adding…' : 'Add'}
             </button>
           </div>
         </>
       )}
     </section>
   );
+}
+
+/**
+ * One host's repositories, catalog order (last-used first) where the catalog
+ * still lists them, then the rest by key.
+ */
+function orderRepos(
+  keys: Set<string>,
+  catalog: Catalog | undefined
+): { repoKey: string; displayName: string }[] {
+  const listed = (catalog?.repos ?? []).filter((repo) => keys.has(repo.repoKey));
+  const known = new Set(listed.map((repo) => repo.repoKey));
+  const rest = [...keys]
+    .filter((repoKey) => !known.has(repoKey))
+    .sort()
+    .map((repoKey) => ({ repoKey, displayName: repoKey }));
+  return [
+    ...listed.map((repo) => ({
+      repoKey: repo.repoKey,
+      displayName: repo.displayName
+    })),
+    ...rest
+  ];
 }
 
 function PrebuildRow({
@@ -284,9 +404,9 @@ function PrebuildRow({
           <p className="muted">
             {prebuild ? (
               <>
+                {/* No host here: the group above is headed by it, and with
+                    one host the whole section is about that host. */}
                 built {formatRelative(prebuild.updatedAt)}
-                {' · '}
-                {prebuild.provider}
                 {prebuild.sizeBytes !== undefined
                   ? ` · ${formatBytes(prebuild.sizeBytes)}`
                   : ''}

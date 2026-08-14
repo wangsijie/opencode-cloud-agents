@@ -12,6 +12,7 @@ import { isSafeRepoKey } from './repos.ts';
 import { DEFAULT_DOCKER_IMAGE, SETTING_KEYS } from './settings.ts';
 import type {
   AgentsMdSetting,
+  DockerHostSetting,
   EnvVarSetting,
   GitIdentitySetting,
   SkillSetting,
@@ -390,58 +391,123 @@ const DOCKER_IMAGE_PATTERN =
  * token travels on every call — so the endpoint is an https origin, nothing
  * else. A path here would silently drop once the client appends its own.
  */
-function validateDockerAgentUrl(value: unknown): string[] {
+/**
+ * A host id becomes the tail of every provider value on it (`docker:<id>`),
+ * which is stored on session rows — so it is spelled like a path segment and
+ * kept short.
+ */
+const DOCKER_HOST_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+function validateDockerAgentUrl(value: unknown, where: string): string[] {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    return ['The agent URL must be a non-empty string'];
+    return [`${where}: the agent URL must be a non-empty string`];
   }
   let url: URL;
   try {
     url = new URL(value.trim());
   } catch {
-    return [`"${value}" is not a URL`];
+    return [`${where}: "${value}" is not a URL`];
   }
   const errors: string[] = [];
   if (url.protocol !== 'https:') {
-    errors.push('The agent URL must use https — the bearer token rides on every request');
+    errors.push(
+      `${where}: the agent URL must use https — the bearer token rides on every request`
+    );
   }
   if (url.username !== '' || url.password !== '') {
-    errors.push('The agent URL must not carry credentials');
+    errors.push(`${where}: the agent URL must not carry credentials`);
   }
   if ((url.pathname !== '' && url.pathname !== '/') || url.search !== '' || url.hash !== '') {
-    errors.push('The agent URL must be an origin only, with no path or query');
+    errors.push(`${where}: the agent URL must be an origin only, with no path or query`);
   }
   return errors;
 }
 
-function validateDockerAgentToken(value: unknown): string[] {
+function validateDockerAgentToken(value: unknown, where: string): string[] {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    return ['The agent token must be a non-empty string'];
+    return [`${where}: the agent token must be a non-empty string`];
   }
   if (value !== value.trim()) {
-    return ['The agent token must not have leading or trailing whitespace'];
+    return [`${where}: the agent token must not have leading or trailing whitespace`];
   }
   return [];
 }
 
-function validateDockerImage(value: unknown): string[] {
+function validateDockerImage(value: unknown, where: string): string[] {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    return ['The image must be a non-empty string'];
+    return [`${where}: the image must be a non-empty string`];
   }
   if (!DOCKER_IMAGE_PATTERN.test(value)) {
-    return [`"${value}" is not a Docker image reference (for example "${DEFAULT_DOCKER_IMAGE}")`];
+    return [
+      `${where}: "${value}" is not a Docker image reference (for example "${DEFAULT_DOCKER_IMAGE}")`
+    ];
   }
   return [];
 }
 
 /** Whole minutes, 1–24h. Stored as a JSON number. */
-function validateDockerIdleTimeoutMinutes(value: unknown): string[] {
+function validateDockerIdleTimeoutMinutes(value: unknown, where: string): string[] {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
-    return ['Idle timeout must be a whole number of minutes'];
+    return [`${where}: idle timeout must be a whole number of minutes`];
   }
   if (value < 1 || value > 1440) {
-    return ['Idle timeout must be between 1 and 1440 minutes'];
+    return [`${where}: idle timeout must be between 1 and 1440 minutes`];
   }
   return [];
+}
+
+/**
+ * `docker.hosts`: every box the operator runs the agent on.
+ *
+ * The list is the provider catalog, so its order is the composer's order and
+ * the first entry is what a session with no explicit provider lands on. Ids
+ * must be unique and stable — a session stores `docker:<id>` and has no other
+ * way back to its host — and both halves of an address are required per entry,
+ * because a host with a URL and no token would only ever 401.
+ *
+ * An empty list is refused rather than stored: clearing the setting is how a
+ * deployment goes back to Cloudflare alone, and `[]` would be a second, silent
+ * spelling of the same thing.
+ */
+function validateDockerHosts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return ['Docker hosts must be a non-empty list; clear the setting to remove them all'];
+  }
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  value.forEach((entry, index) => {
+    const host = entry as Partial<DockerHostSetting> | null;
+    const where = `Host ${index + 1}`;
+    if (typeof host !== 'object' || host === null || Array.isArray(host)) {
+      errors.push(`${where}: each host must be an object`);
+      return;
+    }
+    if (typeof host.id !== 'string' || !DOCKER_HOST_ID_PATTERN.test(host.id)) {
+      errors.push(
+        `${where}: the id must be 1–32 characters of lowercase letters, digits and dashes`
+      );
+    } else if (seen.has(host.id)) {
+      errors.push(`${where}: "${host.id}" is used by another host; ids must be unique`);
+    } else {
+      seen.add(host.id);
+    }
+    if (host.label !== undefined) {
+      if (typeof host.label !== 'string' || host.label.trim().length === 0) {
+        errors.push(`${where}: the label must be a non-empty string when set`);
+      } else if (host.label.length > 60) {
+        errors.push(`${where}: the label must be 60 characters or fewer`);
+      }
+    }
+    errors.push(...validateDockerAgentUrl(host.baseUrl, where));
+    errors.push(...validateDockerAgentToken(host.token, where));
+    if (host.image !== undefined) {
+      errors.push(...validateDockerImage(host.image, where));
+    }
+    if (host.idleTimeoutMinutes !== undefined) {
+      errors.push(...validateDockerIdleTimeoutMinutes(host.idleTimeoutMinutes, where));
+    }
+  });
+  return errors;
 }
 
 /**
@@ -514,39 +580,17 @@ export const SETTING_DESCRIPTORS: readonly SettingDescriptor[] = [
     required: false,
     validate: validateGitIdentity
   },
-  // The Docker sandbox provider is opt-in: with these unset the site only
-  // offers Cloudflare containers, which is the default deployment.
+  // The Docker sandbox provider is opt-in: with this unset the site only
+  // offers Cloudflare containers, which is the default deployment. Partial
+  // exposure because the list reads back for editing but each host's bearer
+  // token does not — the same rule env var values live under.
   {
-    key: SETTING_KEYS.dockerAgentUrl,
+    key: SETTING_KEYS.dockerHosts,
     group: 'docker',
-    label: 'Docker agent URL',
-    exposure: 'plain',
+    label: 'Docker hosts',
+    exposure: 'partial',
     required: false,
-    validate: validateDockerAgentUrl
-  },
-  {
-    key: SETTING_KEYS.dockerAgentToken,
-    group: 'docker',
-    label: 'Docker agent token',
-    exposure: 'secret',
-    required: false,
-    validate: validateDockerAgentToken
-  },
-  {
-    key: SETTING_KEYS.dockerImage,
-    group: 'docker',
-    label: 'Docker session image',
-    exposure: 'plain',
-    required: false,
-    validate: validateDockerImage
-  },
-  {
-    key: SETTING_KEYS.dockerIdleTimeoutMinutes,
-    group: 'docker',
-    label: 'Docker idle timeout (minutes)',
-    exposure: 'plain',
-    required: false,
-    validate: validateDockerIdleTimeoutMinutes
+    validate: validateDockerHosts
   }
 ];
 

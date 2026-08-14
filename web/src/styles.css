@@ -1459,7 +1459,8 @@ summary:focus-visible {
   gap: 8px;
 }
 
-.settings-skill {
+.settings-skill,
+.settings-host {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2734,6 +2735,13 @@ input.question-custom:focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* One host's rows, headed by its name once there is more than one host. */
+.prebuild-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .prebuild-add {

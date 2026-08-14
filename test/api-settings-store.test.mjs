@@ -190,12 +190,15 @@ test('the settings list reports configured keys and hides secret values', async 
 
 test('an optional setting can be cleared; a required one cannot', async () => {
   const env = createTestEnv();
-  await putSetting(env, SETTING_KEYS.dockerImage, { value: 'opencode:test' });
-  assert.equal(await readSetting(env, SETTING_KEYS.dockerImage), 'opencode:test');
+  const hosts = [
+    { id: 'mini', baseUrl: 'https://mini.example.com', token: 'tok' }
+  ];
+  await putSetting(env, SETTING_KEYS.dockerHosts, { value: hosts });
+  assert.deepEqual(await readSetting(env, SETTING_KEYS.dockerHosts), hosts);
 
-  const cleared = await putSetting(env, SETTING_KEYS.dockerImage, { value: null });
+  const cleared = await putSetting(env, SETTING_KEYS.dockerHosts, { value: null });
   assert.equal(cleared.status, 200);
-  assert.equal(await readSetting(env, SETTING_KEYS.dockerImage), undefined);
+  assert.equal(await readSetting(env, SETTING_KEYS.dockerHosts), undefined);
 
   await putSetting(env, SETTING_KEYS.githubToken, { value: 'ghp_secret_value' });
   const refused = await putSetting(env, SETTING_KEYS.githubToken, { value: null });

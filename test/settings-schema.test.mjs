@@ -254,82 +254,102 @@ test('the ssh key descriptor wants an OpenSSH pair', () => {
   assert.ok(ssh.validate('string').length > 0)
 })
 
+const host = (overrides = {}) => ({
+  id: 'mini',
+  baseUrl: 'https://sandbox.example.com',
+  token: 's3cret-token',
+  ...overrides
+})
+
+const hosts = () => findDescriptor('docker.hosts')
+
+test('a docker host needs an id, an https origin and a token', () => {
+  assert.deepEqual(hosts().validate([host()]), [])
+  assert.deepEqual(
+    hosts().validate([host({ label: 'Mac mini', image: 'ghcr.io/acme/s:v1', idleTimeoutMinutes: 90 })]),
+    []
+  )
+  // Both halves of the address, or the agent would only ever 401.
+  assert.ok(hosts().validate([host({ token: '' })]).length > 0)
+  assert.ok(hosts().validate([host({ baseUrl: '' })]).length > 0)
+  // An empty list is not a value: clearing the setting removes the provider.
+  assert.ok(hosts().validate([]).length > 0)
+  assert.ok(hosts().validate({}).length > 0)
+  assert.ok(hosts().validate(['nope']).length > 0)
+})
+
+test('a host id is a short lowercase slug, and unique within the list', () => {
+  assert.deepEqual(hosts().validate([host({ id: 'mac-mini-2' })]), [])
+  assert.ok(hosts().validate([host({ id: 'Mac Mini' })]).length > 0)
+  assert.ok(hosts().validate([host({ id: '-leading' })]).length > 0)
+  assert.ok(hosts().validate([host({ id: '' })]).length > 0)
+  assert.ok(hosts().validate([host({ id: 'a'.repeat(33) })]).length > 0)
+  // Two hosts under one id would make `docker:<id>` ambiguous, and a session
+  // has no other way back to its host.
+  assert.ok(
+    hosts()
+      .validate([host(), host({ baseUrl: 'https://other.example.com' })])
+      .some((error) => error.includes('unique'))
+  )
+})
+
 test('the docker agent URL is an https origin with nothing appended', () => {
-  const url = findDescriptor('docker.agent-url')
-  assert.deepEqual(url.validate('https://sandbox.example.com'), [])
-  assert.deepEqual(url.validate('https://sandbox.example.com/'), [])
-  assert.deepEqual(url.validate('https://sandbox.example.com:8443'), [])
+  assert.deepEqual(hosts().validate([host({ baseUrl: 'https://sandbox.example.com/' })]), [])
+  assert.deepEqual(hosts().validate([host({ baseUrl: 'https://sandbox.example.com:8443' })]), [])
   // The bearer token rides on every call, so plaintext is out.
   assert.ok(
-    url.validate('http://sandbox.example.com').some((error) => error.includes('https'))
+    hosts()
+      .validate([host({ baseUrl: 'http://sandbox.example.com' })])
+      .some((error) => error.includes('https'))
   )
   // A path would be dropped once the client appends its own routes.
   assert.ok(
-    url.validate('https://sandbox.example.com/agent').some((error) => error.includes('origin'))
+    hosts()
+      .validate([host({ baseUrl: 'https://sandbox.example.com/agent' })])
+      .some((error) => error.includes('origin'))
   )
-  assert.ok(url.validate('https://sandbox.example.com?a=1').length > 0)
-  assert.ok(url.validate('https://user:pw@sandbox.example.com').length > 0)
-  assert.ok(url.validate('not a url').length > 0)
-  assert.ok(url.validate('').length > 0)
-  assert.ok(url.validate(null).length > 0)
+  assert.ok(hosts().validate([host({ baseUrl: 'https://sandbox.example.com?a=1' })]).length > 0)
+  assert.ok(hosts().validate([host({ baseUrl: 'https://user:pw@sandbox.example.com' })]).length > 0)
+  assert.ok(hosts().validate([host({ baseUrl: 'not a url' })]).length > 0)
+  assert.ok(hosts().validate([host({ baseUrl: null })]).length > 0)
 })
 
 test('the docker agent token is a non-empty untrimmed-free string', () => {
-  const token = findDescriptor('docker.agent-token')
-  assert.deepEqual(token.validate('s3cret-token'), [])
-  assert.ok(token.validate(' s3cret ').length > 0)
-  assert.ok(token.validate('').length > 0)
-  assert.ok(token.validate(42).length > 0)
+  assert.ok(hosts().validate([host({ token: ' s3cret ' })]).length > 0)
+  assert.ok(hosts().validate([host({ token: 42 })]).length > 0)
 })
 
 test('the docker image is a Docker reference', () => {
-  const image = findDescriptor('docker.image')
-  assert.deepEqual(image.validate('opencode-session:latest'), [])
-  assert.deepEqual(image.validate('ghcr.io/acme/opencode-session:v1.2.3'), [])
+  assert.deepEqual(hosts().validate([host({ image: 'opencode-session:latest' })]), [])
+  assert.deepEqual(hosts().validate([host({ image: 'ghcr.io/acme/opencode-session:v1.2.3' })]), [])
   assert.deepEqual(
-    image.validate(
-      'ghcr.io/acme/opencode-session@sha256:' + 'a'.repeat(64)
-    ),
+    hosts().validate([
+      host({ image: 'ghcr.io/acme/opencode-session@sha256:' + 'a'.repeat(64) })
+    ]),
     []
   )
   // Nothing that would read as a flag or a shell word.
-  assert.ok(image.validate('-rm').length > 0)
-  assert.ok(image.validate('image latest').length > 0)
-  assert.ok(image.validate('image;rm -rf /').length > 0)
-  assert.ok(image.validate('').length > 0)
+  assert.ok(hosts().validate([host({ image: '-rm' })]).length > 0)
+  assert.ok(hosts().validate([host({ image: 'image latest' })]).length > 0)
+  assert.ok(hosts().validate([host({ image: 'image;rm -rf /' })]).length > 0)
+  assert.ok(hosts().validate([host({ image: '' })]).length > 0)
 })
 
 test('the docker idle timeout is whole minutes in 1–1440', () => {
-  const idle = findDescriptor('docker.idle-timeout-minutes')
-  assert.deepEqual(idle.validate(30), [])
-  assert.deepEqual(idle.validate(1), [])
-  assert.deepEqual(idle.validate(1440), [])
-  assert.ok(idle.validate(0).length > 0)
-  assert.ok(idle.validate(1441).length > 0)
-  assert.ok(idle.validate(30.5).length > 0)
-  assert.ok(idle.validate('30').length > 0)
-  assert.ok(idle.validate(null).length > 0)
+  assert.deepEqual(hosts().validate([host({ idleTimeoutMinutes: 30 })]), [])
+  assert.deepEqual(hosts().validate([host({ idleTimeoutMinutes: 1 })]), [])
+  assert.deepEqual(hosts().validate([host({ idleTimeoutMinutes: 1440 })]), [])
+  assert.ok(hosts().validate([host({ idleTimeoutMinutes: 0 })]).length > 0)
+  assert.ok(hosts().validate([host({ idleTimeoutMinutes: 1441 })]).length > 0)
+  assert.ok(hosts().validate([host({ idleTimeoutMinutes: 30.5 })]).length > 0)
+  assert.ok(hosts().validate([host({ idleTimeoutMinutes: '30' })]).length > 0)
 })
 
-test('the docker provider settings are all optional', () => {
-  for (const key of [
-    'docker.agent-url',
-    'docker.agent-token',
-    'docker.image',
-    'docker.idle-timeout-minutes'
-  ]) {
-    const descriptor = findDescriptor(key)
-    assert.equal(descriptor.group, 'docker')
-    assert.equal(descriptor.required, false)
-  }
-  // The token never reads back; the other three do, so they can be edited.
-  assert.equal(findDescriptor('docker.agent-token').exposure, 'secret')
-  assert.equal(findDescriptor('docker.agent-url').exposure, 'plain')
-  assert.equal(findDescriptor('docker.image').exposure, 'plain')
-  assert.equal(
-    findDescriptor('docker.idle-timeout-minutes').exposure,
-    'plain'
-  )
+test('the docker host list is optional and reads back without its tokens', () => {
+  assert.equal(hosts().group, 'docker')
+  assert.equal(hosts().required, false)
+  // Partial: the list is editable, each token is not.
+  assert.equal(hosts().exposure, 'partial')
 })
 
 test('the MCP auth store is an optional write-only object of objects', () => {

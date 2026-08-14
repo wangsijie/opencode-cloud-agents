@@ -43,27 +43,27 @@ test('reading a key that was never written is undefined', async () => {
 
 test('writing the same key twice replaces the value, never adds a row', async () => {
   const env = createTestEnv();
-  await writeSetting(env, SETTING_KEYS.dockerImage, 'first:latest');
-  await writeSetting(env, SETTING_KEYS.dockerImage, 'second:latest');
+  await writeSetting(env, SETTING_KEYS.gitIdentity, 'first:latest');
+  await writeSetting(env, SETTING_KEYS.gitIdentity, 'second:latest');
 
-  assert.equal(await readSetting(env, SETTING_KEYS.dockerImage), 'second:latest');
+  assert.equal(await readSetting(env, SETTING_KEYS.gitIdentity), 'second:latest');
   const rows = await env.DB.prepare(
     'SELECT key FROM settings WHERE key = ?1'
   )
-    .bind(SETTING_KEYS.dockerImage)
+    .bind(SETTING_KEYS.gitIdentity)
     .all();
   assert.equal(rows.results.length, 1);
 });
 
 test('the upsert moves updated_at forward', async () => {
   const env = createTestEnv();
-  await writeSetting(env, SETTING_KEYS.dockerImage, 'first:latest');
-  const first = await readSettingRow(env, SETTING_KEYS.dockerImage);
+  await writeSetting(env, SETTING_KEYS.gitIdentity, 'first:latest');
+  const first = await readSettingRow(env, SETTING_KEYS.gitIdentity);
   assert.ok(first);
 
   await new Promise((resolve) => setTimeout(resolve, 2));
-  await writeSetting(env, SETTING_KEYS.dockerImage, 'second:latest');
-  const second = await readSettingRow(env, SETTING_KEYS.dockerImage);
+  await writeSetting(env, SETTING_KEYS.gitIdentity, 'second:latest');
+  const second = await readSettingRow(env, SETTING_KEYS.gitIdentity);
   assert.ok(second);
 
   assert.equal(second.value, '"second:latest"');
@@ -120,9 +120,9 @@ test('null and false survive the round trip as themselves', async () => {
 test('keys are independent of one another', async () => {
   const env = createTestEnv();
   await writeSetting(env, SETTING_KEYS.githubToken, 'token');
-  await writeSetting(env, SETTING_KEYS.dockerAgentToken, 'agent');
+  await writeSetting(env, SETTING_KEYS.dockerHosts, 'agent');
   await deleteSetting(env, SETTING_KEYS.githubToken);
 
   assert.equal(await readSetting(env, SETTING_KEYS.githubToken), undefined);
-  assert.equal(await readSetting(env, SETTING_KEYS.dockerAgentToken), 'agent');
+  assert.equal(await readSetting(env, SETTING_KEYS.dockerHosts), 'agent');
 });

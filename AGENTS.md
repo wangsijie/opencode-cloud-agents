@@ -318,9 +318,22 @@ fire) were only ever visible there.
 A session's provider is chosen when it is created and stored on both the Hub row
 and the `Sandbox` identity; `resolveHostClient` turns it into a transport — the
 service binding for `cloudflare`, the operator's origin plus bearer for
-`docker`. The client is cached in the object for a minute rather than forever,
-because the Docker agent's URL, token and image are settings that can change
-under a live session.
+`docker:<id>`. The client is cached in the object for a minute rather than
+forever, because a Docker host's URL, token and image are settings that can
+change under a live session.
+
+There can be several Docker hosts, so the provider names which one. The stored
+`docker.hosts` list is the catalog (`src/sandbox-providers.ts` is the only
+module that reads it), each entry becoming the provider `docker:<id>`, and its
+order is the composer's preference order. Two things follow from an id being
+written onto session rows: it can never be edited, and a session whose host has
+left the list fails its wake by name rather than falling back onto another box —
+the workspace is a volume on one machine and does not move.
+
+Bare `docker` is the pre-multi-host spelling, still on every session created
+before `migrations/0009_docker_hosts.sql`. It resolves to the *first* configured
+host, which is exactly why that migration puts the old flat settings there as
+id `default`.
 
 What the orchestration branches on is `supportsSnapshots`, never the provider
 name. Cloudflare containers are ephemeral, so the workspace only survives as an
