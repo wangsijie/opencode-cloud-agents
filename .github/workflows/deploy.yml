@@ -384,13 +384,17 @@ jobs:
       # `--delete` is what makes the box match the commit rather than accumulate
       # whatever every past deploy left behind. It is scoped to the two
       # directories the agent owns; nothing else on the box is touched.
+      #
+      # `--no-owner --no-group` because `-a` would otherwise carry the runner's
+      # numeric uid onto a box that logs in as root, leaving the sources of a
+      # root service owned by whichever local account happens to hold that id.
       - name: Sync the agent
         if: steps.affected.outputs.agent == 'true'
         run: |
           set -euo pipefail
           ssh sandbox "mkdir -p ${DEPLOY_DIR}/agent ${DEPLOY_DIR}/docker/ssh"
-          rsync -az --delete agent/ "sandbox:${DEPLOY_DIR}/agent/"
-          rsync -az --delete docker/ssh/ "sandbox:${DEPLOY_DIR}/docker/ssh/"
+          rsync -az --delete --no-owner --no-group agent/ "sandbox:${DEPLOY_DIR}/agent/"
+          rsync -az --delete --no-owner --no-group docker/ssh/ "sandbox:${DEPLOY_DIR}/docker/ssh/"
 
       # Docker Desktop writes `credsStore: desktop` into ~/.docker/config.json,
       # so a build that has to pull the base image needs its credential helper
