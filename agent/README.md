@@ -99,37 +99,21 @@ one token shared between two boxes would mean rotating it on both at once.
 
 ### 3. Run it as a service
 
-Two boxes, two init systems. On Linux, copy
+Copy the file for the box's init system and start it:
 [`systemd/opencode-sandbox-agent.service`](systemd/opencode-sandbox-agent.service)
-— it expects the sources at `/srv/opencode-cloud` and the token at
-`/root/.config/opencode-agent/token`:
+on Linux (sources at `/srv/opencode-cloud`, `journalctl -u
+opencode-sandbox-agent`), or
+[`launchd/io.opencode.sandbox-agent.plist`](launchd/io.opencode.sandbox-agent.plist)
+on macOS, where the paths need replacing and it must be a *user* agent because
+Docker Desktop runs as the logged-in user. Both files carry their own install
+commands and the reasoning behind their settings.
 
-```bash
-install -m 644 agent/systemd/opencode-sandbox-agent.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now opencode-sandbox-agent
-journalctl -u opencode-sandbox-agent -f
-```
+That difference is the one that bites: a Mac mini needs automatic login and
+"start up automatically after a power failure" enabled, or the first reboot
+takes every session with it. A Linux box needs nobody logged in at all.
 
-The Docker daemon there is the system's, so the agent runs as an ordinary
-system service and the box needs nobody logged in — which is the one real
-operational difference from the mini below.
-
-On macOS, copy [`launchd/io.opencode.sandbox-agent.plist`](launchd/io.opencode.sandbox-agent.plist),
-replace `USERNAME` and the paths, then:
-
-```bash
-cp agent/launchd/io.opencode.sandbox-agent.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.opencode.sandbox-agent.plist
-launchctl kickstart -p gui/$(id -u)/io.opencode.sandbox-agent
-tail -f ~/Library/Logs/opencode-sandbox-agent.log
-```
-
-Two things about a Mac mini as a session host. Docker Desktop needs a logged-in
-GUI session, so enable automatic login and "start up automatically after a power
-failure" — otherwise the first reboot takes every session with it. And restarting
-the *agent* touches no container: sessions keep running and the site reconnects.
-The second is true of both init systems and is what makes a deploy cheap.
+Restarting the *agent* touches no container on either — sessions keep running
+and the site reconnects — which is what makes a deploy cheap.
 
 One thing about a Linux box: Ubuntu's `docker.io` package ships without
 BuildKit, and the image build needs it — `COPY --chmod` fails with "the --chmod
@@ -150,43 +134,19 @@ Environment variables the job reads:
 ### 4. Put a TLS terminator in front
 
 The agent speaks plain HTTP on loopback; the terminator owns TLS and the public
-name. The only configuration that matters is the one that keeps streams alive.
+name. [`nginx/opencode-sandbox-agent.conf`](nginx/opencode-sandbox-agent.conf)
+is the one to install if the box has nginx and certbot — replace `SERVER_NAME`,
+enable it, then `certbot --nginx -d <name>`, which rewrites the file with the
+TLS lines and installs its own renewal timer. Point the name straight at the
+box, not through a proxy that would answer the HTTP-01 challenge itself.
 
-With nginx and certbot, which is what a Linux box already has, install
-[`nginx/opencode-sandbox-agent.conf`](nginx/opencode-sandbox-agent.conf) — the
-comments in it say which directives are load-bearing and why:
-
-```bash
-sed "s/SERVER_NAME/sandbox.example.com/" agent/nginx/opencode-sandbox-agent.conf \
-  > /etc/nginx/sites-available/opencode-sandbox-agent
-ln -sf ../sites-available/opencode-sandbox-agent /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
-certbot --nginx -d sandbox.example.com
-```
-
-Certbot rewrites the file in place with the TLS lines and installs its own
-renewal timer. Point the name at the box's address directly, not through a
-proxy that would answer the HTTP-01 challenge itself.
-
-With Caddy the same thing is:
-
-```caddyfile
-sandbox.example.com {
-	reverse_proxy 127.0.0.1:8787 {
-		# /sessions/:id/proxy/event is an SSE stream that can be silent for
-		# hours between turns and must arrive frame by frame. Both halves of
-		# this are load-bearing: -1 disables response buffering, and the zero
-		# timeouts stop Caddy reaping an idle connection.
-		flush_interval -1
-		transport http {
-			read_timeout 0
-			write_timeout 0
-			dial_timeout 10s
-		}
-	}
-}
-```
+Whatever terminates TLS, the settings that matter are the ones that keep a
+stream alive: no response buffering, and no idle timeout short enough to reap
+one. `/sessions/:id/proxy/event` is an SSE stream the site's transcript mirror
+lives on; it can be silent for hours between turns and must arrive frame by
+frame. In Caddy that is `flush_interval -1` plus zero `read_timeout` and
+`write_timeout` on the `http` transport; the nginx file says the same thing in
+its own words, with the reasoning in comments.
 
 A buffered or reaped stream does not fail loudly. It shows up as a session that
 keeps forgetting it was listening — the site reconnects, the mirror falls back
