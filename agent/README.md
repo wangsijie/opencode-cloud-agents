@@ -6,6 +6,12 @@ that runs session containers on a Mac mini (or any Linux box) beside a Docker
 daemon, and answers the same HTTP API the Cloudflare host worker in [`host/`](../host)
 answers.
 
+The same agent runs on every box the operator has. Nothing in here knows about
+the others: a host is one entry in the site's `docker.hosts` setting, with its
+own name, its own token and its own volumes, and a session that lands on it
+stays on it. Setting up a second box is this file from the top, with a
+different id at step 5.
+
 It is a *primitive server*. It holds no session state, no credentials at rest,
 and no business logic — the site worker owns the runtime gate, the epoch, the
 transcript mirror and every lifecycle decision. Two files:
@@ -86,11 +92,30 @@ chmod 600 ~/.config/opencode-agent/token
 
 The agent reads `OC_AGENT_TOKEN` or, preferably, `OC_AGENT_TOKEN_FILE`: a token
 in an environment variable is visible to anything that can read the process
-table or `launchctl procinfo`.
+table, `launchctl procinfo` or `systemctl show`.
 
-### 3. Run it under launchd
+Each box gets its own token. They are per-host entries in the same setting, and
+one token shared between two boxes would mean rotating it on both at once.
 
-Copy [`launchd/io.opencode.sandbox-agent.plist`](launchd/io.opencode.sandbox-agent.plist),
+### 3. Run it as a service
+
+Two boxes, two init systems. On Linux, copy
+[`systemd/opencode-sandbox-agent.service`](systemd/opencode-sandbox-agent.service)
+— it expects the sources at `/srv/opencode-cloud` and the token at
+`/root/.config/opencode-agent/token`:
+
+```bash
+install -m 644 agent/systemd/opencode-sandbox-agent.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now opencode-sandbox-agent
+journalctl -u opencode-sandbox-agent -f
+```
+
+The Docker daemon there is the system's, so the agent runs as an ordinary
+system service and the box needs nobody logged in — which is the one real
+operational difference from the mini below.
+
+On macOS, copy [`launchd/io.opencode.sandbox-agent.plist`](launchd/io.opencode.sandbox-agent.plist),
 replace `USERNAME` and the paths, then:
 
 ```bash
@@ -104,6 +129,12 @@ Two things about a Mac mini as a session host. Docker Desktop needs a logged-in
 GUI session, so enable automatic login and "start up automatically after a power
 failure" — otherwise the first reboot takes every session with it. And restarting
 the *agent* touches no container: sessions keep running and the site reconnects.
+The second is true of both init systems and is what makes a deploy cheap.
+
+One thing about a Linux box: Ubuntu's `docker.io` package ships without
+BuildKit, and the image build needs it — `COPY --chmod` fails with "the --chmod
+option requires BuildKit" halfway through. `apt-get install docker-buildx` is
+the whole fix.
 
 Environment variables the job reads:
 
@@ -116,10 +147,29 @@ Environment variables the job reads:
 | `OC_AGENT_IMAGE` | `opencode-session:latest` | used when the site names no image |
 | `OC_AGENT_DOCKER` | `docker` | path to the CLI, for a launchd PATH that lacks it |
 
-### 4. Put Caddy in front
+### 4. Put a TLS terminator in front
 
-The agent speaks plain HTTP on loopback; Caddy terminates TLS. The only
-configuration that matters is the one that keeps streams alive:
+The agent speaks plain HTTP on loopback; the terminator owns TLS and the public
+name. The only configuration that matters is the one that keeps streams alive.
+
+With nginx and certbot, which is what a Linux box already has, install
+[`nginx/opencode-sandbox-agent.conf`](nginx/opencode-sandbox-agent.conf) — the
+comments in it say which directives are load-bearing and why:
+
+```bash
+sed "s/SERVER_NAME/sandbox.example.com/" agent/nginx/opencode-sandbox-agent.conf \
+  > /etc/nginx/sites-available/opencode-sandbox-agent
+ln -sf ../sites-available/opencode-sandbox-agent /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
+certbot --nginx -d sandbox.example.com
+```
+
+Certbot rewrites the file in place with the TLS lines and installs its own
+renewal timer. Point the name at the box's address directly, not through a
+proxy that would answer the HTTP-01 challenge itself.
+
+With Caddy the same thing is:
 
 ```caddyfile
 sandbox.example.com {

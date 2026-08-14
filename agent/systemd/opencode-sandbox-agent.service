@@ -1,0 +1,49 @@
+# systemd unit for the Docker sandbox agent, for a Linux box.
+#
+# The launchd job beside this one is the Mac mini's, where Docker Desktop runs
+# as the logged-in user and the agent therefore has to be a *user* agent. On
+# Linux the daemon is the system's, so this is an ordinary system service and
+# the box needs nobody logged in — which is the whole reason a Linux host does
+# not need automatic login enabled to survive a reboot.
+#
+# It runs as root because that is who can reach the Docker socket. Membership
+# of the `docker` group is the alternative and is not actually a smaller
+# privilege: anything that can talk to the daemon can start a container that
+# mounts the host filesystem.
+#
+#   install -m 644 agent/systemd/opencode-sandbox-agent.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now opencode-sandbox-agent
+#   journalctl -u opencode-sandbox-agent -f
+#
+# The token is read from a file rather than set here: this unit is world
+# readable, and a token in Environment= is also visible in `systemctl show`.
+# Write it with `chmod 600` instead (see README.md).
+
+[Unit]
+Description=OpenCode sandbox agent
+Documentation=https://github.com/wangsijie/opencode-cloud-agents/blob/master/agent/README.md
+# The agent shells out to `docker` on nearly every request, so it has nothing
+# to do before the daemon is up. It does not fail if the daemon goes away
+# afterwards — requests error, the site retries — so this is Wants, not
+# Requires: a docker restart must not take the agent down with it.
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /srv/opencode-cloud/agent/server.mjs
+WorkingDirectory=/srv/opencode-cloud
+Environment=OC_AGENT_TOKEN_FILE=/root/.config/opencode-agent/token
+# Loopback only: TLS and the public name belong to the terminator in front.
+Environment=OC_AGENT_HOST=127.0.0.1
+Environment=OC_AGENT_PORT=8787
+Environment=OC_AGENT_IMAGE=opencode-session:latest
+
+# Restarting the agent does not touch a container: sessions keep running and
+# the site reconnects. Only a crash loop is worth backing off from.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
