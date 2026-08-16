@@ -51,9 +51,11 @@ stopped.
 
 - **Node 20+** (`node --version`) — the agent is plain ESM with no dependencies
   and no install step.
-- **Docker** with a daemon the agent's user can reach (`docker version`). On
-  macOS that is Docker Desktop, which runs as the logged-in user — which is why
-  the agent is a launchd *user agent* rather than a daemon.
+- **Docker** with a daemon the agent's user can reach (`docker version`). The
+  agent only ever spawns the `docker` CLI, so any engine that provides one will
+  do — Docker Desktop, OrbStack, Colima. On macOS all of them run as the
+  logged-in user rather than as a root daemon, which is why the agent is a
+  launchd *user agent*.
 - **The session image**, built from this repository (below).
 - A public HTTPS front — the agent binds `127.0.0.1` and expects a TLS
   terminator with a real certificate in front of it.
@@ -74,10 +76,17 @@ pinned `known_hosts` come from [`docker/ssh/`](../docker/ssh):
 docker build -f agent/session-image/Dockerfile -t opencode-session:latest .
 ```
 
-On macOS, build it over SSH with `/Applications/Docker.app/Contents/Resources/bin`
-on `PATH`. Docker Desktop sets `credsStore: desktop`, so a build that has to pull
-a base image dies on a missing `docker-credential-desktop` — a login shell finds
-the helper, a CI `ssh host 'docker build …'` does not.
+On macOS, build it over SSH with the engine's CLI directory on `PATH`:
+`ssh host 'docker build …'` gets `/usr/bin:/bin:/usr/sbin:/sbin` and nothing
+else, so a build that works in a login shell fails there with "command not
+found". OrbStack installs to `/usr/local/bin`; Docker Desktop keeps its own copy
+in `/Applications/Docker.app/Contents/Resources/bin`.
+
+Check `~/.docker/config.json` on the same box. A `credsStore` naming a helper
+that is not installed fails any build that has to pull, with an opaque "error
+getting credentials" — and uninstalling Docker Desktop leaves exactly that
+behind, rewriting the key to `osxkeychain` while removing the binary. With no
+`auths` entries the whole key is unnecessary; deleting it is the fix.
 
 The image carries no credentials. Every secret — the SSH key pair, the `gh`
 login, git identity, environment variables, OpenCode skills — lives in the
@@ -110,7 +119,7 @@ on Linux (sources at `/srv/opencode-cloud`, `journalctl -u
 opencode-sandbox-agent`), or
 [`launchd/io.opencode.sandbox-agent.plist`](launchd/io.opencode.sandbox-agent.plist)
 on macOS, where the paths need replacing and it must be a *user* agent because
-Docker Desktop runs as the logged-in user. Both files carry their own install
+the engine runs as the logged-in user. Both files carry their own install
 commands and the reasoning behind their settings.
 
 That difference is the one that bites: a Mac mini needs automatic login and

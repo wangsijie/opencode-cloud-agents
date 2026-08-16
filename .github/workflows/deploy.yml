@@ -80,8 +80,10 @@ jobs:
           # is where its sources live, taken verbatim by both ssh and rsync, so
           # a relative one resolves against the login user's home. `init` picks
           # the restart and the log tail. `docker_path` is prepended to PATH
-          # for the image build: Docker Desktop puts its CLI somewhere a
-          # non-interactive shell does not look, and a Linux box needs nothing.
+          # for the image build: `ssh host 'docker build …'` runs with
+          # /usr/bin:/bin:/usr/sbin:/sbin and nothing else, and macOS engines
+          # install their client to /usr/local/bin, which is not on it. A Linux
+          # box has docker in /usr/bin already and needs nothing.
           hosts='[]'
           add() {
             hosts="$(printf '%s' "${hosts}" | jq -c ". + [${1}]")"
@@ -92,7 +94,7 @@ jobs:
               "secret": "SANDBOX_AGENT",
               "dir": "srv/opencode-cloud",
               "init": "launchd",
-              "docker_path": "/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin"
+              "docker_path": "/usr/local/bin"
             }'
           fi
           if [ -n "${HOST_2}" ] && [ -n "${KEY_2}" ]; then
@@ -396,11 +398,16 @@ jobs:
           rsync -az --delete --no-owner --no-group agent/ "sandbox:${DEPLOY_DIR}/agent/"
           rsync -az --delete --no-owner --no-group docker/ssh/ "sandbox:${DEPLOY_DIR}/docker/ssh/"
 
-      # Docker Desktop writes `credsStore: desktop` into ~/.docker/config.json,
-      # so a build that has to pull the base image needs its credential helper
-      # on PATH. A login shell finds it; a non-interactive SSH command does not,
-      # and the failure is an opaque "error getting credentials". A Linux box
-      # needs no such prefix and the matrix gives it an empty one.
+      # A non-interactive SSH command gets /usr/bin:/bin:/usr/sbin:/sbin, so on
+      # macOS the engine's client — /usr/local/bin/docker for OrbStack and for
+      # Docker Desktop alike — has to be prepended or the build cannot find
+      # `docker` at all. A Linux box has it in /usr/bin and the matrix gives it
+      # an empty prefix.
+      #
+      # The other half of this is on the box, not here: a `credsStore` in
+      # ~/.docker/config.json naming a helper that is not installed fails any
+      # build that pulls, with an opaque "error getting credentials".
+      # Uninstalling Docker Desktop leaves one behind.
       - name: Build the session image
         if: steps.affected.outputs.image == 'true'
         env:

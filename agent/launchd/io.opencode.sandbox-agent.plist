@@ -35,12 +35,14 @@
     <key>EnvironmentVariables</key>
     <dict>
         <!-- launchd starts with a minimal PATH; the docker CLI is not on it.
-             Docker.app's own bin belongs here too: Docker Desktop writes
-             `credsStore: desktop` into ~/.docker/config.json, and a CLI that
-             has to reach the registry — the pull for an image this box has
-             never built — fails on a missing docker-credential-desktop. -->
+             /usr/local/bin is where every macOS engine puts its client —
+             OrbStack links it there, Docker Desktop installs a copy — and it
+             has to stay first: an engine leaves the other's client behind when
+             it is uninstalled. Add the engine's own bin after it if the CLI
+             lives somewhere else, and check that ~/.docker/config.json does
+             not name a credsStore helper the box no longer has. -->
         <key>PATH</key>
-        <string>/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>OC_AGENT_TOKEN_FILE</key>
         <string>/Users/USERNAME/.config/opencode-agent/token</string>
         <key>OC_AGENT_HOST</key>

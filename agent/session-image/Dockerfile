@@ -10,6 +10,10 @@
 #
 #   docker build -f agent/session-image/Dockerfile -t opencode-session:latest .
 #
+# The engine is whatever provides the `docker` CLI — the agent never talks to a
+# daemon socket directly, so Docker Desktop, OrbStack and Colima are all the
+# same to it. The one build-time requirement is BuildKit, for `COPY --chmod`.
+#
 # Keep OPENCODE_VERSION in step with `Dockerfile` and with `@opencode-ai/sdk` in
 # package.json: the site speaks to this server with that client.
 FROM node:22-bookworm-slim
