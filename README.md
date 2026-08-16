@@ -18,8 +18,6 @@ A self-hosted, open-source answer to hosted cloud agents, built on
   web app, so a phone or an iPad is a full client.
 - **Runs on hardware you already have.** Cloudflare Containers, or Docker on an
   idle Mac mini or a Linux VPS — chosen per session.
-- **Warm starts.** A per-repository prebuild keeps a workspace with dependencies
-  already installed, so a new session skips the install (Docker host only).
 
 ![The Hub: session list, a live transcript, and the diff of the running session](docs/images/hub-session.png)
 
@@ -336,25 +334,6 @@ error on the record and a retry button in the list.
 
 ---
 
-## Prebuilds (optional)
-
-The **Prebuilds** tab in Settings keeps a warm workspace copy — checkout plus
-`node_modules` and package caches — per repository, so a new session of that
-repository starts from it instead of paying for a full install. **This currently
-requires the Docker sandbox host.**
-
-One row per repository: press **Build** (or **Rebuild**), watch the
-*Clone → Install → Promote* ladder and the install log tail, **Delete** to drop
-one. Only one run per repository at a time. The install command is detected from
-the lockfile (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`) at the
-repository root or one level down.
-
-A prebuild seeds only the first wake of a *new* session; existing workspaces are
-never re-seeded, and a missing or failed prebuild falls back to a normal clone
-and install.
-
----
-
 ## Running sessions on your own machines (Docker hosts)
 
 Sessions can run in Docker on a machine you own instead of Cloudflare
@@ -376,8 +355,7 @@ terminator in front, then add the box under Settings → **Docker hosts**:
 Any number of hosts, each its own entry: the list order is the order the
 composer offers them in, and the first is where a new session lands unless
 another is picked (Cloudflare is always available, last). Both the URL and the
-token must be set before a host is offered at all. Prebuilds are per host — a
-prebuild is a volume on one box — so a repository can hold one on each.
+token must be set before a host is offered at all.
 
 Settings are cached inside each live session for 60 seconds, so a change takes
 up to a minute to take effect. Delete a host's sessions from the Hub *before*

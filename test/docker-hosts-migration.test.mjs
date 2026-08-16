@@ -18,7 +18,7 @@ const files = migrationFiles();
 const MIGRATION = files.find((name) => name.endsWith('0009_docker_hosts.sql'));
 
 /** A database with every migration before this one applied. */
-function beforeMigration(settings, prebuilds = []) {
+function beforeMigration(settings) {
   const db = new DatabaseSync(':memory:');
   for (const file of files) {
     if (file === MIGRATION) {
@@ -30,14 +30,6 @@ function beforeMigration(settings, prebuilds = []) {
     db.prepare(
       'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)'
     ).run(key, JSON.stringify(value), '2026-08-01T00:00:00.000Z');
-  }
-  for (const [repoKey, provider] of prebuilds) {
-    db.prepare(
-      'INSERT INTO prebuilds (repo_key, provider, location, source, updated_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(repoKey, provider, `oc-prebuild-${repoKey}`, 'run', '2026-08-01T00:00:00.000Z');
-    db.prepare(
-      'INSERT INTO prebuild_runs (id, repo_key, provider, status, started_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(`run-${repoKey}`, repoKey, provider, 'succeeded', '2026-08-01T00:00:00.000Z');
   }
   return db;
 }
@@ -117,38 +109,5 @@ test('a deployment that never configured Docker is untouched', () => {
   assert.equal(
     db.prepare('SELECT count(*) AS n FROM settings').get().n,
     1
-  );
-});
-
-test('existing prebuilds move onto the host that was just created', () => {
-  // Left as bare `docker` they would sit under a host settings does not list —
-  // deletable, never rebuildable — because the registry is keyed by provider
-  // and the provider is now a whole host.
-  const db = beforeMigration(
-    {
-      'docker.agent-url': 'https://mini.example.com',
-      'docker.agent-token': 'tok-123'
-    },
-    [['opencode-cloud', 'docker']]
-  );
-  migrate(db);
-  assert.equal(
-    db.prepare('SELECT provider FROM prebuilds').get().provider,
-    'docker:default'
-  );
-  assert.equal(
-    db.prepare('SELECT provider FROM prebuild_runs').get().provider,
-    'docker:default'
-  );
-});
-
-test('with no host created, prebuild rows are left where they are', () => {
-  // Nothing to move them onto: the deployment has no Docker host at all, and
-  // rewriting them would only invent one.
-  const db = beforeMigration({}, [['opencode-cloud', 'docker']]);
-  migrate(db);
-  assert.equal(
-    db.prepare('SELECT provider FROM prebuilds').get().provider,
-    'docker'
   );
 });

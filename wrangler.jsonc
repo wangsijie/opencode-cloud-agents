@@ -85,10 +85,6 @@
       {
         "class_name": "SessionAgent",
         "name": "SessionAgent"
-      },
-      {
-        "class_name": "PrebuildRunner",
-        "name": "PrebuildRunner"
       }
     ]
   },
@@ -120,6 +116,10 @@
     {
       "new_sqlite_classes": ["PrebuildRunner"],
       "tag": "v7"
+    },
+    {
+      "deleted_classes": ["PrebuildRunner"],
+      "tag": "v8"
     }
   ]
 }

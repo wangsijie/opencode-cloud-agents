@@ -26,8 +26,6 @@ import http from 'node:http';
 import {
   DEFAULT_EXEC_TIMEOUT_MS,
   OPENCODE_CONTAINER_PORT,
-  PREBUILD_VOLUME_LABEL,
-  REPO_KEY_PATTERN,
   SERVER_ENV_FILE,
   SERVER_LOG_FILE,
   SESSION_ID_PATTERN,
@@ -46,11 +44,6 @@ import {
   parseInspect,
   parseListing,
   parsePublishedPort,
-  prebuildHelperArgs,
-  prebuildMetaScript,
-  prebuildPromoteScript,
-  prebuildSeedScript,
-  prebuildVolumeName,
   readFileScript,
   runArgs,
   runDocker,
@@ -79,13 +72,6 @@ const CLI_SLACK_MS = 15_000;
 /** Body cap for JSON routes. A write-batch of skills is the large one. */
 const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
 
-/**
- * Bound on a prebuild copy in either direction (seed or promote). A workspace
- * with a full node_modules is gigabytes, but the copy is local disk to local
- * disk; a quarter hour means something is wedged, not slow.
- */
-const PREBUILD_COPY_TIMEOUT_MS = 15 * 60 * 1000;
-
 /** Mirrors the status table in PROTOCOL.md. */
 const ERROR_STATUS = {
   UNAUTHORIZED: 401,
@@ -98,7 +84,6 @@ const ERROR_STATUS = {
   OPENCODE_START_FAILED: 502,
   SNAPSHOT_UNSUPPORTED: 501,
   SNAPSHOT_NOT_FOUND: 404,
-  PREBUILD_UNSUPPORTED: 501,
   HOST_ERROR: 500
 };
 
@@ -190,22 +175,6 @@ async function handle(context, request, response) {
     return;
   }
 
-  const prebuildMatch = matchPrebuildRoute(request.method ?? 'GET', url.pathname);
-  if (prebuildMatch) {
-    try {
-      await readJsonBody(request);
-      sendJson(response, 200, await dispatchPrebuild(context, prebuildMatch));
-    } catch (error) {
-      if (error instanceof HostRequestError) {
-        sendError(response, error.code, error.message);
-        return;
-      }
-      context.log('error', `prebuild ${prebuildMatch.route} failed: ${describe(error)}`);
-      sendError(response, 'HOST_ERROR', describe(error));
-    }
-    return;
-  }
-
   const match = matchSessionRoute(request.method ?? 'GET', url.pathname);
   if (!match) {
     sendError(
@@ -241,12 +210,7 @@ function dispatch(context, match, body) {
       return sessionState(sessionId);
     case 'ensure':
       return withSessionLock(context, sessionId, () =>
-        ensureSession(
-          context,
-          sessionId,
-          optionalString(body, 'image'),
-          optionalRepoKey(body)
-        )
+        ensureSession(context, sessionId, optionalString(body, 'image'))
       );
     case 'stop':
       return withSessionLock(context, sessionId, () =>
@@ -279,35 +243,8 @@ function dispatch(context, match, body) {
         'SNAPSHOT_UNSUPPORTED',
         'This host persists workspaces on named volumes and takes no snapshots'
       );
-    case 'prebuild-promote': {
-      const repoKey = requiredRepoKey(body);
-      // The session lock keeps the container's existence stable under the
-      // copy; the prebuild lock serializes promotes of the same repo, which
-      // would otherwise race each other's staging directory.
-      return withSessionLock(context, sessionId, () =>
-        withSessionLock(context, `prebuild:${repoKey}`, () =>
-          promotePrebuild(context, sessionId, repoKey, excludeList(body))
-        )
-      );
-    }
     default:
       throw new HostRequestError('INVALID_REQUEST', `Unknown route: ${route}`);
-  }
-}
-
-function dispatchPrebuild(context, match) {
-  switch (match.route) {
-    case 'list':
-      return listPrebuilds(context);
-    case 'remove':
-      return withSessionLock(context, `prebuild:${match.repoKey}`, () =>
-        removePrebuild(match.repoKey)
-      );
-    default:
-      throw new HostRequestError(
-        'INVALID_REQUEST',
-        `Unknown prebuild route: ${match.route}`
-      );
   }
 }
 
@@ -359,26 +296,9 @@ export function matchSessionRoute(method, pathname) {
       return { sessionId, route: 'snapshot' };
     case 'snapshot/restore':
       return { sessionId, route: 'snapshot-restore' };
-    case 'prebuild/promote':
-      return { sessionId, route: 'prebuild-promote' };
     default:
       return null;
   }
-}
-
-/** Mirrors `matchPrebuildRoute` in protocol/routes.ts. */
-export function matchPrebuildRoute(method, pathname) {
-  const parts = pathname.split('/').filter((part) => part.length > 0);
-  if (parts[0] !== 'prebuilds') return null;
-  if (parts.length === 1) {
-    return method === 'GET' ? { route: 'list' } : null;
-  }
-  if (parts.length === 2 && method === 'DELETE') {
-    const repoKey = parts[1];
-    if (!REPO_KEY_PATTERN.test(repoKey)) return null;
-    return { route: 'remove', repoKey };
-  }
-  return null;
 }
 
 // --- lifecycle -------------------------------------------------------------
@@ -393,9 +313,8 @@ async function healthz() {
     protocolVersion: PROTOCOL_VERSION,
     provider: 'docker',
     // Declared, not probed: the workspace volume outlives the container, which
-    // is why this host has nothing to snapshot — and why per-repo prebuilds
-    // can live on volumes of their own.
-    capabilities: { snapshots: false, prebuilds: true },
+    // is why this host has nothing to snapshot.
+    capabilities: { snapshots: false },
     runtime: dockerVersion ? { dockerVersion } : {}
   };
 }
@@ -424,7 +343,7 @@ async function sessionState(sessionId) {
  * container is left alone whatever its image: an upgrade is not worth killing a
  * live session over, and the next sleep gets it.
  */
-async function ensureSession(context, sessionId, requestedImage, repoKey) {
+async function ensureSession(context, sessionId, requestedImage) {
   const image = requestedImage?.trim() || context.defaultImage;
   const volume = volumeName(sessionId);
 
@@ -437,13 +356,6 @@ async function ensureSession(context, sessionId, requestedImage, repoKey) {
       timeoutMs: 30_000
     });
   }
-  // Only a workspace that did not exist a moment ago may be seeded; anything
-  // else is (or was) a session's own data. Failures degrade to an unseeded
-  // volume — the site clones as if there were no prebuild.
-  const seededFromPrebuild =
-    workspaceCreated && repoKey
-      ? await seedFromPrebuild(context, { volume, repoKey, image })
-      : false;
 
   let existing = await inspectContainer(sessionId);
   const wasRunning = existing?.running === true;
@@ -487,215 +399,8 @@ async function ensureSession(context, sessionId, requestedImage, repoKey) {
   return {
     running: true,
     created: !wasRunning,
-    workspaceCreated,
-    ...(workspaceCreated ? { seededFromPrebuild } : {})
+    workspaceCreated
   };
-}
-
-// --- prebuilds -------------------------------------------------------------
-
-/**
- * Copy the repo's prebuild, if one exists, onto a freshly created workspace
- * volume. Returns whether it did; every failure is a log line and `false`,
- * because a session that starts on an empty volume is merely slow, while an
- * ensure that fails here would not start at all.
- */
-async function seedFromPrebuild(context, { volume, repoKey, image }) {
-  const source = prebuildVolumeName(repoKey);
-  const sourceInspect = await runDocker(['volume', 'inspect', source], {
-    timeoutMs: 15_000
-  });
-  if (sourceInspect.code !== 0) {
-    return false;
-  }
-  const result = await runDocker(
-    prebuildHelperArgs({
-      image,
-      mounts: [`${source}:/src:ro`, `${volume}:/dst`],
-      script: prebuildSeedScript()
-    }),
-    { timeoutMs: PREBUILD_COPY_TIMEOUT_MS }
-  );
-  if (result.code === 0) {
-    context.log('info', `Seeded ${volume} from prebuild ${source}`);
-    return true;
-  }
-  // Exit 3 is the script's own "no promoted generation yet" — a prebuild
-  // volume that exists but never finished a promote. Not worth a warning.
-  if (result.code !== 3) {
-    context.log(
-      'error',
-      `Prebuild seed from ${source} failed (${result.code}): ${result.stderr
-        .toString('utf8')
-        .trim()}`
-    );
-  }
-  return false;
-}
-
-/**
- * Archive a stopped session workspace as the repo's prebuild.
- *
- * The container must not be running: a live OpenCode writes to the volume
- * mid-copy, and half a database is worse than yesterday's prebuild. The copy,
- * the exclusion of caller-named bookkeeping files, the atomic publish and the
- * generation pruning are all one helper-container script.
- */
-async function promotePrebuild(context, sessionId, repoKey, exclude) {
-  const existing = await inspectContainer(sessionId);
-  if (existing?.running) {
-    throw new HostRequestError(
-      'INVALID_REQUEST',
-      'Stop the session container before promoting its workspace'
-    );
-  }
-  const source = volumeName(sessionId);
-  const sourceInspect = await runDocker(['volume', 'inspect', source], {
-    timeoutMs: 15_000
-  });
-  if (sourceInspect.code !== 0) {
-    throw new HostRequestError(
-      'SESSION_NOT_FOUND',
-      'This session has no workspace volume to promote'
-    );
-  }
-
-  const target = prebuildVolumeName(repoKey);
-  const targetInspect = await runDocker(['volume', 'inspect', target], {
-    timeoutMs: 15_000
-  });
-  if (targetInspect.code !== 0) {
-    await mustRun(
-      [
-        'volume',
-        'create',
-        '--label',
-        `${PREBUILD_VOLUME_LABEL}=${repoKey}`,
-        target
-      ],
-      'create the prebuild volume',
-      { timeoutMs: 30_000 }
-    );
-  }
-
-  const generation = `gen-${String(Date.now()).padStart(14, '0')}`;
-  const image = context.defaultImage;
-  const result = await runDocker(
-    prebuildHelperArgs({
-      image,
-      mounts: [`${source}:/src:ro`, `${target}:/dst`],
-      script: prebuildPromoteScript({
-        generation,
-        repoKey,
-        updatedAt: new Date().toISOString(),
-        exclude
-      })
-    }),
-    { timeoutMs: PREBUILD_COPY_TIMEOUT_MS }
-  );
-  if (result.code !== 0) {
-    throw new HostRequestError(
-      'HOST_ERROR',
-      `Prebuild promote failed (${result.code}): ${result.stderr
-        .toString('utf8')
-        .trim()}`
-    );
-  }
-  const lines = result.stdout.toString('utf8').trim().split('\n');
-  const sizeBytes = Number.parseInt(lines[lines.length - 1] ?? '', 10);
-  context.log('info', `Promoted ${source} to ${target}/${generation}`);
-  return {
-    promoted: true,
-    ...(Number.isFinite(sizeBytes) ? { sizeBytes } : {})
-  };
-}
-
-/**
- * Every prebuild on this box, from the volumes' own `meta.json` files.
- *
- * One helper container mounts them all read-only rather than one per volume;
- * a volume without a meta — a promote that never finished — is simply absent
- * from the answer, matching what a seed would find there.
- */
-async function listPrebuilds(context) {
-  const ls = await mustRun(
-    [
-      'volume',
-      'ls',
-      '--filter',
-      `label=${PREBUILD_VOLUME_LABEL}`,
-      '--format',
-      '{{.Name}}'
-    ],
-    'list prebuild volumes',
-    { timeoutMs: 15_000 }
-  );
-  const prefix = 'oc-prebuild-';
-  const names = ls.stdout
-    .toString('utf8')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(
-      (name) =>
-        name.startsWith(prefix) && REPO_KEY_PATTERN.test(name.slice(prefix.length))
-    );
-  if (names.length === 0) {
-    return { prebuilds: [] };
-  }
-
-  const result = await runDocker(
-    prebuildHelperArgs({
-      image: context.defaultImage,
-      mounts: names.map((name, index) => `${name}:/p/${index}:ro`),
-      script: prebuildMetaScript(names.length)
-    }),
-    { timeoutMs: 60_000 }
-  );
-  if (result.code !== 0) {
-    throw new HostRequestError(
-      'HOST_ERROR',
-      `Could not read prebuild metadata: ${result.stderr.toString('utf8').trim()}`
-    );
-  }
-
-  const prebuilds = [];
-  for (const line of result.stdout.toString('utf8').split('\n')) {
-    const tab = line.indexOf('\t');
-    if (tab < 0) continue;
-    const index = Number.parseInt(line.slice(0, tab), 10);
-    const name = names[index];
-    if (name === undefined) continue;
-    try {
-      const meta = JSON.parse(line.slice(tab + 1));
-      prebuilds.push({
-        // The volume name is the identity; the meta merely describes it.
-        repoKey: name.slice(prefix.length),
-        updatedAt: typeof meta.updatedAt === 'string' ? meta.updatedAt : '',
-        ...(Number.isFinite(meta.sizeBytes) ? { sizeBytes: meta.sizeBytes } : {})
-      });
-    } catch {
-      // An unreadable meta is a prebuild the UI cannot date; skip it.
-    }
-  }
-  prebuilds.sort((left, right) => left.repoKey.localeCompare(right.repoKey));
-  return { prebuilds };
-}
-
-/** Drop a repo's prebuild volume. Idempotent, like session remove. */
-async function removePrebuild(repoKey) {
-  const removed = await runDocker(
-    ['volume', 'rm', '--force', prebuildVolumeName(repoKey)],
-    { timeoutMs: 60_000 }
-  );
-  if (removed.code !== 0 && !isNoSuchObject(removed.stderr.toString('utf8'))) {
-    throw new HostRequestError(
-      'HOST_ERROR',
-      `Could not remove the prebuild volume: ${removed.stderr
-        .toString('utf8')
-        .trim()}`
-    );
-  }
-  return { removed: true };
 }
 
 /**
@@ -1390,38 +1095,6 @@ function optionalBoolean(body, field) {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'boolean') {
     throw new HostRequestError('INVALID_REQUEST', `"${field}" must be a boolean`);
-  }
-  return value;
-}
-
-function optionalRepoKey(body) {
-  const value = optionalString(body, 'repoKey');
-  if (value !== undefined && !REPO_KEY_PATTERN.test(value)) {
-    throw new HostRequestError('INVALID_REQUEST', '"repoKey" is not a valid repo key');
-  }
-  return value;
-}
-
-function requiredRepoKey(body) {
-  const value = requiredString(body, 'repoKey');
-  if (!REPO_KEY_PATTERN.test(value)) {
-    throw new HostRequestError('INVALID_REQUEST', '"repoKey" is not a valid repo key');
-  }
-  return value;
-}
-
-/** The promote body's `exclude`: workspace-relative paths, validated later. */
-function excludeList(body) {
-  const value = body.exclude;
-  if (value === undefined || value === null) return [];
-  if (
-    !Array.isArray(value) ||
-    value.some((entry) => typeof entry !== 'string')
-  ) {
-    throw new HostRequestError(
-      'INVALID_REQUEST',
-      '"exclude" must be an array of strings'
-    );
   }
   return value;
 }

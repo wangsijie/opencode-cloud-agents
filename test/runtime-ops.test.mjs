@@ -10,9 +10,7 @@ import {
   injectContainerCredentials,
   provisionRepository,
   readSessionChanges,
-  resolveDefaultBranch,
-  sanitizeSeededWorkspace,
-  wipeSeededWorkspace
+  resolveDefaultBranch
 } from '../src/runtime-ops.ts'
 
 /** The built-ins ride every batch; these tests are about the credentials. */
@@ -103,7 +101,7 @@ test('credentials with no stored MCP auth are one script and one batch', async (
   assert.deepEqual(env, { FOO: 'bar' })
 })
 
-test('the artifacts directory exists from the first wake, and survives a seed', async () => {
+test('the artifacts directory exists from the first wake', async () => {
   // Created by the leading script, so the agent finds the directory the
   // instructions name and the panel opens on an empty listing rather than an
   // error. No extra round trip: it rides a script that had to run anyway.
@@ -111,18 +109,6 @@ test('the artifacts directory exists from the first wake, and survives a seed', 
   await injectContainerCredentials(wake, { env: [], skills: [] }, {})
   assert.equal(wake.calls.exec.length, 1)
   assert.match(wake.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
-
-  // A prebuild seed carries the donor's artifacts, which belong to whoever ran
-  // the prebuild. Both seed paths drop them and put the empty directory back.
-  const seeded = stubHost({}, { '/workspace/owner/repo/.git': true })
-  await sanitizeSeededWorkspace(seeded, CHECKOUT)
-  assert.match(seeded.calls.exec[0].command, /rm -rf '\/workspace\/artifacts'/)
-  assert.match(seeded.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
-
-  const wiped = stubHost()
-  await wipeSeededWorkspace(wiped, CHECKOUT)
-  assert.match(wiped.calls.exec[0].command, /rm -rf '\/workspace\/artifacts'/)
-  assert.match(wiped.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
 })
 
 test('no credentials at all still clears what a previous wake wrote', async () => {
@@ -388,35 +374,6 @@ test('a failed status read is an error, a failed diff is an empty diff', async (
     CHECKOUT
   )
   assert.equal(changes.diff, '')
-})
-
-// Regression: the marker restoreWorkspace writes for THIS session is written
-// before sanitize runs, so a sanitize that removed it would make the next wake
-// read a healthy volume as a lost workspace (inst-14d65198, 2026-07-31).
-test('sanitizing a seed removes donor state but never the persistence marker', async () => {
-  const host = stubHost({}, { '/workspace/owner/repo/.git': true })
-  await sanitizeSeededWorkspace(host, CHECKOUT)
-  const removal = host.calls.exec.find((call) => call.command.includes('rm -rf'))
-  assert.ok(removal, 'sanitize removes donor state')
-  assert.match(removal.command, /\.opencode-state\/data\/opencode/)
-  assert.match(removal.command, /\.opencode-state\/state/)
-  for (const call of host.calls.exec) {
-    assert.ok(
-      !call.command.includes('.opencode-persistence-ready'),
-      `sanitize must not touch the marker: ${call.command}`
-    )
-  }
-})
-
-test('wiping a failed seed spares the persistence marker too', async () => {
-  const host = stubHost()
-  await wipeSeededWorkspace(host, CHECKOUT)
-  for (const call of host.calls.exec) {
-    assert.ok(
-      !call.command.includes('.opencode-persistence-ready'),
-      `wipe must not touch the marker: ${call.command}`
-    )
-  }
 })
 
 test('the runtime environment points Playwright out of the workspace it redirects everything else into', () => {

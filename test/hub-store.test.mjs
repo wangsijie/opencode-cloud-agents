@@ -39,7 +39,6 @@ import {
   renameSession,
   setSessionBootStep,
   setSessionPinned,
-  setSessionWorkspaceOrigin,
   sweepIdleSessions,
   updateSession
 } from '../src/hub-store.ts';
@@ -423,23 +422,11 @@ test('the boot step can be advanced and cleared', async () => {
   const { env } = testEnv();
   const id = await seed(env);
 
-  await setSessionBootStep(env, id, 'seeding');
-  assert.equal((await getSession(env, id)).bootStep, 'seeding');
+  await setSessionBootStep(env, id, 'cloning');
+  assert.equal((await getSession(env, id)).bootStep, 'cloning');
 
   await setSessionBootStep(env, id, null);
   assert.ok(!('bootStep' in (await getSession(env, id))));
-});
-
-test('the workspace origin is write-once', async () => {
-  const { env } = testEnv();
-  const id = await seed(env);
-
-  await setSessionWorkspaceOrigin(env, id, 'clone');
-  assert.equal((await getSession(env, id)).workspaceOrigin, 'clone');
-
-  // A later wake must not rewrite how the workspace first came to be.
-  await setSessionWorkspaceOrigin(env, id, 'snapshot');
-  assert.equal((await getSession(env, id)).workspaceOrigin, 'clone');
 });
 
 test('a delete claim is idempotent and reuses the operation in flight', async () => {

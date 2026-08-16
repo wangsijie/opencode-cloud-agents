@@ -52,11 +52,7 @@ JavaScript and mirrors this document.
   `UNAUTHORIZED` 401 · `INVALID_REQUEST` 400 · `SESSION_NOT_FOUND` 404 ·
   `FILE_NOT_FOUND` 404 · `DIR_NOT_FOUND` 404 · `CONTAINER_NOT_RUNNING` 503 ·
   `EXEC_TIMEOUT` 408 · `OPENCODE_START_FAILED` 502 ·
-  `SNAPSHOT_UNSUPPORTED` 501 · `SNAPSHOT_NOT_FOUND` 404 ·
-  `PREBUILD_UNSUPPORTED` 501 · `HOST_ERROR` 500.
-- **Repo keys** appear as path segments and in bodies and must match
-  `^[a-z0-9][a-z0-9-]{0,63}$` (the site's own repo-key rule). Hosts reject
-  anything else with 400 `INVALID_REQUEST`.
+  `SNAPSHOT_UNSUPPORTED` 501 · `SNAPSHOT_NOT_FOUND` 404 · `HOST_ERROR` 500.
 - **Auth**: remote hosts require `Authorization: Bearer <token>` on every
   route including `/healthz`, compared in constant time. The Cloudflare host
   worker has no public route; the service binding is the auth boundary and the
@@ -89,17 +85,10 @@ Liveness + identity. → `HealthzResponse`:
 Bring the session's container to *running*, creating whatever is missing.
 Idempotent. Docker host: create the named volume `oc-vol-<id>` and container
 `oc-session-<id>` if absent, start if stopped. Cloudflare host: boot the bound
-container. → `EnsureResponse { running, created, workspaceCreated,
-seededFromPrebuild? }` — `workspaceCreated: true` on a volume-persistent host
-means the volume did not exist before this call (the caller treats that as
-workspace loss after the first wake). Ephemeral hosts mirror `created`.
-
-`repoKey` in the body is a seed hint: a prebuilds-capable host that holds a
-prebuild for that repo copies its current generation onto a *newly created*
-workspace before answering, and says so with `seededFromPrebuild: true`. An
-existing workspace is never touched, a seed failure degrades to an unseeded
-volume, and everything a seeded workspace still needs — sanitizing the donor's
-state out, fetching — is the caller's business, not the host's.
+container. → `EnsureResponse { running, created, workspaceCreated }` —
+`workspaceCreated: true` on a volume-persistent host means the volume did not
+exist before this call (the caller treats that as workspace loss after the
+first wake). Ephemeral hosts mirror `created`.
 
 ### `GET /sessions/:id`
 
@@ -185,29 +174,6 @@ gone → 404 `SNAPSHOT_NOT_FOUND`. Hosts without the capability → 501.
 Snapshot *deletion* is not part of the protocol: the archive bucket is owned
 by the operator, and the site worker (which holds the ledger and the same R2
 binding) deletes objects directly during purge.
-
-### `POST /sessions/:id/prebuild/promote` — body `PrebuildPromoteRequest` *(prebuilds hosts only)*
-
-Archive the session's **stopped** workspace as the repo's prebuild
-(`{ repoKey, exclude? }`). The Docker host copies the volume into a new
-generation of `oc-prebuild-<repoKey>` (created on demand, labeled
-`io.opencode.prebuild=<repoKey>`), drops the caller-named `exclude` paths
-(workspace-relative bookkeeping files that must not leak into a seed),
-publishes it atomically, and keeps the previous generation so a concurrent
-seed finishes on the copy it opened. Running container → 400; no workspace
-volume → 404 `SESSION_NOT_FOUND`; hosts without the capability → 501
-`PREBUILD_UNSUPPORTED`. → `PrebuildPromoteResponse { promoted, sizeBytes? }`.
-
-### `GET /prebuilds` *(prebuilds hosts only)*
-
-Inventory. → `PrebuildListResponse { prebuilds: [{ repoKey, updatedAt,
-sizeBytes? }] }`, from each prebuild volume's own metadata. A volume whose
-promote never completed is absent, matching what a seed would find.
-
-### `DELETE /prebuilds/:repoKey`
-
-Drop the repo's prebuild. Idempotent: → `PrebuildDeleteResponse
-{ removed: true }` including when nothing was there.
 
 ## Container contract
 

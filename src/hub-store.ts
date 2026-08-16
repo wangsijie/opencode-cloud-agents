@@ -69,7 +69,6 @@ import {
   type BootStep,
   type SessionRecord,
   type SessionStatePatch,
-  type WorkspaceOrigin
 } from './sessions.ts';
 
 export {
@@ -423,23 +422,6 @@ export async function setSessionBootStep(
     .update(sessions)
     .set({ bootStep: step })
     .where(eq(sessions.id, id));
-}
-
-/**
- * Record how this session's workspace was first materialized. Write-once by
- * construction — the guard keeps a later wake (a snapshot restore, a volume
- * loss re-clone) from rewriting history.
- */
-export async function setSessionWorkspaceOrigin(
-  env: Env,
-  id: string,
-  origin: WorkspaceOrigin
-): Promise<void> {
-  await db(env)
-    .update(sessions)
-    .set({ workspaceOrigin: origin })
-    // The guard is the write-once: a later wake finds the column already set.
-    .where(and(eq(sessions.id, id), isNull(sessions.workspaceOrigin)));
 }
 
 /**

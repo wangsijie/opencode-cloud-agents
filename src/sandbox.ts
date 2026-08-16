@@ -39,8 +39,6 @@ import {
   PERSISTENCE_MARKER_NAME,
   injectContainerCredentials,
   provisionRepository,
-  sanitizeSeededWorkspace,
-  wipeSeededWorkspace,
   readSessionChanges as readChangesOnHost
 } from './runtime-ops';
 import {
@@ -51,7 +49,6 @@ import {
 import {
   markSessionUnread,
   setSessionBootStep,
-  setSessionWorkspaceOrigin,
   updateSession
 } from './hub-store';
 import type {
@@ -116,7 +113,6 @@ import type {
   BootStep,
   SessionAttachmentRef,
   SessionMessage,
-  WorkspaceOrigin
 } from './sessions';
 import {
   buildTranscriptMirror,
@@ -144,14 +140,6 @@ const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
 const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
 const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
 const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
-/**
- * Set the moment `ensure` reports it seeded a fresh workspace from the repo's
- * prebuild, cleared only once {@link sanitizeSeededWorkspace} has finished (or
- * the seed was wiped). Persisted rather than held in memory because a wake
- * that dies between the two would otherwise start OpenCode on the donor's
- * database — the one leak this feature must never have.
- */
-const SEED_PENDING_STORAGE_KEY = 'persistence:prebuild-seed-pending';
 /**
  * This object's own answer to "is the container up".
  *
@@ -214,9 +202,7 @@ const TRANSCRIPT_MIRROR_REFRESH_MS = 60 * 1000;
 const TRANSCRIPT_MIRROR_LIVE_MS = 3 * 1000;
 
 // Keep OpenCode sessions and caches inside the snapshotted directory, and point
-// Playwright back out of it at the browsers the image baked. Now defined beside
-// the other workspace conventions, because prebuild runs install under the same
-// paths.
+// Playwright back out of it at the browsers the image baked.
 const OPENCODE_ENV = CONTAINER_RUNTIME_ENV;
 
 type CheckpointReason = 'manual' | 'idle-stop';
@@ -731,7 +717,7 @@ export class Sandbox extends DurableObject<Env> {
       timings.credentialsMs = since(credentialsStartedAt);
 
       const provisionStartedAt = Date.now();
-      const { fetching } = await this.provisionOrSanitizeWorkspace(host);
+      const { fetching } = await this.provisionWorkspace(host);
       timings.repoMs = since(provisionStartedAt);
 
       const serverStartedAt = Date.now();
@@ -780,60 +766,24 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /**
-   * Bring the checkout to a usable state: the ordinary clone-or-fetch, or —
-   * when this wake's `ensure` seeded a fresh workspace from the repo's
-   * prebuild — the sanitize pass that turns the donor's copy into this
-   * session's own. A seed that cannot be sanitized is wiped and the plain
-   * clone runs instead; the prebuild path degrades, never fails a wake, and
-   * never marks a session lost.
+   * Bring the checkout to a usable state: the ordinary clone-or-fetch.
    */
-  private async provisionOrSanitizeWorkspace(
+  private async provisionWorkspace(
     host: HostClient
   ): Promise<{ fetching?: Promise<void> }> {
     const checkout = this.requireCheckout();
-    const seedPending = await this.persistenceState.storage.get(
-      SEED_PENDING_STORAGE_KEY
-    );
-    if (seedPending) {
-      if (checkout.repoKey) {
-        await this.noteBootStep('seeding');
-        try {
-          await sanitizeSeededWorkspace(host, checkout);
-          await this.persistenceState.storage.delete(SEED_PENDING_STORAGE_KEY);
-          await this.noteWorkspaceOrigin('prebuild');
-          // The sanitize already fetched and moved to the default branch;
-          // nothing is left for the resume path's background fetch to buy.
-          return {};
-        } catch (error) {
-          console.warn(
-            `Prebuild seed unusable for ${checkout.repoKey}; wiping and cloning`,
-            error
-          );
-          await wipeSeededWorkspace(host, checkout);
-        }
-      }
-      // Cleared on the fallback path too: the seed is gone either way, and a
-      // stale flag would re-sanitize a workspace that is now a plain clone.
-      await this.persistenceState.storage.delete(SEED_PENDING_STORAGE_KEY);
-    }
-
     // The boot step rides `provisionRepository`'s own look at the checkout
     // rather than a second `exists` of the same path: that answer costs a round
     // trip to the host, and asking for it twice is a round trip spent on a
     // question already answered.
-    const result = await provisionRepository(host, checkout, {
+    return await provisionRepository(host, checkout, {
       onClone: () => this.noteBootStep('cloning')
     });
-    if (result.cloned) {
-      await this.noteWorkspaceOrigin('clone');
-    }
-    return result;
   }
 
   /**
-   * Best-effort presentation writes: the boot screen's step and the
-   * workspace-origin line are not worth failing a wake over, so a D1 hiccup
-   * here is a log line and nothing else.
+   * A best-effort presentation write: the boot screen's step is not worth
+   * failing a wake over, so a D1 hiccup here is a log line and nothing else.
    */
   private async noteBootStep(step: BootStep | null): Promise<void> {
     const id = this.instanceIdentity?.id;
@@ -842,16 +792,6 @@ export class Sandbox extends DurableObject<Env> {
       await setSessionBootStep(this.persistenceEnv, id, step);
     } catch (error) {
       console.warn('Boot step write failed', error);
-    }
-  }
-
-  private async noteWorkspaceOrigin(origin: WorkspaceOrigin): Promise<void> {
-    const id = this.instanceIdentity?.id;
-    if (!id) return;
-    try {
-      await setSessionWorkspaceOrigin(this.persistenceEnv, id, origin);
-    } catch (error) {
-      console.warn('Workspace origin write failed', error);
     }
   }
 
@@ -2622,19 +2562,8 @@ export class Sandbox extends DurableObject<Env> {
     const host = await this.host();
     // `ensure` is what boots a stopped container, so it comes first: every call
     // below needs one running, and on an ephemeral host a container that had to
-    // be started is by definition on an empty workspace. A prebuilds-capable
-    // host is told the repository so it can seed a workspace it has to create;
-    // the seed-pending flag is written before anything else can observe the
-    // seeded content, and only sanitizing clears it.
-    const repoKey = this.instanceIdentity?.repoKey;
-    const ensured = await host.ensure(
-      host.supportsPrebuilds && repoKey ? { repoKey } : {}
-    );
-    if (ensured.seededFromPrebuild) {
-      await this.persistenceState.storage.put(SEED_PENDING_STORAGE_KEY, {
-        seededAt: new Date().toISOString()
-      });
-    }
+    // be started is by definition on an empty workspace.
+    const ensured = await host.ensure({});
     await this.setHostRuntime({ running: true });
 
     // Is this the workspace the session has been working in, or a new one?

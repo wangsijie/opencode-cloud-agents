@@ -2,7 +2,7 @@
 
 ## Problem
 
-Five Durable Object classes hold roughly 7,400 lines between them, and most of
+Four Durable Object classes hold thousands of lines between them, and most of
 what they hold is not something a Durable Object is needed for. Three separate
 problems are tangled together in that number:
 
@@ -19,10 +19,8 @@ reconciliation anywhere.
 
 **State is duplicated with columns that already exist.** `InstanceIdentity`
 (`src/sandbox.ts:272`) carries `repoKey`, `repo`, `provider` — all three are
-columns on `sessions`. `RunState` (`src/prebuild-runner.ts:85`) carries `runId`,
-`repoKey`, `provider`, `timings` — the `prebuild_runs` row is inserted by the
-same object that holds the struct. These are not caches of remote data; they are
-second copies of local data.
+columns on `sessions`. These are not caches of remote data; they are second
+copies of local data.
 
 **State exists only to survive eviction.** A Durable Object is evicted
 constantly, so every field must be rebuildable from storage, and some fields
@@ -95,7 +93,6 @@ row. The work is inverting which copy is authoritative, then deleting the other.
 
 | State | Key | Destination |
 | --- | --- | --- |
-| `RunState` | `prebuild:run` | `prebuild_runs` (+ `step`, `step_started_at`, `attempts`; `timings` already exists) |
 | `StoredSessionAgentState` | `session-agent:state` | `sessions` columns (most already exist) + new `session_prompts` table |
 | `InstanceIdentity` | `instance:identity` | Nothing new — `repo_key`, `repo_json`, `provider` are already columns |
 | backup handle ledger | `persistence:backup-handle:*` | New `session_backups` table |
@@ -109,8 +106,8 @@ Three things, none of which is data.
 1. **Per-session serialization.** `lifecycleMutationTail`, `operationDrainWaiters`,
    `lifecycleDrainWaiters`, and the single-flight promises. A database cannot
    provide this; `idFromName(sessionId)` is exactly the right primitive.
-2. **Persistent alarms.** Idle reclamation, retry backoff, the deletion drain,
-   the prebuild watchdog. `setAlarm` and `storage.put` commit in the *same
+2. **Persistent alarms.** Idle reclamation, retry backoff and the deletion
+   drain. `setAlarm` and `storage.put` commit in the *same
    transaction* — D1 has no equivalent, and losing that atomicity means either
    "state advanced but nothing will poke it" or "poked twice".
 3. **Live container connections.** The `liveEvents` subscription
@@ -139,21 +136,7 @@ at all** — its constructor only wipes legacy storage and bootstraps an alarm,
 and it drives the deletion queue out of D1. That is what the other classes
 should look like when this is done.
 
-### Stage 1 — `RunState` to `prebuild_runs`
-
-The smallest independent case, chosen first to validate the shape: a DO that
-schedules but does not store.
-
-- Add `step`, `step_started_at`, `attempts`, `provider` to `prebuild_runs`.
-- `PrebuildRunner` keeps its watchdog alarm and its single-flight guard, and
-  reads the run from D1.
-- Immediate payoff: run progress becomes a SQL query instead of an RPC into the
-  object.
-
-Low risk by construction — one repo at a time, no concurrent writers, and a
-failed run is re-runnable.
-
-### Stage 2 — Invert `SessionAgent` (the stage that fixes the bug)
+### Stage 1 — Invert `SessionAgent` (the stage that fixes the bug)
 
 1. New `session_prompts` table for the queue. Ordered, queryable, replayable,
    and it subsumes `deliveredPromptIds` (today an array inside the struct) as a
@@ -170,7 +153,7 @@ critical path. A failure must propagate, not warn. Today's `catch` that logs and
 continues (`session-agent.ts:874`) becomes wrong — it would silently drop a
 phase transition. Cover this in tests as part of the stage.
 
-### Stage 3 — Backup ledger to `session_backups`
+### Stage 2 — Backup ledger to `session_backups`
 
 `persistence:backup-handle:*` is read by prefix scan (`sandbox.ts:2790`), which
 is a `WHERE session_id = ?` in disguise. A table also makes the ledger
@@ -180,7 +163,7 @@ sweeping the whole `backups/` prefix.
 Snapshot deletion stays outside the protocol either way — the site deletes the
 objects, a host is never asked to forget one.
 
-### Stage 4 — `RuntimeGate` to D1 CAS (optional, last)
+### Stage 3 — `RuntimeGate` to D1 CAS (optional, last)
 
 `RuntimeGate` (`sandbox.ts:326`) carries `revision` and `runtimeEpoch`: it is
 already an optimistic lock, and `UPDATE ... WHERE revision = ?` with a
@@ -193,7 +176,7 @@ architectural consistency rather than a fixed bug. Ship it alone.
 ## What this does not do
 
 This is not a step toward leaving Cloudflare, and it does not depend on doing
-so. Every stage is worth shipping on the current platform: Stage 2 fixes a real
+so. Every stage is worth shipping on the current platform: Stage 1 fixes a real
 consistency bug, and the rest remove duplication.
 
 It does, however, leave a smaller target if that migration is ever made. What
@@ -212,6 +195,6 @@ pnpm test
 pnpm run typecheck
 ```
 
-Stage 2 additionally needs a test that a failed `sessions` write surfaces as an
+Stage 1 additionally needs a test that a failed `sessions` write surfaces as an
 error rather than a warning — that is the invariant the old mirror silently
 violated.

@@ -23,7 +23,6 @@ import type {
   SessionPhase,
   SessionRecord,
   SessionStatePatch,
-  WorkspaceOrigin
 } from './sessions.ts';
 
 /**
@@ -80,9 +79,6 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.unreadAt === null ? {} : { unreadAt: row.unreadAt }),
     ...(row.pinnedAt === null ? {} : { pinnedAt: row.pinnedAt }),
     ...(row.titleLocked ? { titleLocked: true } : {}),
-    ...(row.workspaceOrigin === null
-      ? {}
-      : { workspaceOrigin: row.workspaceOrigin as WorkspaceOrigin }),
     ...(row.bootStep === null ? {} : { bootStep: row.bootStep as BootStep }),
     ...(row.runtimeLifecycle === null
       ? {}

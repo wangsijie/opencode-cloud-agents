@@ -351,14 +351,6 @@ await step('a session is created, patched and deleted through Drizzle', async ()
   }
 });
 
-await step('the prebuild registry and run history are served', async () => {
-  const { status, body } = await api('/api/prebuilds');
-  assert.equal(status, 200, JSON.stringify(body));
-  // Both halves come from D1: the registry table and the latest run per repo.
-  assert.ok(Array.isArray(body.prebuilds), JSON.stringify(body));
-  assert.equal(typeof body.runs, 'object');
-});
-
 await step('signing out deletes the row and closes the API again', async () => {
   const out = await api('/api/auth', { method: 'DELETE' });
   assert.equal(out.status, 200);

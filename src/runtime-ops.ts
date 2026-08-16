@@ -29,7 +29,6 @@ import {
 } from './container-credentials.ts';
 import { truncateOutput } from './http.ts';
 import {
-  ARTIFACTS_DIRECTORY_NAME,
   ARTIFACTS_ROOT,
   WORKSPACE_ROOT,
   repoOwnerFromCloneUrl,
@@ -56,19 +55,14 @@ export const GIT_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 /**
  * The workspace-relative name of the marker the Sandbox writes once a
- * session's workspace is materialized. Named here, beside the other workspace
- * operations, because prebuild promotion must exclude it: a seeded workspace
- * that arrived with a donor's marker would look already-restored to the wake.
+ * session's workspace is materialized.
  */
 export const PERSISTENCE_MARKER_NAME = '.opencode-persistence-ready';
 
 /**
  * The XDG redirects that keep OpenCode's sessions and every package-manager
  * cache inside the snapshotted workspace. XDG_CONFIG_HOME stays unset so gh
- * reads the injected /root/.config/gh/hosts.yml login. Shared between the
- * OpenCode server start (sandbox.ts) and prebuild runs, which must install
- * dependencies under the same paths or the warm store would land in /root —
- * wiped on boot and carried by no snapshot.
+ * reads the injected /root/.config/gh/hosts.yml login.
  */
 export const OPENCODE_XDG_ENV = {
   XDG_DATA_HOME: `${WORKSPACE_ROOT}/.opencode-state/data`,
@@ -106,29 +100,6 @@ export const CONTAINER_RUNTIME_ENV = {
   ...OPENCODE_XDG_ENV,
   ...PLAYWRIGHT_ENV
 };
-
-/**
- * What a prebuild seed carries that belongs to the donor session, not to the
- * repository: OpenCode's own database and state under the XDG redirects (see
- * OPENCODE_ENV in sandbox.ts). The pnpm store (`.opencode-state/data/pnpm`)
- * and the download caches (`.opencode-state/cache`) stay — they are the whole
- * point of seeding.
- *
- * The persistence marker is deliberately NOT in this list. Sanitize runs
- * *after* `restoreWorkspace` has written the session's own fresh marker, so
- * removing it here deletes that marker and the next wake reads the surviving
- * volume as a lost workspace — which is exactly how inst-14d65198 was falsely
- * marked lost on 2026-07-31. A donor marker cannot leak through a seed in the
- * first place: promote excludes it at copy time (see prebuild-runner.ts).
- */
-const SEED_DONOR_STATE = [
-  '.opencode-state/data/opencode',
-  '.opencode-state/state',
-  // The donor's uploads and outputs. Belongs to whoever ran the prebuild, not
-  // to the repository, and inheriting it would hand every new session another
-  // session's files.
-  ARTIFACTS_DIRECTORY_NAME
-];
 
 /**
  * How many new files are diffed by content. A session that adds a hundred files
@@ -306,96 +277,6 @@ export async function provisionRepository(
     );
   }
   return { cloned: true };
-}
-
-/**
- * Turn a freshly seeded workspace into this session's own.
- *
- * A seed is a copy of some other session's workspace: right repository, warm
- * caches, wrong everything else. This removes the donor's OpenCode state (a
- * conversation database the new container must never open), resets the
- * checkout to a clean tree, and moves it to the current default branch — a
- * *blocking* fetch, unlike the resume path's background one, because the seed
- * may sit on a stale commit of whatever branch the donor was on. `git clean
- * -fd` without `-x` is deliberate: ignored files are where `node_modules`
- * lives, and carrying the donor's other ignored files is an accepted property
- * of the design (docs/prebuild-design.md).
- *
- * Runs after credential injection (the fetch needs auth) and before the
- * OpenCode server starts (the state removal must win that race). Idempotent,
- * because a wake that dies halfway through re-runs it. Throws on any failure;
- * the caller wipes the workspace and falls back to a plain clone.
- */
-export async function sanitizeSeededWorkspace(
-  host: RuntimeHost,
-  checkout: RuntimeCheckout
-): Promise<void> {
-  const { repo, repoKey, directory } = checkout;
-  if (!repoKey) {
-    throw new Error('A repo-less session has no prebuild to sanitize');
-  }
-  const removals = SEED_DONOR_STATE.map(
-    (path) => `${WORKSPACE_ROOT}/${path}`
-  );
-  await mustExec(
-    host,
-    [
-      ...removals.map((path) => `rm -rf ${shellQuote(path)}`),
-      // The donor's artifacts were among those removals, and the wake created
-      // this directory before the seed was sanitized. Put it back.
-      `mkdir -p ${shellQuote(ARTIFACTS_ROOT)}`
-    ].join(' && ')
-  );
-
-  const existing = await host.exists(`${directory}/.git`);
-  if (!existing.exists) {
-    throw new Error(`The seeded workspace has no checkout at ${directory}`);
-  }
-  const at = shellQuote(directory);
-  await mustExec(
-    host,
-    `git -C ${at} reset --hard && git -C ${at} clean -fd`
-  );
-
-  const fetched = await host.exec(`git -C ${at} fetch origin --prune`, {
-    timeoutMs: REPO_FETCH_TIMEOUT_MS
-  });
-  if (!fetched.success) {
-    throw new Error(
-      `Seed fetch failed for ${repoKey}: ${truncateOutput(fetched.stderr)}`
-    );
-  }
-  const defaultBranch = await resolveDefaultBranch(host, directory, repo);
-  const branch = shellQuote(defaultBranch);
-  const remoteRef = shellQuote(`origin/${defaultBranch}`);
-  await mustExec(
-    host,
-    `git -C ${at} checkout -B ${branch} ${remoteRef} && git -C ${at} reset --hard ${remoteRef}`
-  );
-}
-
-/**
- * Throw away a workspace whose seed could not be sanitized, so the ordinary
- * clone path starts from nothing instead of from half a donor. Only the
- * checkout and the seeded state go; the marker has already been rewritten by
- * the time anything could care.
- */
-export async function wipeSeededWorkspace(
-  host: RuntimeHost,
-  checkout: RuntimeCheckout
-): Promise<void> {
-  const targets = [
-    checkout.directory,
-    ...SEED_DONOR_STATE.map((path) => `${WORKSPACE_ROOT}/${path}`),
-    `${WORKSPACE_ROOT}/.opencode-state`
-  ];
-  await mustExec(
-    host,
-    [
-      ...targets.map((path) => `rm -rf ${shellQuote(path)}`),
-      `mkdir -p ${shellQuote(ARTIFACTS_ROOT)}`
-    ].join(' && ')
-  );
 }
 
 /**

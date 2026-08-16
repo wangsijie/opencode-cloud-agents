@@ -16,7 +16,6 @@
  */
 import {
   sessionRoutes,
-  prebuildRoutes,
   HEALTHZ_ROUTE,
   assertSessionId
 } from '../protocol/routes.ts';
@@ -34,10 +33,6 @@ import {
   type ListFilesResponse,
   type OpencodeStartRequest,
   type OpencodeStartResponse,
-  type PrebuildDeleteResponse,
-  type PrebuildListResponse,
-  type PrebuildPromoteRequest,
-  type PrebuildPromoteResponse,
   type ReadFileResponse,
   type RemoveResponse,
   type SessionStateResponse,
@@ -179,11 +174,6 @@ export class HostClient {
     return this.capabilities.snapshots;
   }
 
-  /** Whether this host holds per-repo prebuilds and can seed from them. */
-  get supportsPrebuilds(): boolean {
-    return this.capabilities.prebuilds;
-  }
-
   /** What the protocol calls since the last reset cost. */
   get callStats(): HostCallStats {
     return {
@@ -312,29 +302,6 @@ export class HostClient {
     );
   }
 
-  /** Archive this session's stopped workspace as its repo's prebuild. */
-  prebuildPromote(
-    input: PrebuildPromoteRequest
-  ): Promise<PrebuildPromoteResponse> {
-    return this.json<PrebuildPromoteResponse>(
-      'POST',
-      sessionRoutes.prebuildPromote(this.sessionId),
-      input
-    );
-  }
-
-  /** Host-level prebuild inventory. Not session-scoped, but same transport. */
-  prebuildList(): Promise<PrebuildListResponse> {
-    return this.json<PrebuildListResponse>('GET', prebuildRoutes.list());
-  }
-
-  prebuildRemove(repoKey: string): Promise<PrebuildDeleteResponse> {
-    return this.json<PrebuildDeleteResponse>(
-      'DELETE',
-      prebuildRoutes.remove(repoKey)
-    );
-  }
-
   /**
    * Forward one request to the container's OpenCode server.
    *
@@ -453,7 +420,7 @@ export async function resolveHostClient(
     return new HostClient(
       serviceBindingTransport(env.SANDBOX_HOST),
       sessionId,
-      { snapshots: true, prebuilds: false }
+      { snapshots: true }
     );
   }
   if (isDockerProvider(provider)) {
@@ -469,7 +436,7 @@ export async function resolveHostClient(
     return new HostClient(
       remoteTransport(host.baseUrl, host.token),
       sessionId,
-      { snapshots: false, prebuilds: true },
+      { snapshots: false },
       host.image
     );
   }

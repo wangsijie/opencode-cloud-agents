@@ -10,8 +10,8 @@
  * defaults in [settings.ts](settings.ts).
  *
  * Everything that decides "which host may this session be on?" — the catalog
- * endpoint the composer reads, the create-session validator, the prebuild
- * routes — goes through here, so there is one answer to that question.
+ * endpoint the composer reads, the create-session validator — goes through
+ * here, so there is one answer to that question.
  */
 import {
   dockerHostId,

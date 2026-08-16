@@ -35,9 +35,7 @@ export default {
         provider: 'cloudflare',
         // R2 through the SDK's backup API. Cloudflare containers are
         // ephemeral, so a session that is not snapshotted is a session lost.
-        // Prebuilds are the Docker host's for now; phase 2 of
-        // docs/prebuild-design.md brings them here.
-        capabilities: { snapshots: true, prebuilds: false }
+        capabilities: { snapshots: true }
       };
       return jsonResponse(body);
     }

@@ -21,7 +21,6 @@ import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
-  primaryKey,
   sqliteTable,
   text
 } from 'drizzle-orm/sqlite-core';
@@ -68,7 +67,6 @@ export const sessions = sqliteTable(
     cleanedAt: text('cleaned_at'),
     unreadAt: text('unread_at'),
     pinnedAt: text('pinned_at'),
-    workspaceOrigin: text('workspace_origin'),
     bootStep: text('boot_step'),
 
     // runtime status cache for the session list
@@ -108,44 +106,6 @@ export const adminSessions = sqliteTable(
     lastSeenAt: text('last_seen_at')
   },
   (table) => [index('idx_admin_sessions_expires').on(table.expiresAt)]
-);
-
-/** The prebuild registry: one row per (repository, provider). */
-export const prebuilds = sqliteTable(
-  'prebuilds',
-  {
-    repoKey: text('repo_key').notNull(),
-    provider: text('provider').notNull(),
-    /** Provider-shaped pointer: volume name for docker, R2 handle later. */
-    location: text('location').notNull(),
-    sizeBytes: integer('size_bytes'),
-    /** What produced it: 'run' now, 'session' once promotion lands. */
-    source: text('source').notNull(),
-    updatedAt: text('updated_at').notNull()
-  },
-  (table) => [
-    primaryKey({ columns: [table.repoKey, table.provider] })
-  ]
-);
-
-/** History for the prebuild page; only the newest run per repo is shown. */
-export const prebuildRuns = sqliteTable(
-  'prebuild_runs',
-  {
-    id: text('id').primaryKey(),
-    repoKey: text('repo_key').notNull(),
-    provider: text('provider').notNull(),
-    status: text('status').notNull(),
-    startedAt: text('started_at').notNull(),
-    finishedAt: text('finished_at'),
-    /** JSON: {cloneMs, installMs, promoteMs, totalMs} as stages complete. */
-    timings: text('timings'),
-    error: text('error'),
-    logTail: text('log_tail')
-  },
-  (table) => [
-    index('idx_prebuild_runs_repo').on(table.repoKey, table.startedAt)
-  ]
 );
 
 /**

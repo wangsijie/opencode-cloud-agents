@@ -7,14 +7,12 @@
  * asleep, exactly like the Worker.
  */
 import {
-  prebuildKey,
   type MessageAttachment,
   type SessionProvider,
   type WorkspaceEntry,
   type WorkspaceListing
 } from '../api';
 import { branchScopeOf } from './fixtures/changes';
-import { prebuildState, startMockRun } from './fixtures/prebuilds';
 import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
 import { minutesAgo } from './fixtures/util';
 import {
@@ -252,7 +250,7 @@ interface MockDockerHost {
 /**
  * The hosts the mock considers configured. Derived from the stored setting the
  * same way the Worker derives it, so removing one in the settings section takes
- * it out of the composer's picker and the prebuilds page on the next read.
+ * it out of the composer's picker on the next read.
  */
 function dockerHosts(): MockDockerHost[] {
   const setting = store.settings.find((entry) => entry.key === 'docker.hosts');
@@ -384,67 +382,6 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     const match = /^\/api\/settings\/([^/]+)$/.exec(p);
     if (match && method === 'PUT') {
       return putSetting(decodeURIComponent(match[1]), parseBody(init));
-    }
-  }
-
-  // --- prebuilds ----------------------------------------------------------
-  if (p === '/api/prebuilds' && method === 'GET') {
-    return json({
-      prebuilds: [...prebuildState.prebuilds.values()],
-      runs: Object.fromEntries(prebuildState.runs),
-      // The buildable hosts, from the same settings the catalog reads: remove
-      // one in the section above and its group goes read-only here.
-      hosts: dockerHosts().map((host) => ({
-        provider: `docker:${host.id}` as SessionProvider,
-        label: host.label ?? host.id
-      }))
-    });
-  }
-  if (p === '/api/prebuilds' && method === 'POST') {
-    const { repoKey, provider } = parseBody(init);
-    if (typeof repoKey !== 'string' || repoKey.length === 0) {
-      return json({ error: 'Unknown repository' }, 400);
-    }
-    const host = (typeof provider === 'string'
-      ? provider
-      : `docker:${dockerHosts()[0]?.id}`) as SessionProvider;
-    if (!dockerHosts().some((entry) => `docker:${entry.id}` === host)) {
-      return json({ error: `Docker sandbox host "${host}" is not configured` }, 409);
-    }
-    if (prebuildState.runs.get(prebuildKey(host, repoKey))?.status === 'running') {
-      return json(
-        {
-          error:
-            'A prebuild run is already underway for this repository on this host'
-        },
-        409
-      );
-    }
-    return json({ runId: startMockRun(repoKey, host) }, 202);
-  }
-  {
-    const match = /^\/api\/prebuilds\/(.+)$/.exec(p);
-    if (match && method === 'DELETE') {
-      const repoKey = decodeURIComponent(match[1]);
-      const provider = url.searchParams.get('provider');
-      if (provider === null) {
-        return json(
-          { error: 'Name the host to delete from with ?provider=' },
-          400
-        );
-      }
-      const key = prebuildKey(provider as SessionProvider, repoKey);
-      if (prebuildState.runs.get(key)?.status === 'running') {
-        return json(
-          { error: 'A prebuild run is underway; wait for it to finish' },
-          409
-        );
-      }
-      prebuildState.prebuilds.delete(key);
-      // As the Hub does: the run goes too, or a failed one keeps the repo on
-      // the list with nothing left to delete.
-      prebuildState.runs.delete(key);
-      return json({ removed: true });
     }
   }
 

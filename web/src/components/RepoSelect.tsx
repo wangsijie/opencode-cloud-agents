@@ -17,8 +17,7 @@ export const NO_REPO = '';
  * "No repository" is the first entry rather than a checkbox beside the pill: it
  * is a choice of what to work on, which is exactly what this menu is for, and
  * the pill then reads back the answer whichever way it went. `allowNone={false}`
- * drops it, for the callers where a repository is the whole point of the choice
- * — the prebuilds tab, where picking one adds it to the list.
+ * drops it, for the callers where a repository is the whole point of the choice.
  */
 export function RepoSelect({
   repos,

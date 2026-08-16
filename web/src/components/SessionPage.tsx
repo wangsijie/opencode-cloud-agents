@@ -471,18 +471,11 @@ export function SessionPage({
             <div className="session-booting" role="status">
               <i className="spinner big" aria-hidden="true" />
               <p className="booting-title">
-                {session?.bootStep === 'seeding'
-                  ? 'Restoring cached workspace'
-                  : session?.bootStep === 'cloning'
-                    ? 'Cloning the repository'
-                    : 'Starting the runtime environment'}
+                {session?.bootStep === 'cloning'
+                  ? 'Cloning the repository'
+                  : 'Starting the runtime environment'}
               </p>
-              {session?.bootStep === 'seeding' ? (
-                <p className="muted">
-                  Seeded from this repository's prebuild — dependencies arrive
-                  warm.
-                </p>
-              ) : waking ? (
+              {waking ? (
                 <p className="muted">A cold start usually takes tens of seconds.</p>
               ) : null}
             </div>

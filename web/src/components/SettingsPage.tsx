@@ -9,7 +9,6 @@ import {
   type SettingView
 } from '../api';
 import { MenuIcon } from './icons';
-import { PrebuildsSection } from './PrebuildsSection';
 
 /**
  * Every runtime setting in one place: the credentials and configuration that
@@ -19,10 +18,6 @@ import { PrebuildsSection } from './PrebuildsSection';
  * pill row on a phone), one section's form on the right. Each section carries
  * a status mark — required-and-missing, or configured — so the whole state of
  * the deployment is readable from the nav alone.
- *
- * Not every section is a stored setting. Prebuilds is a whole feature living
- * as one of these tabs, because the sidebar carries only Settings and Sign
- * out: anything else an operator configures is reached from here.
  *
  * Secrets are write-only — the page shows whether one is stored and never what
  * it is; typing a new value replaces it, leaving the field empty keeps it. The
@@ -55,7 +50,6 @@ export const SECTIONS: Section[] = [
   { id: 'mcp-auth', label: 'MCP auth', key: 'opencode.mcp-auth' },
   { id: 'git-identity', label: 'Git identity', key: 'git.identity' },
   { id: 'docker', label: 'Docker hosts', key: 'docker.hosts' },
-  { id: 'prebuilds', label: 'Prebuilds' },
   { id: 'password', label: 'Admin password' }
 ];
 
@@ -121,7 +115,7 @@ export function SettingsPage({
 
   // Routed, the URL names the section and the click that changed it; the tab
   // is then the same kind of thing as a session — a place with an address, so
-  // /settings/prebuilds is linkable and the back button steps between tabs.
+  // /settings/docker is linkable and the back button steps between tabs.
   // Onboarding has no router and keeps the selection here instead, opening on
   // the first missing required setting.
   // An address can name a section that does not exist; it opens the page
@@ -274,8 +268,6 @@ export function SettingsPage({
                     setting={byKey.get('docker.hosts')}
                     onSaved={saved}
                   />
-                ) : active === 'prebuilds' ? (
-                  <PrebuildsSection />
                 ) : (
                   <PasswordSection />
                 )}

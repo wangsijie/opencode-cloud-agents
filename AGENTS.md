@@ -13,13 +13,10 @@ table and is edited on the Hub's `/settings` page.
   descriptor has no UI until one is written for it — which is how the Docker
   host settings spent a while being edited straight in D1.
 
-  Not every tab is a stored setting. `/settings/:section` is the address of a
-  tab, and Prebuilds is a whole feature living in one — it polls, it triggers
-  runs, and it has no setting key at all. That is where a second configuration
-  surface goes, because the sidebar footer holds Settings and Sign out and
-  nothing else; prebuilds shipped as its own page with its own footer button
-  and the button is what did not survive. Adding one back is how the footer
-  becomes a row of icons again.
+  Not every tab has to be a stored setting. `/settings/:section` is the address
+  of a tab, so that is where a second configuration surface goes: the sidebar
+  footer holds Settings and Sign out and nothing else, and a feature that
+  shipped as its own page with its own footer button lost the button first.
 - `src/model-catalog.ts` derives the model picker from the stored config at
   request time.
 - `Dockerfile` is the OpenCode version for Sandbox images. It carries no
@@ -131,12 +128,9 @@ sync triggers, a conflict rule and a per-file state badge, all to serve reads in
 a state the panel already refuses. A sleeping session answers 409 and says to
 send a message, like every other file route.
 
-Three consequences worth keeping. `artifacts` is a reserved `repoKey`
+Two consequences worth keeping. `artifacts` is a reserved `repoKey`
 (`isSafeRepoKey`), because a GitHub repository of that name would clone on top
-of it. It is in `SEED_DONOR_STATE`, because a prebuild seed otherwise hands
-every new session the donor's files — and both seed paths recreate the empty
-directory, since the wake created it before the sanitize ran. And the agent only
-knows about it because `ARTIFACTS_INSTRUCTIONS` is appended to the merged
+of it. And the agent only knows about it because `ARTIFACTS_INSTRUCTIONS` is appended to the merged
 AGENTS.md on every wake: that file is now written unconditionally, not only when
 `opencode.agents-md` is configured.
 
@@ -163,7 +157,7 @@ downloads 344 MB into the workspace of every session and snapshots it.
 
 `PLAYWRIGHT_ENV` in `src/runtime-ops.ts` pins the path back to where the image
 put it, and `CONTAINER_RUNTIME_ENV` is the merge of that with the XDG redirects
-that both the server start and the prebuild runner pass. The Dockerfile's `ENV`
+that the server start passes. The Dockerfile's `ENV`
 cannot carry this on its own: the Docker host starts OpenCode as a `docker exec`
 with an explicit environment and inherits nothing from the image. A test asserts
 the two Dockerfiles and `PLAYWRIGHT_ENV` name the same path.

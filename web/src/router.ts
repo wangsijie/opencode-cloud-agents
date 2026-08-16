@@ -7,9 +7,7 @@ import { useEffect, useState } from 'react';
  * `location.pathname` and keeps the History API in sync.
  *
  * `section` is a settings tab. It is in the path because a tab worth linking
- * to needs an address — and because prebuilds, which used to be a page of its
- * own at `/prebuilds`, is one of those tabs now; that address still resolves,
- * so anything pointing at it keeps working.
+ * to needs an address.
  *
  * `agent` is a subagent session inside the session named by `id`. It hangs off
  * the session rather than standing on its own because that is what it is: the
@@ -30,9 +28,6 @@ export function parseRoute(pathname: string): Route {
       name: 'settings',
       ...(settings[1] ? { section: decodeURIComponent(settings[1]) } : {})
     };
-  }
-  if (/^\/prebuilds\/?$/.test(pathname)) {
-    return { name: 'settings', section: 'prebuilds' };
   }
   const match = /^\/sessions\/([^/]+)(?:\/agent\/([^/]+))?\/?$/.exec(pathname);
   if (!match) {

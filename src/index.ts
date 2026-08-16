@@ -20,7 +20,6 @@ import {
   requireAdmin
 } from './access';
 import { handleHubApi } from './api-instances';
-import { handlePrebuildsApi } from './api-prebuilds';
 import { handleSessionApi } from './api-sessions';
 import { handleSettingsApi } from './api-settings';
 import { handleUploadsApi, sweepOrphanUploads } from './api-uploads';
@@ -36,12 +35,11 @@ import {
   loadModelCatalog,
   resolveDefaultModelSelection
 } from './model-catalog';
-import { PrebuildRunner } from './prebuild-runner';
 import { Sandbox } from './sandbox';
 import { listSessionProviderOptions } from './sandbox-providers';
 import { SessionAgent } from './session-agent';
 
-export { Hub, LifecycleCoordinator, PrebuildRunner, Sandbox, SessionAgent };
+export { Hub, LifecycleCoordinator, Sandbox, SessionAgent };
 
 /** Matches `build.assetsDir` in [vite.config.ts](../vite.config.ts). */
 const SPA_ASSET_DIR = 'hub-assets';
@@ -117,13 +115,6 @@ export default {
 
       if (url.pathname === '/api/uploads' || url.pathname.startsWith('/api/uploads/')) {
         return await handleUploadsApi(request, env, url);
-      }
-
-      if (
-        url.pathname === '/api/prebuilds' ||
-        url.pathname.startsWith('/api/prebuilds/')
-      ) {
-        return await handlePrebuildsApi(request, env, url);
       }
 
       if (url.pathname === '/api/catalog' && request.method === 'GET') {

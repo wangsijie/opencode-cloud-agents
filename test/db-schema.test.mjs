@@ -15,16 +15,10 @@ import test from 'node:test';
 
 import { getTableColumns, getTableName } from 'drizzle-orm';
 
-import {
-  adminSessions,
-  prebuildRuns,
-  prebuilds,
-  sessions,
-  settings
-} from '../src/db/schema.ts';
+import { adminSessions, sessions, settings } from '../src/db/schema.ts';
 import { createTestD1 } from './helpers/d1.mjs';
 
-const TABLES = [sessions, settings, adminSessions, prebuilds, prebuildRuns];
+const TABLES = [sessions, settings, adminSessions];
 
 /** What SQLite reports about a table, keyed by column name. */
 async function actualColumns(db, table) {
@@ -110,7 +104,7 @@ test('nullability matches the DDL', async () => {
   }
 });
 
-test('primary keys match the DDL, including the composite one', async () => {
+test('primary keys match the DDL', async () => {
   const db = createTestD1();
 
   const sessionKey = await actualColumns(db, 'sessions');
@@ -121,15 +115,6 @@ test('primary keys match the DDL, including the composite one', async () => {
 
   const adminKey = await actualColumns(db, 'admin_sessions');
   assert.equal(adminKey.get('token_hash').pk, 1);
-
-  // `prebuilds` is keyed on the pair, which is what the registry upsert
-  // conflicts on; getting this wrong would turn the upsert into an insert.
-  const prebuildKey = await actualColumns(db, 'prebuilds');
-  assert.equal(prebuildKey.get('repo_key').pk, 1);
-  assert.equal(prebuildKey.get('provider').pk, 2);
-
-  const runKey = await actualColumns(db, 'prebuild_runs');
-  assert.equal(runKey.get('id').pk, 1);
 });
 
 test('every index the migrations create is declared in the schema', async () => {
@@ -147,12 +132,11 @@ test('every index the migrations create is declared in the schema', async () => 
     'idx_sessions_repo_key',
     'idx_sessions_delete_queue',
     'idx_sessions_status_query',
-    'idx_admin_sessions_expires',
-    'idx_prebuild_runs_repo'
+    'idx_admin_sessions_expires'
   ]) {
     assert.ok(actual.has(name), `missing index ${name}`);
   }
-  assert.equal(actual.size, 6, 'a migration added an index the schema does not name');
+  assert.equal(actual.size, 5, 'a migration added an index the schema does not name');
 });
 
 test('the phase CHECK the DDL keeps is still enforced', async () => {

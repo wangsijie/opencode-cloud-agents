@@ -121,13 +121,8 @@ export interface SessionView {
    * not pinned. Server-side, like `unreadAt`.
    */
   pinnedAt?: string;
-  /**
-   * How the workspace was first materialized: a fresh clone, or a seed from
-   * the repo's prebuild. Absent on sessions that predate the field.
-   */
-  workspaceOrigin?: 'clone' | 'prebuild';
   /** Where an in-flight wake is; the boot screen words itself with this. */
-  bootStep?: 'seeding' | 'cloning';
+  bootStep?: 'cloning';
   instance: InstanceView;
   transcript?: TranscriptSummary;
 }
@@ -773,64 +768,6 @@ export const deleteArtifactFile = (id: string, path: string) =>
  */
 export const fetchCatalog = (refresh = false) =>
   call<Catalog>(refresh ? '/api/catalog?refresh=1' : '/api/catalog');
-
-/** Mirrors `PrebuildRecord` in the Worker's `src/prebuilds.ts`. */
-export interface PrebuildView {
-  repoKey: string;
-  provider: SessionProvider;
-  location: string;
-  sizeBytes?: number;
-  source: string;
-  updatedAt: string;
-}
-
-/** Mirrors `PrebuildRunRecord` in the Worker's `src/prebuilds.ts`. */
-export interface PrebuildRunView {
-  id: string;
-  repoKey: string;
-  provider: SessionProvider;
-  status: 'running' | 'succeeded' | 'failed';
-  startedAt: string;
-  finishedAt?: string;
-  timings?: {
-    cloneMs?: number;
-    installMs?: number;
-    promoteMs?: number;
-    totalMs?: number;
-  };
-  error?: string;
-  logTail?: string;
-}
-
-export interface PrebuildsView {
-  prebuilds: PrebuildView[];
-  /**
-   * Newest run per (host, repo), keyed by `<provider>/<repoKey>` — the same
-   * string the Worker's `prebuildKey` builds. A repository can be prebuilt on
-   * every host, so the repo key alone would collide.
-   */
-  runs: Record<string, PrebuildRunView>;
-  /** The Docker hosts that can be built on now, named. */
-  hosts: SessionProviderOption[];
-}
-
-/** The key a prebuild and its run are addressed by. Mirrors `prebuildKey`. */
-export const prebuildKey = (provider: SessionProvider, repoKey: string) =>
-  `${provider}/${repoKey}`;
-
-export const fetchPrebuilds = () => call<PrebuildsView>('/api/prebuilds');
-
-export const startPrebuild = (repoKey: string, provider: SessionProvider) =>
-  call<{ runId: string }>('/api/prebuilds', {
-    method: 'POST',
-    body: JSON.stringify({ repoKey, provider })
-  });
-
-export const deletePrebuild = (repoKey: string, provider: SessionProvider) =>
-  call<{ removed: boolean }>(
-    `/api/prebuilds/${encodeURIComponent(repoKey)}?provider=${encodeURIComponent(provider)}`,
-    { method: 'DELETE' }
-  );
 
 export const createSession = (input: {
   /** Omitted for a session with no repository, which works in /workspace. */
