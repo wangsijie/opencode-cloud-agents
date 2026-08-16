@@ -132,17 +132,14 @@ const WORKSPACE_DIRECTORY = WORKSPACE_ROOT;
 const PERSISTENCE_MARKER = `${WORKSPACE_ROOT}/${PERSISTENCE_MARKER_NAME}`;
 const BACKUP_TTL_SECONDS = 365 * 24 * 60 * 60;
 const BACKUP_STORAGE_KEY = 'persistence:latest-backup';
-const LEGACY_BACKUP_HANDLES_STORAGE_KEY = 'persistence:backup-handles';
 const BACKUP_HANDLE_STORAGE_PREFIX = 'persistence:backup-handle:';
 const RESTORE_STORAGE_KEY = 'persistence:last-restore';
 const ERROR_STORAGE_KEY = 'persistence:last-error';
 const PURGE_STORAGE_KEY = 'instance:purge-requested';
 const IDENTITY_STORAGE_KEY = 'instance:identity';
 const RUNTIME_GATE_STORAGE_KEY = 'runtime:gate';
-const KNOWN_LOCATIONS_STORAGE_KEY = 'runtime:known-locations';
 const TRANSCRIPT_TARGET_STORAGE_KEY = 'transcript:target';
 const TRANSCRIPT_MIRROR_STORAGE_KEY = 'transcript:mirror';
-const WAKE_TIMINGS_STORAGE_KEY = 'runtime:last-wake';
 const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
 /**
  * Set the moment `ensure` reports it seeded a fresh workspace from the repo's
@@ -152,17 +149,6 @@ const WORKSPACE_LOST_STORAGE_KEY = 'persistence:workspace-lost';
  * database — the one leak this feature must never have.
  */
 const SEED_PENDING_STORAGE_KEY = 'persistence:prebuild-seed-pending';
-/**
- * This object's own answer to "is the container up".
- *
- * The platform used to answer it synchronously through the container binding.
- * A host is a network hop away, so the answer is recorded here — written by
- * every call that starts or stops one, and re-read from the host wherever a
- * round trip is affordable (the runtime status, the activity probe, the stop
- * paths). It is persisted because a Durable Object restart must not come back
- * believing a running container is stopped.
- */
-const HOST_RUNTIME_STORAGE_KEY = 'host:runtime';
 
 const QUIESCE_SETTLE_MS = 1_500;
 const ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
@@ -388,7 +374,7 @@ export class Sandbox extends DurableObject<Env> {
   private readonly persistenceState: DurableObjectState<{}>;
   private readonly persistenceEnv: Env;
   private readonly lifecycleReady: Promise<void>;
-  /** Local truth about the container; see {@link HOST_RUNTIME_STORAGE_KEY}. */
+  /** Local truth about the container. */
   private hostRuntime: HostRuntimeState = {
     running: false,
     observedAt: new Date(0).toISOString()
@@ -446,37 +432,20 @@ export class Sandbox extends DurableObject<Env> {
         purgeRequested,
         identity,
         runtimeGate,
-        knownLocations,
         transcriptTarget,
-        transcriptMirror,
-        lastWake,
-        hostRuntime
+        transcriptMirror
       ] = await Promise.all([
         ctx.storage.get<boolean>(PURGE_STORAGE_KEY),
         ctx.storage.get<InstanceIdentity>(IDENTITY_STORAGE_KEY),
         ctx.storage.get<RuntimeGate>(RUNTIME_GATE_STORAGE_KEY),
-        ctx.storage.get<OpenCodeLocation[]>(KNOWN_LOCATIONS_STORAGE_KEY),
         ctx.storage.get<TranscriptTarget>(TRANSCRIPT_TARGET_STORAGE_KEY),
-        ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY),
-        ctx.storage.get<WakeTimings>(WAKE_TIMINGS_STORAGE_KEY),
-        ctx.storage.get<HostRuntimeState>(HOST_RUNTIME_STORAGE_KEY)
+        ctx.storage.get<TranscriptMirrorSummary>(TRANSCRIPT_MIRROR_STORAGE_KEY)
       ]);
       this.purgeRequested = Boolean(purgeRequested);
-      if (hostRuntime) {
-        this.hostRuntime = hostRuntime;
-      }
       this.instanceIdentity = identity;
       this.runtimeGate = runtimeGate;
       this.transcriptTarget = transcriptTarget;
       this.transcriptMirror = transcriptMirror;
-      this.lastWake = lastWake;
-      this.locationsNeedDiscovery =
-        identity?.state === 'active' && knownLocations === undefined;
-      for (const location of knownLocations ?? []) {
-        if (isWorkspaceLocation(location.directory)) {
-          this.knownLocations.set(openCodeLocationKey(location), location);
-        }
-      }
       this.instanceActive = identity?.state === 'active' && !purgeRequested;
     });
   }
@@ -521,15 +490,14 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /** Record what this object now believes about the container. */
-  private async setHostRuntime(
+  private setHostRuntime(
     state: Omit<HostRuntimeState, 'observedAt'>
-  ): Promise<void> {
+  ): void {
     const stored: HostRuntimeState = {
       ...state,
       observedAt: new Date().toISOString()
     };
     this.hostRuntime = stored;
-    await this.persistenceState.storage.put(HOST_RUNTIME_STORAGE_KEY, stored);
   }
 
   /** Whether the container is up, as far as this object knows. */
@@ -551,14 +519,14 @@ export class Sandbox extends DurableObject<Env> {
     }
     try {
       const state = await (await this.host()).state();
-      await this.setHostRuntime({
+      this.setHostRuntime({
         running: state.running,
         ...(state.changedAt ? { changedAt: state.changedAt } : {}),
         ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode })
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.setHostRuntime({ ...this.hostRuntime, error: message });
+      this.setHostRuntime({ ...this.hostRuntime, error: message });
       console.warn('Failed to read sandbox host session state', {
         instanceId: this.instanceIdentity.id,
         error: message
@@ -578,7 +546,7 @@ export class Sandbox extends DurableObject<Env> {
       return await operation();
     } catch (error) {
       if (isContainerNotRunning(error) && this.hostRuntime.running) {
-        await this.setHostRuntime({ running: false });
+        this.setHostRuntime({ running: false });
       }
       throw error;
     }
@@ -627,11 +595,9 @@ export class Sandbox extends DurableObject<Env> {
       initializedAt: new Date().toISOString()
     };
     await this.persistenceState.storage.put({
-      [IDENTITY_STORAGE_KEY]: identity,
-      [KNOWN_LOCATIONS_STORAGE_KEY]: [...this.knownLocations.values()]
+      [IDENTITY_STORAGE_KEY]: identity
     });
     this.instanceIdentity = identity;
-    this.locationsNeedDiscovery = false;
     this.instanceActive = true;
     await this.setRuntimeGate({ phase: 'sleeping', revision: 0 });
   }
@@ -880,7 +846,6 @@ export class Sandbox extends DurableObject<Env> {
     hostCalls: HostCallStats
   ): Promise<void> {
     this.lastWake = timings;
-    await this.persistenceState.storage.put(WAKE_TIMINGS_STORAGE_KEY, timings);
     console.log('Wake timings', {
       instanceId: this.instanceIdentity?.id,
       provider: this.instanceIdentity?.provider,
@@ -1248,7 +1213,7 @@ export class Sandbox extends DurableObject<Env> {
         // The host is telling us the container went away under the gate. Adopt
         // that before answering, so the next caller is not admitted into a
         // runtime that no longer exists.
-        await this.setHostRuntime({ running: false });
+        this.setHostRuntime({ running: false });
         await response.body?.cancel().catch(() => undefined);
         return runtimeUnavailableResponse(this.runtimeGate?.phase ?? 'sleeping');
       }
@@ -2485,7 +2450,7 @@ export class Sandbox extends DurableObject<Env> {
     if (!removed.removed) {
       return { outcome: 'termination_pending' };
     }
-    await this.setHostRuntime({ running: false });
+    this.setHostRuntime({ running: false });
     await this.deleteBackupObjects(backups);
     if (options.keepTranscript) {
       // Cleanup keeps the mirror and this object's storage — the stored
@@ -2522,12 +2487,12 @@ export class Sandbox extends DurableObject<Env> {
     try {
       const result = await (await this.host()).stop(STOP_GRACE_SECONDS);
       if (result.stopped) {
-        await this.setHostRuntime({ running: false });
+        this.setHostRuntime({ running: false });
       }
       return result.stopped;
     } catch (error) {
       if (isContainerNotRunning(error)) {
-        await this.setHostRuntime({ running: false });
+        this.setHostRuntime({ running: false });
         return true;
       }
       console.warn('Container termination failed', error);
@@ -2635,7 +2600,7 @@ export class Sandbox extends DurableObject<Env> {
         seededAt: new Date().toISOString()
       });
     }
-    await this.setHostRuntime({ running: true });
+    this.setHostRuntime({ running: true });
 
     // Is this the workspace the session has been working in, or a new one?
     //
@@ -2864,16 +2829,8 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private async getTrackedBackupHandles(): Promise<StoredSnapshotHandle[]> {
-    const [legacy, ledger] = await Promise.all([
-      this.persistenceState.storage.get<StoredSnapshotHandle[]>(
-        LEGACY_BACKUP_HANDLES_STORAGE_KEY
-      ),
-      this.listBackupHandleLedger()
-    ]);
-    return mergeBackupHandles(
-      legacy ?? [],
-      ...ledger.values()
-    );
+    const ledger = await this.listBackupHandleLedger();
+    return [...ledger.values()];
   }
 
   private async listBackupHandleLedger(): Promise<
@@ -2915,10 +2872,9 @@ export class Sandbox extends DurableObject<Env> {
     const staleKeys = [...existing.keys()].filter(
       (key) => !desired.has(key)
     );
-    await this.persistenceState.storage.delete([
-      ...staleKeys,
-      LEGACY_BACKUP_HANDLES_STORAGE_KEY
-    ]);
+    if (staleKeys.length > 0) {
+      await this.persistenceState.storage.delete(staleKeys);
+    }
   }
 
   private async deleteBackupObjects(
@@ -3021,13 +2977,7 @@ export class Sandbox extends DurableObject<Env> {
     if (!location || !isWorkspaceLocation(location.directory)) {
       return;
     }
-    if (!this.addKnownLocation(location)) {
-      return;
-    }
-    await this.persistenceState.storage.put(
-      KNOWN_LOCATIONS_STORAGE_KEY,
-      [...this.knownLocations.values()]
-    );
+    this.addKnownLocation(location);
   }
 
   private addKnownLocation(location: OpenCodeLocation): boolean {
@@ -3081,10 +3031,6 @@ export class Sandbox extends DurableObject<Env> {
           this.addKnownLocation(location);
         }
       }
-      await this.persistenceState.storage.put(
-        KNOWN_LOCATIONS_STORAGE_KEY,
-        [...this.knownLocations.values()]
-      );
       this.locationsNeedDiscovery = false;
       return undefined;
     } catch (error) {

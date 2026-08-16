@@ -12,8 +12,6 @@ import {
 } from './hub-store';
 import type { LifecycleCoordinator } from './lifecycle';
 
-/** The storage key the registry lived under before it moved to D1. */
-const LEGACY_SCHEMA_VERSION_KEY = 'hub:schema-version';
 const DELETE_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000;
 
 class DeleteAttemptTimeoutError extends Error {}
@@ -32,11 +30,6 @@ export class Hub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.initialized = ctx.blockConcurrencyWhile(async () => {
-      // The registry this object used to hold was left behind, not migrated;
-      // the marker key is only present on storage from that era.
-      if ((await ctx.storage.get(LEGACY_SCHEMA_VERSION_KEY)) !== undefined) {
-        await ctx.storage.deleteAll();
-      }
       // A crash between the D1 claim and the poke would otherwise strand a
       // queued deletion or cleanup until the next request happens to arrive.
       if (

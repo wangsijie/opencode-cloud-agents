@@ -138,6 +138,9 @@ export const prebuildRuns = sqliteTable(
     status: text('status').notNull(),
     startedAt: text('started_at').notNull(),
     finishedAt: text('finished_at'),
+    step: text('step'),
+    stepStartedAt: integer('step_started_at'),
+    attempts: integer('attempts').notNull().default(0),
     /** JSON: {cloneMs, installMs, promoteMs, totalMs} as stages complete. */
     timings: text('timings'),
     error: text('error'),

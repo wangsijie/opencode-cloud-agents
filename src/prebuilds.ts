@@ -30,6 +30,14 @@ export interface PrebuildRecord {
 
 export type PrebuildRunStatus = 'running' | 'succeeded' | 'failed';
 
+export type PrebuildRunStep =
+  | 'provision'
+  | 'install-start'
+  | 'install'
+  | 'stop'
+  | 'promote'
+  | 'cleanup';
+
 /** Stage durations, written as each stage completes. */
 export interface PrebuildRunTimings {
   /** Clone (or seed-refresh) of the checkout. */
@@ -46,6 +54,9 @@ export interface PrebuildRunRecord {
   status: PrebuildRunStatus;
   startedAt: string;
   finishedAt?: string;
+  step?: PrebuildRunStep;
+  stepStartedAt?: number;
+  attempts?: number;
   timings?: PrebuildRunTimings;
   error?: string;
   /** Last lines of the install log, refreshed while the run is live. */
@@ -142,7 +153,10 @@ export async function insertPrebuildRun(
     repoKey: run.repoKey,
     provider: run.provider,
     status: run.status,
-    startedAt: run.startedAt
+    startedAt: run.startedAt,
+    step: run.step ?? null,
+    stepStartedAt: run.stepStartedAt ?? null,
+    attempts: run.attempts ?? 0
   });
 }
 
@@ -150,6 +164,9 @@ export async function insertPrebuildRun(
 export interface PrebuildRunPatch {
   status?: PrebuildRunStatus;
   finishedAt?: string;
+  step?: PrebuildRunStep | null;
+  stepStartedAt?: number | null;
+  attempts?: number;
   timings?: PrebuildRunTimings;
   error?: string;
   logTail?: string;
@@ -168,6 +185,11 @@ export async function updatePrebuildRun(
   const set: SQLiteUpdateSetSource<typeof prebuildRuns> = {
     ...(patch.status === undefined ? {} : { status: patch.status }),
     ...(patch.finishedAt === undefined ? {} : { finishedAt: patch.finishedAt }),
+    ...(patch.step === undefined ? {} : { step: patch.step }),
+    ...(patch.stepStartedAt === undefined
+      ? {}
+      : { stepStartedAt: patch.stepStartedAt }),
+    ...(patch.attempts === undefined ? {} : { attempts: patch.attempts }),
     ...(patch.timings === undefined
       ? {}
       : { timings: JSON.stringify(patch.timings) }),
@@ -217,6 +239,38 @@ export async function latestPrebuildRuns(
   return latest;
 }
 
+export async function getPrebuildRun(
+  env: Env,
+  id: string
+): Promise<PrebuildRunRecord | undefined> {
+  const [row] = await db(env)
+    .select()
+    .from(prebuildRuns)
+    .where(eq(prebuildRuns.id, id))
+    .limit(1);
+  return row ? rowToRun(row) : undefined;
+}
+
+export async function findActivePrebuildRun(
+  env: Env,
+  repoKey: string,
+  provider: SessionProvider
+): Promise<PrebuildRunRecord | undefined> {
+  const [row] = await db(env)
+    .select()
+    .from(prebuildRuns)
+    .where(
+      and(
+        eq(prebuildRuns.repoKey, repoKey),
+        eq(prebuildRuns.provider, provider),
+        eq(prebuildRuns.status, 'running')
+      )
+    )
+    .orderBy(desc(prebuildRuns.startedAt))
+    .limit(1);
+  return row ? rowToRun(row) : undefined;
+}
+
 function rowToPrebuild(row: PrebuildRow): PrebuildRecord {
   return {
     repoKey: row.repoKey,
@@ -236,6 +290,9 @@ function rowToRun(row: PrebuildRunRow): PrebuildRunRecord {
     status: row.status as PrebuildRunStatus,
     startedAt: row.startedAt,
     ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
+    ...(row.step === null ? {} : { step: row.step as PrebuildRunStep }),
+    ...(row.stepStartedAt === null ? {} : { stepStartedAt: row.stepStartedAt }),
+    attempts: row.attempts,
     ...(row.timings === null ? {} : { timings: parseTimings(row.timings) }),
     ...(row.error === null ? {} : { error: row.error }),
     ...(row.logTail === null ? {} : { logTail: row.logTail })

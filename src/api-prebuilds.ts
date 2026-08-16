@@ -151,7 +151,7 @@ async function removePrebuild(
   }
   const provider = rawProvider as SessionProvider;
   const runner = env.PrebuildRunner.getByName(prebuildKey(provider, rawKey));
-  if (await runner.isRunning()) {
+  if (await runner.isRunning({ repoKey: rawKey, provider })) {
     throw new HttpError(409, 'A prebuild run is underway; wait for it to finish');
   }
   if (await resolveDockerHost(env, provider)) {

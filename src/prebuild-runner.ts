@@ -28,10 +28,15 @@ import {
   loadContainerCredentials
 } from './container-credentials.ts';
 import { HostError, resolveHostClient, type HostClient } from './host-client.ts';
+import { findCatalogRepo } from './hub-store.ts';
 import {
+  findActivePrebuildRun,
+  getPrebuildRun,
+  insertPrebuildRun,
   updatePrebuildRun,
   upsertPrebuildRecord,
-  insertPrebuildRun,
+  type PrebuildRunRecord,
+  type PrebuildRunStep,
   type PrebuildRunTimings
 } from './prebuilds.ts';
 import { workspaceDirectory, type RepoDefinition } from './repos.ts';
@@ -52,7 +57,7 @@ const RUN_LOG_PATH = '/tmp/oc-prebuild.log';
 const RUN_EXIT_PATH = '/tmp/oc-prebuild.exit';
 const RUN_STARTED_PATH = '/tmp/oc-prebuild.started';
 
-const RUN_STORAGE_KEY = 'prebuild:run';
+const RUN_ID_STORAGE_KEY = 'prebuild:run-id';
 
 /** How much of the install log rides along on each poll. */
 const LOG_TAIL_BYTES = 4000;
@@ -64,7 +69,7 @@ const POLL_INTERVAL_MS = 10 * 1000;
  * the invocation that owned the step died; a step that merely takes long is
  * still awaited by its own invocation.
  */
-const STEP_BUDGET_MS: Record<RunStep, number> = {
+const STEP_BUDGET_MS: Record<PrebuildRunStep, number> = {
   provision: 10 * 60 * 1000,
   'install-start': 2 * 60 * 1000,
   install: 30 * 60 * 1000,
@@ -74,32 +79,10 @@ const STEP_BUDGET_MS: Record<RunStep, number> = {
 };
 const WATCHDOG_SLACK_MS = 60 * 1000;
 
-type RunStep =
-  | 'provision'
-  | 'install-start'
-  | 'install'
-  | 'stop'
-  | 'promote'
-  | 'cleanup';
-
-interface RunState {
-  runId: string;
-  repoKey: string;
+interface ActiveRunContext {
+  record: PrebuildRunRecord;
   repo: RepoDefinition;
-  /**
-   * Which Docker host this run builds on. Absent on a run that was underway
-   * when this field arrived, which is read as the first configured host —
-   * the only one such a run could have been placed on.
-   */
-  provider?: SessionProvider;
-  /** The throwaway host session the run drives. */
   sessionId: string;
-  step: RunStep;
-  stepStartedAt: number;
-  startedAt: number;
-  /** Retries of the current step after a suspected death; 2 strikes out. */
-  attempts: number;
-  timings: PrebuildRunTimings;
 }
 
 export interface StartPrebuildRunInput {
@@ -115,6 +98,8 @@ export type StartPrebuildRunResult =
   | { started: false; reason: 'busy' };
 
 export class PrebuildRunner extends DurableObject<Env> {
+  private runInProgress = false;
+
   /**
    * Begin a run, unless one is already underway for this repo. The run row is
    * inserted here, inside the same object that will update it, so a row in
@@ -122,90 +107,138 @@ export class PrebuildRunner extends DurableObject<Env> {
    * watchdog will convert to `failed`.
    */
   async startRun(input: StartPrebuildRunInput): Promise<StartPrebuildRunResult> {
-    const existing = await this.ctx.storage.get<RunState>(RUN_STORAGE_KEY);
-    if (existing) {
+    if (this.runInProgress) {
       return { started: false, reason: 'busy' };
     }
-    const state: RunState = {
-      runId: input.runId,
-      repoKey: input.repoKey,
-      repo: input.repo,
-      provider: input.provider,
-      // Deterministic, and sliced so the id stays inside the protocol's
-      // 64-char session-id bound for the longest legal repo key.
-      sessionId: `pbr-${input.repoKey.slice(0, 56)}`,
-      step: 'provision',
-      stepStartedAt: Date.now(),
-      startedAt: Date.now(),
-      attempts: 0,
-      timings: {}
-    };
+    const storedRunId = await this.ctx.storage.get<string>(RUN_ID_STORAGE_KEY);
+    if (storedRunId) {
+      const existing = await getPrebuildRun(this.env, storedRunId);
+      if (existing && existing.status === 'running') {
+        return { started: false, reason: 'busy' };
+      }
+    }
+    const active = await findActivePrebuildRun(this.env, input.repoKey, input.provider);
+    if (active) {
+      return { started: false, reason: 'busy' };
+    }
+
+    this.runInProgress = true;
+    const now = Date.now();
     await insertPrebuildRun(this.env, {
       id: input.runId,
       repoKey: input.repoKey,
       provider: input.provider,
       status: 'running',
-      startedAt: new Date().toISOString()
+      startedAt: new Date(now).toISOString(),
+      step: 'provision',
+      stepStartedAt: now,
+      attempts: 0
     });
-    await this.ctx.storage.put(RUN_STORAGE_KEY, state);
-    await this.ctx.storage.setAlarm(Date.now());
+    await this.ctx.storage.put(RUN_ID_STORAGE_KEY, input.runId);
+    await this.ctx.storage.setAlarm(now);
     return { started: true };
   }
 
   /** Whether a run is underway. The API's 409 for delete-while-building. */
-  async isRunning(): Promise<boolean> {
-    return (await this.ctx.storage.get<RunState>(RUN_STORAGE_KEY)) !== undefined;
+  async isRunning(context?: { repoKey: string; provider: SessionProvider }): Promise<boolean> {
+    if (this.runInProgress) {
+      return true;
+    }
+    const storedRunId = await this.ctx.storage.get<string>(RUN_ID_STORAGE_KEY);
+    if (storedRunId) {
+      const existing = await getPrebuildRun(this.env, storedRunId);
+      if (existing && existing.status === 'running') {
+        return true;
+      }
+    }
+    if (context) {
+      const active = await findActivePrebuildRun(this.env, context.repoKey, context.provider);
+      if (active) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async alarm(): Promise<void> {
-    const state = await this.ctx.storage.get<RunState>(RUN_STORAGE_KEY);
-    if (!state) {
+    const runId = await this.ctx.storage.get<string>(RUN_ID_STORAGE_KEY);
+    if (!runId) {
+      this.runInProgress = false;
       return;
     }
+    const record = await getPrebuildRun(this.env, runId);
+    if (!record || record.status !== 'running') {
+      await this.ctx.storage.delete(RUN_ID_STORAGE_KEY);
+      this.runInProgress = false;
+      return;
+    }
+    this.runInProgress = true;
+
+    const repo = await findCatalogRepo(this.env, record.repoKey);
+    if (!repo) {
+      await this.failRun(
+        { record, repo: fallbackRepo(record.repoKey), sessionId: runSessionId(record.repoKey) },
+        `Repository "${record.repoKey}" is no longer in the catalog`
+      );
+      return;
+    }
+
+    const ctx: ActiveRunContext = {
+      record,
+      repo,
+      sessionId: runSessionId(record.repoKey)
+    };
+
+    const step = record.step ?? 'provision';
+    const stepStartedAt = record.stepStartedAt ?? (Date.parse(record.startedAt) || Date.now());
+    let attempts = record.attempts ?? 0;
+
     // An alarm for an inline step can only mean the invocation that ran it
     // died (success re-arms the alarm for the *next* step before returning).
     // The poll step is the exception: its alarms are the ordinary heartbeat.
-    if (state.step !== 'install') {
-      state.attempts += 1;
-      if (state.attempts > 2) {
+    if (step !== 'install') {
+      attempts += 1;
+      if (attempts > 2) {
         await this.failRun(
-          state,
-          `The ${state.step} step died twice; giving up`
+          ctx,
+          `The ${step} step died twice; giving up`
         );
         return;
       }
-      await this.ctx.storage.put(RUN_STORAGE_KEY, state);
-    } else if (Date.now() - state.stepStartedAt > STEP_BUDGET_MS.install) {
-      await this.failRun(state, 'The install ran past its 30 minute budget');
+      await updatePrebuildRun(this.env, record.id, { attempts });
+      ctx.record.attempts = attempts;
+    } else if (Date.now() - stepStartedAt > STEP_BUDGET_MS.install) {
+      await this.failRun(ctx, 'The install ran past its 30 minute budget');
       return;
     }
 
     try {
-      await this.runStep(state);
+      await this.runStep(ctx);
     } catch (error) {
-      await this.failRun(state, describeError(error));
+      await this.failRun(ctx, describeError(error));
     }
   }
 
-  private async runStep(state: RunState): Promise<void> {
+  private async runStep(ctx: ActiveRunContext): Promise<void> {
     const host = await resolveHostClient(
       this.env,
-      state.sessionId,
-      providerOf(state)
+      ctx.sessionId,
+      providerOf(ctx.record)
     );
-    switch (state.step) {
+    const step = ctx.record.step ?? 'provision';
+    switch (step) {
       case 'provision':
-        return this.provision(state, host);
+        return this.provision(ctx, host);
       case 'install-start':
-        return this.startInstall(state, host);
+        return this.startInstall(ctx, host);
       case 'install':
-        return this.pollInstall(state, host);
+        return this.pollInstall(ctx, host);
       case 'stop':
-        return this.stopContainer(state, host);
+        return this.stopContainer(ctx, host);
       case 'promote':
-        return this.promote(state, host);
+        return this.promote(ctx, host);
       case 'cleanup':
-        return this.cleanup(state, host);
+        return this.cleanup(ctx, host);
     }
   }
 
@@ -215,12 +248,12 @@ export class PrebuildRunner extends DurableObject<Env> {
    * prebuild when there is one, which is what makes a re-run incremental —
    * credentials, and a checkout on the current default branch.
    */
-  private async provision(state: RunState, host: HostClient): Promise<void> {
-    await this.armWatchdog(state);
+  private async provision(ctx: ActiveRunContext, host: HostClient): Promise<void> {
+    await this.armWatchdog(ctx);
     const startedAt = Date.now();
     await host.remove();
-    const ensured = await host.ensure({ repoKey: state.repoKey });
-    const checkout = this.checkoutOf(state);
+    const ensured = await host.ensure({ repoKey: ctx.record.repoKey });
+    const checkout = this.checkoutOf(ctx);
     await injectContainerCredentials(
       host,
       await loadContainerCredentials(this.env),
@@ -231,7 +264,7 @@ export class PrebuildRunner extends DurableObject<Env> {
         await sanitizeSeededWorkspace(host, checkout);
       } catch (error) {
         console.warn(
-          `Prebuild run seed unusable for ${state.repoKey}; wiping and cloning`,
+          `Prebuild run seed unusable for ${ctx.record.repoKey}; wiping and cloning`,
           error
         );
         await wipeSeededWorkspace(host, checkout);
@@ -240,8 +273,10 @@ export class PrebuildRunner extends DurableObject<Env> {
     } else {
       await provisionRepository(host, checkout);
     }
-    state.timings.cloneMs = Date.now() - startedAt;
-    await this.advance(state, 'install-start');
+    const timings = { ...ctx.record.timings, cloneMs: Date.now() - startedAt };
+    ctx.record.timings = timings;
+    await updatePrebuildRun(this.env, ctx.record.id, { timings });
+    await this.advance(ctx, 'install-start');
   }
 
   /**
@@ -249,14 +284,14 @@ export class PrebuildRunner extends DurableObject<Env> {
    * The started-marker makes a retried launch a no-op instead of a second
    * install racing the first.
    */
-  private async startInstall(state: RunState, host: HostClient): Promise<void> {
-    await this.armWatchdog(state);
+  private async startInstall(ctx: ActiveRunContext, host: HostClient): Promise<void> {
+    await this.armWatchdog(ctx);
     const started = await host.exists(RUN_STARTED_PATH);
     if (!started.exists) {
       await host.writeBatch([
         {
           path: RUN_SCRIPT_PATH,
-          content: installScript(this.checkoutOf(state).directory),
+          content: installScript(this.checkoutOf(ctx).directory),
           mode: '755'
         }
       ]);
@@ -273,11 +308,11 @@ export class PrebuildRunner extends DurableObject<Env> {
         throw new Error(`Could not launch the install: ${launched.stderr}`);
       }
     }
-    await this.advance(state, 'install', { alarmInMs: POLL_INTERVAL_MS });
+    await this.advance(ctx, 'install', { alarmInMs: POLL_INTERVAL_MS });
   }
 
   /** One heartbeat: done yet? If not, refresh the log tail and re-arm. */
-  private async pollInstall(state: RunState, host: HostClient): Promise<void> {
+  private async pollInstall(ctx: ActiveRunContext, host: HostClient): Promise<void> {
     let exitCode: number | undefined;
     try {
       const exit = await host.readFile(RUN_EXIT_PATH);
@@ -290,7 +325,7 @@ export class PrebuildRunner extends DurableObject<Env> {
 
     const tail = await this.readLogTail(host);
     if (tail !== undefined) {
-      await updatePrebuildRun(this.env, state.runId, { logTail: tail });
+      await updatePrebuildRun(this.env, ctx.record.id, { logTail: tail });
     }
 
     if (exitCode === undefined) {
@@ -302,8 +337,11 @@ export class PrebuildRunner extends DurableObject<Env> {
         `The install exited ${exitCode}. ${tail ? `Log tail:\n${tail}` : ''}`
       );
     }
-    state.timings.installMs = Date.now() - state.stepStartedAt;
-    await this.advance(state, 'stop');
+    const stepStartedAt = ctx.record.stepStartedAt ?? Date.now();
+    const timings = { ...ctx.record.timings, installMs: Date.now() - stepStartedAt };
+    ctx.record.timings = timings;
+    await updatePrebuildRun(this.env, ctx.record.id, { timings });
+    await this.advance(ctx, 'stop');
   }
 
   /**
@@ -311,12 +349,12 @@ export class PrebuildRunner extends DurableObject<Env> {
    * terminations are retried inline rather than via the alarm — an alarm
    * retry on this step would be indistinguishable from a died invocation.
    */
-  private async stopContainer(state: RunState, host: HostClient): Promise<void> {
-    await this.armWatchdog(state);
+  private async stopContainer(ctx: ActiveRunContext, host: HostClient): Promise<void> {
+    await this.armWatchdog(ctx);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const stopped = await host.stop(5);
       if (stopped.stopped) {
-        await this.advance(state, 'promote');
+        await this.advance(ctx, 'promote');
         return;
       }
       await scheduler.wait(3_000);
@@ -324,41 +362,45 @@ export class PrebuildRunner extends DurableObject<Env> {
     throw new Error('The run container would not stop');
   }
 
-  private async promote(state: RunState, host: HostClient): Promise<void> {
-    await this.armWatchdog(state);
+  private async promote(ctx: ActiveRunContext, host: HostClient): Promise<void> {
+    await this.armWatchdog(ctx);
     const startedAt = Date.now();
     const promoted = await host.prebuildPromote({
-      repoKey: state.repoKey,
+      repoKey: ctx.record.repoKey,
       // The one workspace file that is the site's bookkeeping, not the
       // repo's: a seeded workspace must not arrive looking already-restored.
       exclude: [PERSISTENCE_MARKER_NAME]
     });
-    state.timings.promoteMs = Date.now() - startedAt;
+    const timings = { ...ctx.record.timings, promoteMs: Date.now() - startedAt };
+    ctx.record.timings = timings;
+    await updatePrebuildRun(this.env, ctx.record.id, { timings });
     await upsertPrebuildRecord(this.env, {
-      repoKey: state.repoKey,
-      provider: providerOf(state),
+      repoKey: ctx.record.repoKey,
+      provider: providerOf(ctx.record),
       // Mirrors `prebuildVolumeName` in agent/docker.mjs.
-      location: `oc-prebuild-${state.repoKey}`,
+      location: `oc-prebuild-${ctx.record.repoKey}`,
       ...(promoted.sizeBytes !== undefined
         ? { sizeBytes: promoted.sizeBytes }
         : {}),
       source: 'run',
       updatedAt: new Date().toISOString()
     });
-    await this.advance(state, 'cleanup');
+    await this.advance(ctx, 'cleanup');
   }
 
-  private async cleanup(state: RunState, host: HostClient): Promise<void> {
-    await this.armWatchdog(state);
+  private async cleanup(ctx: ActiveRunContext, host: HostClient): Promise<void> {
+    await this.armWatchdog(ctx);
     await host.remove();
-    state.timings.totalMs = Date.now() - state.startedAt;
-    await updatePrebuildRun(this.env, state.runId, {
+    const totalStartedAt = Date.parse(ctx.record.startedAt) || Date.now();
+    const timings = { ...ctx.record.timings, totalMs: Date.now() - totalStartedAt };
+    await updatePrebuildRun(this.env, ctx.record.id, {
       status: 'succeeded',
       finishedAt: new Date().toISOString(),
-      timings: state.timings
+      timings
     });
-    await this.ctx.storage.delete(RUN_STORAGE_KEY);
+    await this.ctx.storage.delete(RUN_ID_STORAGE_KEY);
     await this.ctx.storage.deleteAlarm();
+    this.runInProgress = false;
   }
 
   /**
@@ -366,21 +408,22 @@ export class PrebuildRunner extends DurableObject<Env> {
    * throwaway container. The existing prebuild, if any, is untouched — a
    * failed refresh keeps yesterday's warm copy.
    */
-  private async failRun(state: RunState, message: string): Promise<void> {
-    console.warn(`Prebuild run failed for ${state.repoKey}: ${message}`);
-    await updatePrebuildRun(this.env, state.runId, {
+  private async failRun(ctx: ActiveRunContext, message: string): Promise<void> {
+    console.warn(`Prebuild run failed for ${ctx.record.repoKey}: ${message}`);
+    await updatePrebuildRun(this.env, ctx.record.id, {
       status: 'failed',
       finishedAt: new Date().toISOString(),
-      timings: state.timings,
+      timings: ctx.record.timings,
       error: message.slice(0, 2000)
     });
-    await this.ctx.storage.delete(RUN_STORAGE_KEY);
+    await this.ctx.storage.delete(RUN_ID_STORAGE_KEY);
     await this.ctx.storage.deleteAlarm();
+    this.runInProgress = false;
     try {
       const host = await resolveHostClient(
         this.env,
-        state.sessionId,
-        providerOf(state)
+        ctx.sessionId,
+        providerOf(ctx.record)
       );
       await host.remove();
     } catch (error) {
@@ -390,28 +433,34 @@ export class PrebuildRunner extends DurableObject<Env> {
 
   /** Move to the next step and arm its alarm (watchdog or poll heartbeat). */
   private async advance(
-    state: RunState,
-    step: RunStep,
+    ctx: ActiveRunContext,
+    step: PrebuildRunStep,
     options: { alarmInMs?: number } = {}
   ): Promise<void> {
-    state.step = step;
-    state.stepStartedAt = Date.now();
-    state.attempts = 0;
-    await this.ctx.storage.put(RUN_STORAGE_KEY, state);
+    const stepStartedAt = Date.now();
+    ctx.record.step = step;
+    ctx.record.stepStartedAt = stepStartedAt;
+    ctx.record.attempts = 0;
+    await updatePrebuildRun(this.env, ctx.record.id, {
+      step,
+      stepStartedAt,
+      attempts: 0
+    });
     await this.ctx.storage.setAlarm(
       Date.now() +
         (options.alarmInMs ?? STEP_BUDGET_MS[step] + WATCHDOG_SLACK_MS)
     );
-    await this.runStep(state);
+    await this.runStep(ctx);
   }
 
   /**
    * Re-arm the current step's watchdog before its long awaits, so a died
    * invocation is retried (then failed) instead of leaving the run stuck.
    */
-  private async armWatchdog(state: RunState): Promise<void> {
+  private async armWatchdog(ctx: ActiveRunContext): Promise<void> {
+    const step = ctx.record.step ?? 'provision';
     await this.ctx.storage.setAlarm(
-      Date.now() + STEP_BUDGET_MS[state.step] + WATCHDOG_SLACK_MS
+      Date.now() + STEP_BUDGET_MS[step] + WATCHDOG_SLACK_MS
     );
   }
 
@@ -424,14 +473,27 @@ export class PrebuildRunner extends DurableObject<Env> {
     return text.length > 0 ? text : undefined;
   }
 
-  private checkoutOf(state: RunState): RuntimeCheckout {
+  private checkoutOf(ctx: ActiveRunContext): RuntimeCheckout {
     return {
-      repo: state.repo,
-      repoKey: state.repoKey,
-      directory: workspaceDirectory(state.repoKey),
-      sessionId: state.sessionId
+      repo: ctx.repo,
+      repoKey: ctx.record.repoKey,
+      directory: workspaceDirectory(ctx.record.repoKey),
+      sessionId: ctx.sessionId
     };
   }
+}
+
+function runSessionId(repoKey: string): string {
+  return `pbr-${repoKey.slice(0, 56)}`;
+}
+
+function fallbackRepo(repoKey: string): RepoDefinition {
+  return {
+    repoKey,
+    displayName: repoKey,
+    defaultBranch: 'main',
+    cloneUrl: `https://github.com/unknown/${repoKey}.git`
+  };
 }
 
 /**
@@ -480,8 +542,8 @@ async function loadOperatorEnv(env: Env): Promise<Record<string, string>> {
  * were several carries, and it resolves to the first configured one — which is
  * the only host it could have been placed on.
  */
-function providerOf(state: RunState): SessionProvider {
-  return state.provider ?? 'docker';
+function providerOf(record: PrebuildRunRecord): SessionProvider {
+  return record.provider ?? 'docker';
 }
 
 function describeError(error: unknown): string {

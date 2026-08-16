@@ -16,6 +16,8 @@ import test from 'node:test';
 import {
   deletePrebuildRecord,
   deletePrebuildRuns,
+  findActivePrebuildRun,
+  getPrebuildRun,
   insertPrebuildRun,
   latestPrebuildRuns,
   listPrebuildRecords,
@@ -121,7 +123,8 @@ test('a run is inserted with only its opening fields set', async () => {
     repoKey: 'opencode-cloud',
     provider: 'docker',
     status: 'running',
-    startedAt: '2026-07-01T00:00:00.000Z'
+    startedAt: '2026-07-01T00:00:00.000Z',
+    attempts: 0
   });
 });
 
@@ -255,4 +258,43 @@ test('timings that are not valid JSON degrade to an empty object', async () => {
 
   const run = (await latestPrebuildRuns(env)).get('docker/opencode-cloud');
   assert.deepEqual(run.timings, {});
+});
+
+test('getPrebuildRun and findActivePrebuildRun query execution state from D1', async () => {
+  const env = createTestEnv();
+  await insertPrebuildRun(env, {
+    id: 'run-1',
+    repoKey: 'opencode-cloud',
+    provider: 'docker:mini',
+    status: 'running',
+    startedAt: '2026-07-01T00:00:00.000Z',
+    step: 'provision',
+    stepStartedAt: 1700000000000,
+    attempts: 1
+  });
+
+  const run = await getPrebuildRun(env, 'run-1');
+  assert.equal(run?.id, 'run-1');
+  assert.equal(run?.step, 'provision');
+  assert.equal(run?.stepStartedAt, 1700000000000);
+  assert.equal(run?.attempts, 1);
+
+  const active = await findActivePrebuildRun(env, 'opencode-cloud', 'docker:mini');
+  assert.equal(active?.id, 'run-1');
+
+  await updatePrebuildRun(env, 'run-1', {
+    step: 'install',
+    stepStartedAt: 1700000050000,
+    attempts: 0,
+    status: 'succeeded'
+  });
+
+  const updated = await getPrebuildRun(env, 'run-1');
+  assert.equal(updated?.step, 'install');
+  assert.equal(updated?.stepStartedAt, 1700000050000);
+  assert.equal(updated?.attempts, 0);
+  assert.equal(updated?.status, 'succeeded');
+
+  const noActive = await findActivePrebuildRun(env, 'opencode-cloud', 'docker:mini');
+  assert.equal(noActive, undefined);
 });
