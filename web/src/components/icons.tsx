@@ -90,6 +90,30 @@ export function SplitDiffIcon() {
   );
 }
 
+/** The working tree alone: a file being edited. */
+export function WorkingTreeIcon() {
+  return (
+    <Icon>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5" />
+      <path d="M14 3v5h5" />
+      <path d="M20.5 12.5 15 18l-2.5.5.5-2.5 5.5-5.5a1.4 1.4 0 0 1 2 2Z" />
+    </Icon>
+  );
+}
+
+/** Everything on this branch: commits off the trunk. */
+export function BranchIcon() {
+  return (
+    <Icon>
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="6" cy="18" r="2.5" />
+      <circle cx="18" cy="8" r="2.5" />
+      <path d="M6 8.5v7" />
+      <path d="M18 10.5c0 4-5 3-8 5.5" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon() {
   return (
     <Icon>

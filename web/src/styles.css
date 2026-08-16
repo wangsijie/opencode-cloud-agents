@@ -2391,6 +2391,15 @@ input.question-custom:focus {
   display: flex;
 }
 
+/* Two toggles now sit in the header — the base and the layout — and six 36px
+   circles in a 380px sidebar read as one undifferentiated row without a seam
+   between the groups. */
+.diff-mode-toggle + .diff-mode-toggle {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
 .file-status {
   flex: 0 0 auto;
   font-size: 11px;

@@ -92,7 +92,11 @@ import {
   WORKSPACE_ROOT,
   type RepoDefinition
 } from './repos';
-import { shellQuote, type SessionChanges } from './session-changes';
+import {
+  shellQuote,
+  type ChangesScope,
+  type SessionChanges
+} from './session-changes';
 import { classifySessionEvent, SseFrameBuffer } from './session-events';
 import {
   walkSessionLineage,
@@ -1820,13 +1824,16 @@ export class Sandbox extends DurableObject<Env> {
    * protocol; what stays here is the gate, the operation lease, and the refusal
    * to run git in a session that has no repository.
    */
-  async readSessionChanges(runtimeEpoch: string): Promise<SessionChanges> {
+  async readSessionChanges(
+    runtimeEpoch: string,
+    scope: ChangesScope = 'head'
+  ): Promise<SessionChanges> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Reading session changes');
     this.beginActiveOperation();
     try {
       return await this.onHost(async () =>
-        readChangesOnHost(await this.host(), this.requireRepoCheckout())
+        readChangesOnHost(await this.host(), this.requireRepoCheckout(), scope)
       );
     } finally {
       this.finishActiveOperation();

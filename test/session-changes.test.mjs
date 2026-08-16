@@ -5,6 +5,9 @@ import {
   MAX_DIFF_LENGTH,
   decodeGitStatusOutput,
   limitDiff,
+  mergeChangedFiles,
+  parseChangesScope,
+  parseGitNameStatus,
   parseGitStatus,
   shellQuote
 } from '../src/session-changes.ts'
@@ -72,4 +75,57 @@ test('an oversized diff is cut, and says so', () => {
   const big = limitDiff('x'.repeat(MAX_DIFF_LENGTH + 10))
   assert.equal(big.diff.length, MAX_DIFF_LENGTH)
   assert.equal(big.diffTruncated, true)
+})
+
+test('the scope query is a closed set, defaulting to the working tree', () => {
+  assert.equal(parseChangesScope('branch'), 'branch')
+  assert.equal(parseChangesScope('head'), 'head')
+  // Anything else is the working tree rather than an error: the panel is a
+  // read, and an unknown scope must not turn it into a 400.
+  assert.equal(parseChangesScope(null), 'head')
+  assert.equal(parseChangesScope('BRANCH'), 'head')
+  assert.equal(parseChangesScope('origin/main'), 'head')
+})
+
+test('name-status parses the committed half, renames included', () => {
+  const files = parseGitNameStatus(
+    [
+      'M',
+      'src/app.ts',
+      'A',
+      'src/new.ts',
+      'D',
+      'src/gone.ts',
+      'R100',
+      'src/before.ts',
+      'src/after.ts',
+      ''
+    ].join('\0')
+  )
+  assert.deepEqual(files, [
+    { path: 'src/app.ts', status: 'modified' },
+    { path: 'src/new.ts', status: 'added' },
+    { path: 'src/gone.ts', status: 'deleted' },
+    { path: 'src/after.ts', status: 'renamed', renamedFrom: 'src/before.ts' }
+  ])
+})
+
+test('a file both committed and edited again is one row, not two', () => {
+  const merged = mergeChangedFiles(
+    [
+      { path: 'src/new.ts', status: 'added' },
+      { path: 'src/app.ts', status: 'modified' }
+    ],
+    [
+      // The same file, uncommitted on top: the committed status is the one that
+      // is true against the branch base.
+      { path: 'src/new.ts', status: 'modified' },
+      { path: 'notes.md', status: 'untracked' }
+    ]
+  )
+  assert.deepEqual(merged, [
+    { path: 'src/new.ts', status: 'added' },
+    { path: 'src/app.ts', status: 'modified' },
+    { path: 'notes.md', status: 'untracked' }
+  ])
 })

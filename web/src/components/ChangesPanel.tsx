@@ -3,16 +3,19 @@ import {
   fetchChanges,
   wakeSession,
   type ChangedFile,
+  type ChangesScope,
   type SessionChanges
 } from '../api';
 import { usePrefersDark } from '../usePrefersDark';
 import { FileDiff, type DiffMode } from './FileDiff';
 import {
+  BranchIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   RefreshIcon,
   SplitDiffIcon,
-  UnifiedDiffIcon
+  UnifiedDiffIcon,
+  WorkingTreeIcon
 } from './icons';
 
 /** How many times one request to read the diff may be tried before it stops. */
@@ -41,6 +44,18 @@ const STATUS_CODES: Record<string, string> = {
 };
 
 const MODE_KEY = 'hub.diffViewMode';
+const SCOPE_KEY = 'hub.diffScope';
+
+// The working tree is the default because it is the answer to "what did the
+// agent just do"; the branch scope is the answer to "what would a pull request
+// contain", which is a question asked later and less often.
+function readScope(): ChangesScope {
+  try {
+    return localStorage.getItem(SCOPE_KEY) === 'branch' ? 'branch' : 'head';
+  } catch {
+    return 'head';
+  }
+}
 
 // Unified is the default because the sidebar starts at 380px, and two columns
 // in that width is two unreadable columns.
@@ -304,6 +319,9 @@ export function ChangesPanel({
   const [loading, setLoading] = useState(false);
   const [waking, setWaking] = useState(false);
   const [mode, setMode] = useState<DiffMode>(readMode);
+  // What the diff is measured against. A preference and not a reading position:
+  // somebody who works in branch scope wants it on the next session too.
+  const [scope, setScope] = useState<ChangesScope>(readScope);
   // Which files are folded shut. Deliberately component state and nothing
   // else: it is a reading position, not a preference, and a stale one restored
   // over a diff that has moved on since would hide changes the reader never
@@ -313,7 +331,7 @@ export function ChangesPanel({
   );
   const dark = usePrefersDark();
   const sectionRefs = useRef(new Map<string, HTMLElement>());
-  /** The session whose diff this mount has already asked for. */
+  /** The session and scope this mount has already asked for. */
   const requested = useRef<string | undefined>(undefined);
 
   // Reading a diff runs git in a container that is often still busy with the
@@ -325,7 +343,7 @@ export function ChangesPanel({
     setError(undefined);
     for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt += 1) {
       try {
-        setChanges(await fetchChanges(sessionId));
+        setChanges(await fetchChanges(sessionId, scope));
         setError(undefined);
         setLoading(false);
         return;
@@ -342,7 +360,7 @@ export function ChangesPanel({
     // The banner keeps the host's own message, and the refresh button is the
     // retry from here on.
     setLoading(false);
-  }, [sessionId]);
+  }, [sessionId, scope]);
 
   // Reading a diff must never wake a container, so this is the button that
   // says the reader meant to. Nothing is loaded here: the wake moves the
@@ -373,20 +391,36 @@ export function ChangesPanel({
 
   // Choosing the tab is the request to read; a sleeping container has nothing
   // to read and must not be woken by a panel being opened. One read per
-  // session — `changes` cannot be the guard, because a failed read leaves it
-  // empty and the effect would fire again the moment it settled.
+  // session and scope — `changes` cannot be the guard, because a failed read
+  // leaves it empty and the effect would fire again the moment it settled.
+  // Switching the scope is a different read, so it is part of the key.
   useEffect(() => {
-    if (!attached || requested.current === sessionId) {
+    const key = `${sessionId}:${scope}`;
+    if (!attached || requested.current === key) {
       return;
     }
-    requested.current = sessionId;
+    requested.current = key;
     void load();
-  }, [attached, sessionId, load]);
+  }, [attached, sessionId, scope, load]);
 
   const setDiffMode = useCallback((next: DiffMode) => {
     setMode(next);
     try {
       localStorage.setItem(MODE_KEY, next);
+    } catch {
+      // Storage can be unavailable; the choice just resets next visit.
+    }
+  }, []);
+
+  // The old diff is dropped rather than left on screen under the new label: it
+  // is a different set of files, and showing it beside the other scope's header
+  // would misreport what is being looked at.
+  const setDiffScope = useCallback((next: ChangesScope) => {
+    setScope(next);
+    setChanges(undefined);
+    setCollapsed(new Set());
+    try {
+      localStorage.setItem(SCOPE_KEY, next);
     } catch {
       // Storage can be unavailable; the choice just resets next visit.
     }
@@ -444,8 +478,13 @@ export function ChangesPanel({
           {changes ? (
             <p className="changes-summary muted mono">
               {changes.branch}
-              {changes.onDefaultBranch ? ' (default branch)' : ''} ·{' '}
-              {changes.files.length} files
+              {changes.onDefaultBranch ? ' (default branch)' : ''}
+              {/* Which base produced this list, since the two scopes differ by
+                  exactly the commits the session has not pushed. */}
+              {changes.scope === 'branch'
+                ? ` vs origin/${changes.defaultBranch}`
+                : ' (uncommitted)'}{' '}
+              · {changes.files.length} files
               {changes.unpushedCommits > 0
                 ? ` · ${changes.unpushedCommits} unpushed commits`
                 : ''}
@@ -454,6 +493,37 @@ export function ChangesPanel({
             <span />
           )}
           <div className="changes-actions">
+            {/* What the diff is measured against. Left of the layout toggle
+                because it decides which changes exist at all, where the other
+                only decides how they are drawn. */}
+            <div
+              className="diff-mode-toggle"
+              role="group"
+              aria-label="Diff base"
+            >
+              <button
+                className={`icon-button${scope === 'head' ? ' active' : ''}`}
+                type="button"
+                aria-pressed={scope === 'head'}
+                aria-label="Uncommitted changes"
+                title="Uncommitted changes (working tree)"
+                onClick={() => setDiffScope('head')}
+              >
+                <WorkingTreeIcon />
+              </button>
+              <button
+                className={`icon-button${scope === 'branch' ? ' active' : ''}`}
+                type="button"
+                aria-pressed={scope === 'branch'}
+                aria-label="All changes on this branch"
+                title={`All changes on this branch, including unpushed commits, against origin/${
+                  changes?.defaultBranch ?? 'the default branch'
+                }`}
+                onClick={() => setDiffScope('branch')}
+              >
+                <BranchIcon />
+              </button>
+            </div>
             {changes && changes.files.length > 0 ? (
               <div
                 className="diff-mode-toggle"
@@ -547,9 +617,23 @@ export function ChangesPanel({
                 <nav className="file-tree-root" aria-label="Changed files">
                   <TreeLevel node={tree} onSelect={scrollToFile} />
                 </nav>
+              ) : changes.scope === 'branch' ? (
+                <p className="muted">
+                  Nothing on this branch yet — it matches origin/
+                  {changes.defaultBranch}.
+                </p>
               ) : (
                 <p className="muted">Working tree is clean — nothing uncommitted.</p>
               )}
+              {/* Asked for the branch and got the working tree: the checkout has
+                  no `origin/<default>` to measure from, which is a fact about
+                  the clone and not something a retry fixes. */}
+              {scope === 'branch' && changes.scope === 'head' ? (
+                <p className="muted">
+                  No origin/{changes.defaultBranch} in this checkout, so only
+                  uncommitted changes are shown.
+                </p>
+              ) : null}
               {sections.map((section) => {
                 const path = section.file.path;
                 const open = !collapsed.has(path);

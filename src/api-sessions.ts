@@ -27,6 +27,7 @@ import type { InstanceRecord, InstanceView } from './instances';
 import { loadModelCatalog, type ModelCatalog } from './model-catalog';
 import { isSafeRepoKey, workspaceDirectory } from './repos';
 import { normalizeQuestionAction } from './question-requests';
+import { parseChangesScope } from './session-changes';
 import type { QueuePromptInput } from './session-agent';
 import {
   closedSessionEventStream,
@@ -157,7 +158,12 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
       record,
       'read changes from'
     );
-    return json(await resolveSandbox(env, instance).readSessionChanges(runtimeEpoch));
+    return json(
+      await resolveSandbox(env, instance).readSessionChanges(
+        runtimeEpoch,
+        parseChangesScope(url.searchParams.get('scope'))
+      )
+    );
   }
 
   if (action === 'events') {

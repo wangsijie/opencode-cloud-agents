@@ -13,6 +13,7 @@ import {
   type WorkspaceEntry,
   type WorkspaceListing
 } from '../api';
+import { branchScopeOf } from './fixtures/changes';
 import { prebuildState, startMockRun } from './fixtures/prebuilds';
 import { MOCK_SSH_PUBLIC_KEY } from './fixtures/settings';
 import { minutesAgo } from './fixtures/util';
@@ -646,19 +647,20 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
       if (!attached(view)) {
         return asleep('read the changes of');
       }
-      return json(
-        session.changes ?? {
-          observedAt: new Date().toISOString(),
-          repoKey: view.repoKey,
-          branch: 'main',
-          defaultBranch: 'main',
-          onDefaultBranch: true,
-          files: [],
-          diff: '',
-          diffTruncated: false,
-          unpushedCommits: 0
-        }
-      );
+      const branchScope = url.searchParams.get('scope') === 'branch';
+      const changes = session.changes ?? {
+        observedAt: new Date().toISOString(),
+        repoKey: view.repoKey,
+        branch: 'main',
+        defaultBranch: 'main',
+        onDefaultBranch: true,
+        scope: 'head' as const,
+        files: [],
+        diff: '',
+        diffTruncated: false,
+        unpushedCommits: 0
+      };
+      return json(branchScope ? branchScopeOf(changes) : changes);
     }
     if (sub === 'files') {
       const artifacts = url.searchParams.get('root') === 'artifacts';

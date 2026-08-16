@@ -39,9 +39,12 @@ import {
   decodeGitStatusOutput,
   limitDiff,
   MAX_DIFF_LENGTH,
+  mergeChangedFiles,
+  parseGitNameStatus,
   parseGitStatus,
   shellQuote,
   type ChangedFile,
+  type ChangesScope,
   type SessionChanges,
   type SessionChangesHead
 } from './session-changes.ts';
@@ -405,15 +408,23 @@ export async function wipeSeededWorkspace(
  * exactly the session whose changes are worth reading, so the new ones are
  * diffed against `/dev/null` in a second pass rather than left as a file list
  * with an apology under each name.
+ *
+ * `scope: 'branch'` moves the base back from `HEAD` to where this branch left
+ * the remote's default branch, so commits the session made but has not pushed
+ * are part of the diff. It is still one read of the checkout as it stands: no
+ * fetch, and the base is a merge base with the `origin/*` ref the clone already
+ * had, so commits pushed by other people since this session started are not
+ * dragged in.
  */
 export async function readSessionChanges(
   host: RuntimeHost,
-  checkout: RuntimeCheckout & { repoKey: string }
+  checkout: RuntimeCheckout & { repoKey: string },
+  scope: ChangesScope = 'head'
 ): Promise<SessionChanges> {
   const { repo, repoKey, directory } = checkout;
   const defaultBranch = await resolveDefaultBranch(host, directory, repo);
   const at = shellQuote(directory);
-  const [branchOut, headOut, statusOut, diffOut, remoteOut] = await Promise.all([
+  const [branchOut, headOut, statusOut, remoteOut] = await Promise.all([
     host.exec(`git -C ${at} rev-parse --abbrev-ref HEAD`),
     host.exec(`git -C ${at} log -1 --format='%H%x09%s'`),
     // Wrapped in base64 because the NUL separators do not reliably survive the
@@ -422,7 +433,6 @@ export async function readSessionChanges(
     // one to `docs/`, which is a row the viewer cannot diff and a path the user
     // never wrote.
     host.exec(`git -C ${at} status --porcelain=v1 -z -uall | base64`),
-    host.exec(`git -C ${at} diff HEAD --no-color`),
     host.exec(`git -C ${at} branch --remotes --list 'origin/*'`)
   ]);
   if (!branchOut.success) {
@@ -433,7 +443,7 @@ export async function readSessionChanges(
   }
 
   const branch = branchOut.stdout.trim();
-  const files = parseGitStatus(decodeGitStatusOutput(statusOut.stdout));
+  const working = parseGitStatus(decodeGitStatusOutput(statusOut.stdout));
   const remoteBranches = new Set(
     remoteOut.success
       ? remoteOut.stdout
@@ -442,6 +452,27 @@ export async function readSessionChanges(
           .filter(Boolean)
       : []
   );
+
+  // A branch read whose base cannot be resolved is reported as the working-tree
+  // read it actually is, rather than as a branch read against `HEAD` — the
+  // scope in the response is what was measured, not what was asked for.
+  const baseRef =
+    scope === 'branch'
+      ? await resolveBranchBase(host, directory, defaultBranch)
+      : undefined;
+  const effectiveScope: ChangesScope = baseRef ? 'branch' : 'head';
+  const base = baseRef ?? 'HEAD';
+
+  const [committed, diffOut] = await Promise.all([
+    effectiveScope === 'branch'
+      ? readCommittedFiles(host, directory, base)
+      : Promise.resolve([] as ChangedFile[]),
+    host.exec(`git -C ${at} diff ${shellQuote(base)} --no-color`)
+  ]);
+  // Committed first: a file both committed and edited again is one row, and the
+  // status it earned against the base is the truthful one.
+  const files = mergeChangedFiles(committed, working);
+
   return {
     observedAt: new Date().toISOString(),
     repoKey,
@@ -451,6 +482,8 @@ export async function readSessionChanges(
     ...(headOut.success && headOut.stdout.trim()
       ? { head: parseHeadLine(headOut.stdout) }
       : {}),
+    scope: effectiveScope,
+    ...(baseRef ? { baseRef } : {}),
     files,
     // A diff that fails on a repository whose status read worked is an empty
     // diff as far as the user is concerned; the file list is the part that must
@@ -467,6 +500,48 @@ export async function readSessionChanges(
       remoteBranches.has(branch)
     )
   };
+}
+
+/**
+ * Where this branch left the remote's default branch, without asking the
+ * remote anything.
+ *
+ * The merge base is the point of the whole thing: `git diff origin/main` on a
+ * checkout whose `origin/main` has moved on would present other people's
+ * commits as reverts inside this session's diff. `origin/<default>` is used as
+ * the checkout already has it — this read never fetches, deliberately, because
+ * the question is what this session did and not what the world did meanwhile.
+ * A checkout with no such ref (a clone that never had one) has no branch scope
+ * and says so by returning nothing.
+ */
+async function resolveBranchBase(
+  host: RuntimeHost,
+  directory: string,
+  defaultBranch: string
+): Promise<string | undefined> {
+  const at = shellQuote(directory);
+  const remoteRef = shellQuote(`origin/${defaultBranch}`);
+  const mergeBase = await host.exec(
+    `git -C ${at} merge-base ${remoteRef} HEAD`,
+    { timeoutMs: GIT_COMMAND_TIMEOUT_MS }
+  );
+  const sha = mergeBase.stdout.trim();
+  return mergeBase.success && sha ? sha : undefined;
+}
+
+/** The tracked file list of `git diff <base>`, statuses and renames included. */
+async function readCommittedFiles(
+  host: RuntimeHost,
+  directory: string,
+  base: string
+): Promise<ChangedFile[]> {
+  // base64 for the same reason the status read uses it: NUL separators do not
+  // reliably survive the exec transport.
+  const out = await host.exec(
+    `git -C ${shellQuote(directory)} diff --name-status -z ${shellQuote(base)} | base64`,
+    { timeoutMs: GIT_COMMAND_TIMEOUT_MS }
+  );
+  return out.success ? parseGitNameStatus(decodeGitStatusOutput(out.stdout)) : [];
 }
 
 /**

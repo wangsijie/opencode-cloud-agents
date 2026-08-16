@@ -278,7 +278,7 @@ test('the working-tree read reports the branch, files and diff', async () => {
     'rev-parse --abbrev-ref HEAD': { stdout: 'opencode/lively-otter\n' },
     "log -1": { stdout: 'abc123\tFix the thing\n' },
     'status --porcelain': { stdout: status },
-    'diff HEAD': { stdout: 'diff --git a/src/a.ts b/src/a.ts\n' },
+    "diff 'HEAD'": { stdout: 'diff --git a/src/a.ts b/src/a.ts\n' },
     'branch --remotes': { stdout: '  origin/main\n  origin/opencode/lively-otter\n' },
     'rev-list --count': { stdout: '3\n' }
   })
@@ -289,6 +289,57 @@ test('the working-tree read reports the branch, files and diff', async () => {
   assert.deepEqual(changes.head, { sha: 'abc123', subject: 'Fix the thing' })
   assert.equal(changes.unpushedCommits, 3)
   assert.ok(changes.diff.includes('diff --git'))
+  assert.equal(changes.scope, 'head')
+  assert.equal(changes.baseRef, undefined)
+  // The default scope must not spend a merge-base round trip.
+  assert.ok(
+    !host.calls.exec.some((call) => call.command.includes('merge-base'))
+  )
+})
+
+test('the branch scope diffs from the merge base, never from origin itself', async () => {
+  const status = Buffer.from(' M src/a.ts\0').toString('base64')
+  const committed = Buffer.from('A\0src/b.ts\0M\0src/a.ts\0').toString('base64')
+  const host = stubHost({
+    'symbolic-ref': { stdout: 'origin/main\n' },
+    'rev-parse --abbrev-ref HEAD': { stdout: 'opencode/lively-otter\n' },
+    'status --porcelain': { stdout: status },
+    'merge-base': { stdout: 'base0ff\n' },
+    'diff --name-status': { stdout: committed },
+    "diff 'base0ff'": { stdout: 'diff --git a/src/b.ts b/src/b.ts\n' }
+  })
+  const changes = await readSessionChanges(host, CHECKOUT, 'branch')
+  assert.equal(changes.scope, 'branch')
+  assert.equal(changes.baseRef, 'base0ff')
+  // A commit-only file joins the working tree's, and the file touched by both
+  // appears once with the status it has against the base.
+  assert.deepEqual(changes.files, [
+    { path: 'src/b.ts', status: 'added' },
+    { path: 'src/a.ts', status: 'modified' }
+  ])
+
+  const commands = host.calls.exec.map((call) => call.command)
+  // The merge base is what stops commits pushed to origin since this session
+  // started from turning up as reverts inside its diff.
+  assert.ok(commands.some((command) => command.includes("merge-base 'origin/main' HEAD")))
+  assert.ok(commands.some((command) => command.includes("diff 'base0ff' --no-color")))
+  // And a branch read still never reaches the network.
+  assert.ok(!commands.some((command) => /\bgit .*\b(fetch|pull|remote update)\b/.test(command)))
+})
+
+test('a branch read with no origin ref falls back to the working tree and says so', async () => {
+  const host = stubHost({
+    'rev-parse --abbrev-ref HEAD': { stdout: 'work\n' },
+    'merge-base': { success: false, stderr: 'Not a valid object name' },
+    "diff 'HEAD'": { stdout: 'diff --git a/src/a.ts b/src/a.ts\n' }
+  })
+  const changes = await readSessionChanges(host, CHECKOUT, 'branch')
+  // The scope in the answer is what was measured, not what was asked for.
+  assert.equal(changes.scope, 'head')
+  assert.equal(changes.baseRef, undefined)
+  assert.ok(
+    !host.calls.exec.some((call) => call.command.includes('diff --name-status'))
+  )
 })
 
 test('new files are diffed against /dev/null without touching the index', async () => {
@@ -332,7 +383,7 @@ test('a failed status read is an error, a failed diff is an empty diff', async (
   const changes = await readSessionChanges(
     stubHost({
       'rev-parse --abbrev-ref HEAD': { stdout: 'work\n' },
-      'diff HEAD': { success: false, stderr: 'boom' }
+      "diff 'HEAD'": { success: false, stderr: 'boom' }
     }),
     CHECKOUT
   )

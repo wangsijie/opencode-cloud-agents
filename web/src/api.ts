@@ -392,6 +392,13 @@ export interface ChangedFile {
   renamedFrom?: string;
 }
 
+/**
+ * What the diff is taken against: the working tree alone (`head`), or
+ * everything this session produced — its commits plus the working tree —
+ * measured from where the branch left the default branch (`branch`).
+ */
+export type ChangesScope = 'head' | 'branch';
+
 export interface SessionChanges {
   observedAt: string;
   repoKey: string;
@@ -399,6 +406,9 @@ export interface SessionChanges {
   defaultBranch: string;
   onDefaultBranch: boolean;
   head?: { sha: string; subject: string };
+  /** What was actually measured, which is `head` when no base could be found. */
+  scope: ChangesScope;
+  baseRef?: string;
   files: ChangedFile[];
   diff: string;
   diffTruncated: boolean;
@@ -659,8 +669,10 @@ export const dismissQuestion = (id: string, requestID: string) =>
  * Unlike every other read here this one needs a running container — the working
  * tree only exists inside one — so it is requested on demand rather than polled.
  */
-export const fetchChanges = (id: string) =>
-  call<SessionChanges>(`/api/sessions/${encodeURIComponent(id)}/changes`);
+export const fetchChanges = (id: string, scope: ChangesScope = 'head') =>
+  call<SessionChanges>(
+    `/api/sessions/${encodeURIComponent(id)}/changes?scope=${scope}`
+  );
 
 /**
  * Which directory a file request is relative to: the checkout, or the session's

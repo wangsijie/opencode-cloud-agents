@@ -115,6 +115,37 @@ const CONFLICT_BLOCK = gitModified('src/routes/login.ts', [
   ' }'
 ]);
 
+// What the branch scope adds that the working tree cannot show: a file that
+// only exists in a commit this session made and has not pushed.
+const COMMITTED_BLOCK = gitAdded('src/auth/bearer.ts', [
+  "+import { TokenError } from './tokens';",
+  '+',
+  '+export function parseBearer(header = \'\') {',
+  "+  const [scheme, value] = header.split(' ');",
+  "+  if (scheme?.toLowerCase() !== 'bearer' || !value) {",
+  "+    throw new TokenError('Expected a bearer token');",
+  '+  }',
+  '+  return value;',
+  '+}'
+]);
+
+/**
+ * The same session read against the branch base instead of `HEAD`.
+ *
+ * Derived from a working-tree fixture rather than written out again, because
+ * the point being exercised is the superset: every uncommitted file is still
+ * there, plus what the session's own commits contain.
+ */
+export function branchScopeOf(changes: SessionChanges): SessionChanges {
+  return {
+    ...changes,
+    scope: 'branch',
+    baseRef: '9f4c1ae0d5b2c7e3f8a1b6d4c2e0a9f7b3d5c1e8',
+    files: [{ path: 'src/auth/bearer.ts', status: 'added' }, ...changes.files],
+    diff: [COMMITTED_BLOCK, changes.diff].join('\n')
+  };
+}
+
 /** Rich fixture for the idle session: every status, nested paths, extras. */
 export function idleChanges(): SessionChanges {
   return {
@@ -124,6 +155,7 @@ export function idleChanges(): SessionChanges {
     defaultBranch: 'main',
     onDefaultBranch: false,
     head: { sha: 'a1b2c3d', subject: 'wip: middleware refactor' },
+    scope: 'head',
     files: [
       { path: 'src/auth/middleware.ts', status: 'modified' },
       { path: 'src/auth/tokens.ts', status: 'modified' },
@@ -162,6 +194,7 @@ export function workingChanges(): SessionChanges {
     defaultBranch: 'master',
     onDefaultBranch: false,
     head: { sha: 'f9e8d7c', subject: 'feat: theme override store' },
+    scope: 'head',
     files: [
       { path: 'web/src/components/SettingsPage.tsx', status: 'modified' },
       { path: 'web/src/useTheme.ts', status: 'added' }
