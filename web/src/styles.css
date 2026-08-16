@@ -2493,9 +2493,59 @@ input.question-custom:focus {
   border-bottom: 1px solid var(--border);
 }
 
+/* The changes panel's header is a fold toggle, so it is a <button> and has to
+   be talked back out of looking like one. The transcript's patch cards keep
+   the plain <header>. */
+button.diff-file-header {
+  appearance: none;
+  border-width: 0 0 1px 0;
+  border-style: solid;
+  border-color: var(--border);
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.diff-file-header:hover .diff-file-path {
+  text-decoration: underline;
+}
+
+/* A collapsed card is only its header, so the border below it would be a
+   second line against the card's own edge. */
+.diff-file.collapsed > button.diff-file-header {
+  border-bottom-width: 0;
+}
+
+.diff-file-chevron {
+  flex: 0 0 auto;
+  display: flex;
+  align-self: center;
+  color: var(--text-dim);
+}
+
 .diff-file-path {
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+/* Pushed to the right edge like GitHub's per-file counts. */
+.diff-file-stat {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-file-stat .stat-add {
+  color: var(--ok);
+}
+
+.diff-file-stat .stat-del {
+  color: var(--danger);
 }
 
 .diff-file-note {

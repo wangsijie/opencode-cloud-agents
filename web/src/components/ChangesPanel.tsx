@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchChanges, type ChangedFile, type SessionChanges } from '../api';
 import { usePrefersDark } from '../usePrefersDark';
 import { FileDiff, type DiffMode } from './FileDiff';
-import { RefreshIcon, SplitDiffIcon, UnifiedDiffIcon } from './icons';
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  RefreshIcon,
+  SplitDiffIcon,
+  UnifiedDiffIcon
+} from './icons';
 
 /** How many times one request to read the diff may be tried before it stops. */
 const LOAD_ATTEMPTS = 3;
@@ -73,22 +79,55 @@ interface FileSection {
   block?: string;
   binary: boolean;
   hasHunks: boolean;
+  additions: number;
+  deletions: number;
 }
 
+/**
+ * The +/- counts GitHub puts on every file row. Read off the block rather than
+ * asked of the server: the diff is already here, and a line starting with `+`
+ * or `-` that is not one of the two file headers is a changed line.
+ */
+function countLines(block: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of block.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      additions += 1;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
+/**
+ * One card per changed file, ordered by path.
+ *
+ * Git hands the files back grouped by how it found them — tracked changes
+ * first, untracked appended — which puts two edits in the same directory at
+ * opposite ends of the panel. GitHub sorts a pull request by path and mixes
+ * the statuses in, so a reader scrolls the tree they already have in their
+ * head; the tree above this list is sorted the same way, so anything else
+ * would make clicking a row jump backwards.
+ */
 function buildSections(changes: SessionChanges): FileSection[] {
   const byPath = splitRawDiff(changes.diff);
-  return changes.files.map((file) => {
-    const block = byPath.get(file.path);
-    if (!block) {
-      return { file, binary: false, hasHunks: false };
-    }
-    return {
-      file,
-      block,
-      binary: /^(Binary files |GIT binary patch)/m.test(block),
-      hasHunks: /^@@ /m.test(block)
-    };
-  });
+  return changes.files
+    .map((file) => {
+      const block = byPath.get(file.path);
+      if (!block) {
+        return { file, binary: false, hasHunks: false, additions: 0, deletions: 0 };
+      }
+      return {
+        file,
+        block,
+        binary: /^(Binary files |GIT binary patch)/m.test(block),
+        hasHunks: /^@@ /m.test(block),
+        ...countLines(block)
+      };
+    })
+    .sort((a, b) => a.file.path.localeCompare(b.file.path));
 }
 
 interface TreeDir {
@@ -256,6 +295,13 @@ export function ChangesPanel({
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<DiffMode>(readMode);
+  // Which files are folded shut. Deliberately component state and nothing
+  // else: it is a reading position, not a preference, and a stale one restored
+  // over a diff that has moved on since would hide changes the reader never
+  // chose to hide. Losing it on unmount or reload is the correct behaviour.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const dark = usePrefersDark();
   const sectionRefs = useRef(new Map<string, HTMLElement>());
   /** The session whose diff this mount has already asked for. */
@@ -294,6 +340,7 @@ export function ChangesPanel({
   useEffect(() => {
     setChanges(undefined);
     setError(undefined);
+    setCollapsed(new Set());
     requested.current = undefined;
   }, [sessionId]);
 
@@ -327,11 +374,41 @@ export function ChangesPanel({
     [changes]
   );
 
+  const toggleFile = useCallback((path: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(path)) {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
+  // Clicking a file in the tree is a request to read it, so a folded target
+  // unfolds on the way — scrolling to a collapsed header would look like the
+  // link did nothing.
   const scrollToFile = useCallback((path: string) => {
+    setCollapsed((current) => {
+      if (!current.has(path)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(path);
+      return next;
+    });
     sectionRefs.current
       .get(path)
       ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
+
+  const allCollapsed =
+    sections.length > 0 && sections.every((s) => collapsed.has(s.file.path));
+
+  const toggleAll = useCallback(() => {
+    setCollapsed(
+      allCollapsed ? new Set() : new Set(sections.map((s) => s.file.path))
+    );
+  }, [allCollapsed, sections]);
 
   return (
     <section className="changes-panel">
@@ -378,6 +455,18 @@ export function ChangesPanel({
                 </button>
               </div>
             ) : null}
+            {sections.length > 0 ? (
+              <button
+                className="icon-button"
+                type="button"
+                aria-expanded={!allCollapsed}
+                aria-label={allCollapsed ? 'Expand all files' : 'Collapse all files'}
+                title={allCollapsed ? 'Expand all files' : 'Collapse all files'}
+                onClick={toggleAll}
+              >
+                {allCollapsed ? <ChevronRightIcon /> : <ChevronDownIcon />}
+              </button>
+            ) : null}
             <button
               className="icon-button"
               type="button"
@@ -411,35 +500,60 @@ export function ChangesPanel({
               ) : (
                 <p className="muted">Working tree is clean — nothing uncommitted.</p>
               )}
-              {sections.map((section) => (
-                <article
-                  key={section.file.path}
-                  className="diff-file"
-                  ref={(el) => {
-                    if (el) {
-                      sectionRefs.current.set(section.file.path, el);
-                    } else {
-                      sectionRefs.current.delete(section.file.path);
-                    }
-                  }}
-                >
-                  <header className="diff-file-header">
-                    <span
-                      className={`file-status status-${section.file.status}`}
+              {sections.map((section) => {
+                const path = section.file.path;
+                const open = !collapsed.has(path);
+                return (
+                  <article
+                    key={path}
+                    className={`diff-file${open ? '' : ' collapsed'}`}
+                    ref={(el) => {
+                      if (el) {
+                        sectionRefs.current.set(path, el);
+                      } else {
+                        sectionRefs.current.delete(path);
+                      }
+                    }}
+                  >
+                    {/* The whole header is the toggle, as it is on GitHub: a
+                        12px chevron is a hard target on a phone, and there is
+                        nothing else in the row to click. */}
+                    <button
+                      className="diff-file-header"
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => toggleFile(path)}
                     >
-                      {STATUS_LABELS[section.file.status] ??
-                        section.file.status}
-                    </span>
-                    <span className="mono diff-file-path">
-                      {section.file.renamedFrom
-                        ? `${section.file.renamedFrom} → `
-                        : ''}
-                      {section.file.path}
-                    </span>
-                  </header>
-                  <FileDiffBody section={section} mode={mode} dark={dark} />
-                </article>
-              ))}
+                      <span className="diff-file-chevron" aria-hidden="true">
+                        {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                      </span>
+                      <span className={`file-status status-${section.file.status}`}>
+                        {STATUS_LABELS[section.file.status] ??
+                          section.file.status}
+                      </span>
+                      <span className="mono diff-file-path">
+                        {section.file.renamedFrom
+                          ? `${section.file.renamedFrom} → `
+                          : ''}
+                        {path}
+                      </span>
+                      {section.additions > 0 || section.deletions > 0 ? (
+                        <span className="diff-file-stat mono">
+                          {section.additions > 0 ? (
+                            <span className="stat-add">+{section.additions}</span>
+                          ) : null}
+                          {section.deletions > 0 ? (
+                            <span className="stat-del">−{section.deletions}</span>
+                          ) : null}
+                        </span>
+                      ) : null}
+                    </button>
+                    {open ? (
+                      <FileDiffBody section={section} mode={mode} dark={dark} />
+                    ) : null}
+                  </article>
+                );
+              })}
               {changes.diffTruncated ? (
                 <p className="muted">
                   Diff was too long and got truncated; ask the agent to run git
