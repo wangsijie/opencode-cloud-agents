@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { RuntimeLifecycle } from './instances';
+import { probeFailureWindowExpired } from './lifecycle-policy';
 import { patchSessionRuntimeStatus } from './session-runtime-cache';
 import { runtimeLifecycleNeedsStatusQuery } from './sessions';
 
@@ -99,6 +100,12 @@ interface StoredLifecycleState {
   retrySessionCount: number;
   activityLocations: string[];
   consecutiveProbeFailures: number;
+  /**
+   * When the current unbroken run of probe failures began; absent whenever the
+   * last probe succeeded. A count alone cannot bound this, because the backoff
+   * caps at a minute and the failures are what set the next alarm.
+   */
+  probeFailingSince?: number;
   workLeases: Record<string, WorkLease>;
   operation?: LifecycleOperation;
   wakeAfterStop: boolean;
@@ -557,6 +564,12 @@ export class LifecycleCoordinator extends DurableObject<Env> {
 
       if (current.nextProbeAt === undefined || now >= current.nextProbeAt) {
         await this.runProbe();
+        // Decided after the probe, on the state it just wrote: a container the
+        // policy can no longer reach is stopped rather than probed forever.
+        const probed = this.state;
+        if (probed && probeFailureWindowExpired(probed, Date.now())) {
+          await this.beginUnreachableStop(Date.now());
+        }
       } else {
         await this.persistAndSchedule();
       }
@@ -675,6 +688,7 @@ export class LifecycleCoordinator extends DurableObject<Env> {
         operation: undefined,
         nextProbeAt: Date.now(),
         consecutiveProbeFailures: 0,
+        probeFailingSince: undefined,
         updatedAt: Date.now()
       };
       this.applyExecutionSnapshot(snapshot, Date.now());
@@ -791,6 +805,7 @@ export class LifecycleCoordinator extends DurableObject<Env> {
       retrySessionCount: snapshot.retrySessionCount,
       activityLocations: [...snapshot.locations],
       consecutiveProbeFailures: 0,
+      probeFailingSince: undefined,
       lastError: undefined,
       operation: undefined,
       updatedAt: now
@@ -881,10 +896,48 @@ export class LifecycleCoordinator extends DurableObject<Env> {
       phase: 'error_running',
       revision: invalidatesIdle ? state.revision + 1 : state.revision,
       consecutiveProbeFailures: failures,
+      probeFailingSince: state.probeFailingSince ?? now,
       nextProbeAt: now + retryBackoff(failures),
       lastError: lifecycleError('probe', error),
       updatedAt: now
     };
+  }
+
+  /**
+   * Stop a container the policy has given up on reaching.
+   *
+   * This is the force-stop path rather than the idle one on purpose: idle-stop
+   * asks Sandbox to confirm OpenCode is idle before terminating, and an
+   * unreachable OpenCode can never answer that. The transcript export inside
+   * it reports its own failure instead of raising, so a stop still completes
+   * against a container whose OpenCode is gone — which is exactly the case
+   * this exists for.
+   */
+  private async beginUnreachableStop(now: number): Promise<void> {
+    const state = this.requireState();
+    console.warn('Stopping an unreachable instance', {
+      instanceId: state.instanceId,
+      unreachableForMs: now - (state.probeFailingSince ?? now),
+      consecutiveProbeFailures: state.consecutiveProbeFailures,
+      lastError: state.lastError?.message
+    });
+    const operation: LifecycleOperation = {
+      id: crypto.randomUUID(),
+      type: 'force-stop',
+      startedAt: now
+    };
+    this.state = {
+      ...clearIdleWindow(state),
+      phase: 'quiescing',
+      revision: state.revision + 1,
+      nextProbeAt: now + OPERATION_RECOVERY_INTERVAL_MS,
+      workLeases: {},
+      operation,
+      wakeAfterStop: false,
+      updatedAt: now
+    };
+    await this.persistAndSchedule();
+    await this.continueStop();
   }
 
   private async beginIdleStop(now: number): Promise<void> {
@@ -1314,6 +1367,7 @@ function toSleepingState(
     retrySessionCount: 0,
     activityLocations: [],
     consecutiveProbeFailures: 0,
+    probeFailingSince: undefined,
     workLeases: {},
     operation: undefined,
     wakeAfterStop: false,

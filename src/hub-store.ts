@@ -619,13 +619,21 @@ export async function sweepIdleSessions(
 /**
  * What makes a session eligible to be cleaned: nothing is in flight, nothing is
  * queued, neither the row nor its last prompt has been touched since the
- * cutoff, and the runtime has settled on idle or sleeping — a dispatch phase
- * alone says nothing, because `phase` stays `working` from the moment the last
- * prompt was handed over until the next one arrives. A row whose runtime was
- * never observed is left alone rather than guessed about. `cleaned` is absent
- * from the lifecycles on purpose — a session whose container is already gone is
- * never swept again — while `clean_failed` is present, so a failed attempt is
- * retried on the next sweep.
+ * cutoff, and the runtime has settled — a dispatch phase alone says nothing,
+ * because `phase` stays `working` from the moment the last prompt was handed
+ * over until the next one arrives. A row whose runtime was never observed is
+ * left alone rather than guessed about. `cleaned` is absent from the lifecycles
+ * on purpose — a session whose container is already gone is never swept again —
+ * while `clean_failed` is present, so a failed attempt is retried on the next
+ * sweep.
+ *
+ * `error` is settled too. It is the cache of `error_running`, which the policy
+ * reaches whenever it cannot reach OpenCode, and leaving it out is what let
+ * unreachable containers accumulate: the coordinator fails open by design and
+ * this sweep was the only other thing that could have reclaimed them. The
+ * policy now stops such a container itself after an hour, so a row still in
+ * `error` three days later is one whose stop never took — precisely the row a
+ * sweep should claim.
  */
 function cleanupEligible(cutoff: string) {
   return and(
@@ -634,7 +642,7 @@ function cleanupEligible(cutoff: string) {
     notInArray(sessions.phase, ['queued', 'starting']),
     lt(sessions.updatedAt, cutoff),
     or(isNull(sessions.lastPromptAt), lt(sessions.lastPromptAt, cutoff)),
-    inArray(sessions.runtimeLifecycle, ['idle', 'sleeping'])
+    inArray(sessions.runtimeLifecycle, ['idle', 'sleeping', 'error'])
   );
 }
 

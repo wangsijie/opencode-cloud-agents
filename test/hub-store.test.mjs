@@ -593,6 +593,40 @@ test('the idle sweep claims only sessions that are really idle', async () => {
   assert.equal(await sweepIdleSessions(env, now), 0);
 });
 
+test('the idle sweep claims a settled session whose runtime is in error', async () => {
+  const { env } = testEnv();
+  const now = new Date('2026-08-01T00:00:00.000Z');
+  const old = new Date(
+    now.getTime() - (CLEANUP_IDLE_DAYS + 1) * 24 * 60 * 60 * 1000
+  ).toISOString();
+
+  // 'error' is the cache of error_running, which is where the policy sits
+  // whenever it cannot reach OpenCode. Excluding it is what let unreachable
+  // containers accumulate for weeks: the coordinator fails open by design, so
+  // this sweep is the only other thing that could reclaim one.
+  const unreachable = await seed(env);
+  await forceColumns(env, unreachable, {
+    phase: 'working',
+    runtime_lifecycle: 'error',
+    pending_prompt_count: 0,
+    updated_at: old,
+    last_prompt_at: old
+  });
+
+  // An error runtime is not exempt from the rest of the predicate.
+  const recentlyErrored = await seed(env);
+  await forceColumns(env, recentlyErrored, {
+    phase: 'working',
+    runtime_lifecycle: 'error',
+    pending_prompt_count: 0,
+    updated_at: now.toISOString()
+  });
+
+  assert.equal(await sweepIdleSessions(env, now), 1);
+  assert.equal((await getInstance(env, unreachable)).lifecycle, 'cleaning');
+  assert.equal((await getInstance(env, recentlyErrored)).lifecycle, 'ready');
+});
+
 test('a cleanup claim does not count as activity', async () => {
   const { env } = testEnv();
   const now = new Date('2026-08-01T00:00:00.000Z');
