@@ -117,6 +117,24 @@ export function DownloadIcon() {
   );
 }
 
+export function UploadIcon() {
+  return (
+    <Icon size={16}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="M7 8l5-5 5 5M12 3v12" />
+    </Icon>
+  );
+}
+
+export function TrashIcon() {
+  return (
+    <Icon size={16}>
+      <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </Icon>
+  );
+}
+
 export function ChevronDownIcon() {
   return (
     <Icon size={16}>

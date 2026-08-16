@@ -7,11 +7,31 @@
  * live in [sandbox.ts](sandbox.ts).
  *
  * The path rules are the security boundary. A request names a path *relative to
- * the checkout*, never an absolute container path, and anything that would
- * leave that subtree — `..`, an absolute path, a NUL byte — is rejected rather
- * than clamped, because a silently rewritten path is indistinguishable from one
- * that was honoured.
+ * one of the roots below*, never an absolute container path, and anything that
+ * would leave that subtree — `..`, an absolute path, a NUL byte — is rejected
+ * rather than clamped, because a silently rewritten path is indistinguishable
+ * from one that was honoured.
  */
+
+/**
+ * Which directory a file request is relative to.
+ *
+ * `checkout` is the repository (or the workspace root for a session created
+ * without one) and is read-only here — writing into a working tree is the
+ * agent's job and git's record. `artifacts` is the session's own file
+ * directory, and is the only root the Hub will write to or delete from.
+ */
+export type WorkspaceRoot = 'checkout' | 'artifacts';
+
+export function parseWorkspaceRoot(value: unknown): WorkspaceRoot {
+  if (value === undefined || value === null || value === '' || value === 'checkout') {
+    return 'checkout';
+  }
+  if (value === 'artifacts') {
+    return 'artifacts';
+  }
+  throw new WorkspacePathError('Unknown workspace root');
+}
 
 /** Largest file served inline. Beyond this the viewer shows a prefix. */
 export const MAX_VIEWABLE_FILE_BYTES = 256 * 1024;

@@ -139,6 +139,87 @@ function readFile(root: MockWorkspaceDir, path: string): Response {
   });
 }
 
+/** The upload path, as the client percent-encodes it into a header. */
+function decodeHeaderPath(init?: RequestInit): string {
+  const headers = new Headers(init?.headers);
+  const header = headers.get('x-file-path') ?? '';
+  try {
+    return decodeURIComponent(header);
+  } catch {
+    return header;
+  }
+}
+
+/** The directory a path's parents name, created as it is walked. */
+function ensureParents(
+  root: MockWorkspaceDir,
+  segments: readonly string[]
+): MockWorkspaceDir | undefined {
+  let node: MockWorkspaceDir = root;
+  for (const segment of segments) {
+    const next: MockWorkspaceNode = (node.entries[segment] ??= {
+      type: 'dir',
+      entries: {}
+    });
+    if (next.type !== 'dir') {
+      return undefined;
+    }
+    node = next;
+  }
+  return node;
+}
+
+async function writeArtifact(
+  root: MockWorkspaceDir,
+  path: string,
+  init?: RequestInit
+): Promise<Response> {
+  const segments = path.split('/').filter(Boolean);
+  const name = segments.pop();
+  if (!name) {
+    return json({ error: 'An x-file-path header is required' }, 400);
+  }
+  const parent = ensureParents(root, segments);
+  if (!parent) {
+    return json({ error: 'Path escapes the workspace' }, 400);
+  }
+  const body = init?.body;
+  const bytes = new Uint8Array(
+    body instanceof Blob
+      ? await body.arrayBuffer()
+      : new TextEncoder().encode(typeof body === 'string' ? body : '')
+  );
+  // Text is kept so the viewer can show it back; anything else is described by
+  // size alone, which is all the real read does for binary too.
+  const text = new TextDecoder('utf-8', { fatal: true });
+  let content: string | undefined;
+  try {
+    content = text.decode(bytes);
+  } catch {
+    content = undefined;
+  }
+  parent.entries[name] = {
+    type: 'file',
+    size: bytes.byteLength,
+    ...(content === undefined ? { binary: true } : { content })
+  };
+  return json({ path }, 201);
+}
+
+function deleteArtifact(root: MockWorkspaceDir, path: string): Response {
+  const segments = path.split('/').filter(Boolean);
+  const name = segments.pop();
+  if (!name) {
+    return json({ error: 'A file path is required' }, 400);
+  }
+  const parent = resolveNode(root, segments.join('/'));
+  if (!parent || parent.type !== 'dir' || !parent.entries[name]) {
+    return notFound('File not found');
+  }
+  delete parent.entries[name];
+  return json({ path });
+}
+
 /** Binary fixtures carry no bytes, so downloads answer with placeholder text. */
 function downloadFile(root: MockWorkspaceDir, path: string): Response {
   const node = resolveNode(root, path);
@@ -579,21 +660,37 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
         }
       );
     }
-    if (sub === 'files' && method === 'GET') {
+    if (sub === 'files') {
+      const artifacts = url.searchParams.get('root') === 'artifacts';
       if (!attached(view)) {
-        return asleep('browse the files of');
-      }
-      const workspace = session.workspace;
-      if (!workspace) {
-        return notFound('No workspace fixture for this session');
+        return asleep(
+          artifacts ? 'use the files of' : 'browse the files of'
+        );
       }
       const filePath = url.searchParams.get('path') ?? '';
+      if (artifacts) {
+        // Only the artifacts root is writable, exactly as the Worker has it.
+        const root = (session.artifacts ??= { type: 'dir', entries: {} });
+        if (method === 'POST') {
+          return await writeArtifact(root, decodeHeaderPath(init), init);
+        }
+        if (method === 'DELETE') {
+          return deleteArtifact(root, filePath);
+        }
+      }
+      if (method !== 'GET') {
+        return json({ error: 'Method not allowed' }, 405);
+      }
+      const tree = artifacts ? session.artifacts : session.workspace;
+      if (!tree) {
+        return notFound('No workspace fixture for this session');
+      }
       if (url.searchParams.get('download') === '1') {
-        return downloadFile(workspace, filePath);
+        return downloadFile(tree, filePath);
       }
       return url.searchParams.get('read') === '1'
-        ? readFile(workspace, filePath)
-        : listDirectory(workspace, filePath);
+        ? readFile(tree, filePath)
+        : listDirectory(tree, filePath);
     }
     if (sub === 'agent-session' && method === 'GET') {
       if (!attached(view)) {

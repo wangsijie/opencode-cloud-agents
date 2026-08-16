@@ -115,6 +115,43 @@ build the button first.
 Anything interpolated into a container shell command still goes through
 `shellQuote` in `src/session-changes.ts`.
 
+## Artifacts are a directory, not a store
+
+`/workspace/artifacts` (`ARTIFACTS_ROOT` in `src/repos.ts`) is where a session's
+files that are not the repository live: what the user uploads, what the agent
+produces that does not belong in a commit. It is a *sibling* of the checkout,
+which is the whole mechanism — `readSessionChanges` runs git inside the checkout,
+so nothing here can turn up in the diff. Do not move it inside one.
+
+It is exactly as durable as the session and no more. The snapshot carries it on
+a Cloudflare host, the volume on a Docker one, and a session that goes `lost`
+loses it — the same bargain the workspace already makes. **There is no mirror
+outside the container**, deliberately: an R2 copy would need change detection,
+sync triggers, a conflict rule and a per-file state badge, all to serve reads in
+a state the panel already refuses. A sleeping session answers 409 and says to
+send a message, like every other file route.
+
+Three consequences worth keeping. `artifacts` is a reserved `repoKey`
+(`isSafeRepoKey`), because a GitHub repository of that name would clone on top
+of it. It is in `SEED_DONOR_STATE`, because a prebuild seed otherwise hands
+every new session the donor's files — and both seed paths recreate the empty
+directory, since the wake created it before the sanitize ran. And the agent only
+knows about it because `ARTIFACTS_INSTRUCTIONS` is appended to the merged
+AGENTS.md on every wake: that file is now written unconditionally, not only when
+`opencode.agents-md` is configured.
+
+The Hub reaches it through `/api/sessions/:id/files?root=artifacts` — the same
+route as the checkout, with a root selector, because the rules are identical and
+two routes would differ only in a directory. `artifacts` is the only writable
+root: `POST` (bytes as the body, percent-encoded path in `x-file-path`) and
+`DELETE`. The checkout stays read-only from the Hub; changing it is the agent's
+job and git's record.
+
+The 10 MB upload ceiling is the transport, not a policy — the host protocol
+carries file content as base64 in a JSON body. If large artifacts are wanted,
+add streaming file routes to `protocol/` and implement them in both hosts.
+Raising the constant is not the fix.
+
 ## A preinstalled tool that reads XDG is not preinstalled
 
 The images bake Playwright and its Chromium (both Dockerfiles, beside

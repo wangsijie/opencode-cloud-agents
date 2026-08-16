@@ -11,6 +11,7 @@
  * only `loadContainerCredentials` reads the database.
  */
 import { BUILTIN_SKILLS } from './builtin-skills.ts';
+import { ARTIFACTS_ROOT } from './repos.ts';
 import {
   SETTING_KEYS,
   readSetting,
@@ -27,6 +28,27 @@ export const CONTAINER_SKILLS_ROOT = '/root/.config/opencode/skills';
 
 /** Where OpenCode discovers global instructions inside the container. */
 export const CONTAINER_AGENTS_MD_PATH = '/root/.config/opencode/AGENTS.md';
+
+/**
+ * How the agent learns about the artifacts directory.
+ *
+ * Standing instructions rather than a skill: there is no procedure here, only a
+ * path and what belongs in it, and a skill would be a second copy of two
+ * sentences. It is appended to the operator's own AGENTS.md rather than merged
+ * into the setting, so it cannot be edited away on the settings page and cannot
+ * be lost by a deployment that has no AGENTS.md configured at all.
+ */
+export const ARTIFACTS_INSTRUCTIONS = `## Session files
+
+\`${ARTIFACTS_ROOT}\` is this session's file directory, separate from any code
+checkout. Files the user uploads for you arrive there, and it is where your own
+output belongs when it is not a change to the repository — a report, an export,
+a chart, a scratch download. The user can browse and download it from the
+Artifacts tab.
+
+Write there with ordinary tools; the directory already exists. Never commit it,
+and do not put a build artifact of the repository there when the repository is
+where it belongs.`;
 
 /**
  * Where OpenCode keeps its MCP OAuth store: `$XDG_DATA_HOME/opencode`, and the
@@ -165,14 +187,19 @@ export function credentialFiles(
       mode: '644'
     });
   }
+  // Always written, even with nothing configured: the artifacts directory is a
+  // property of the runtime rather than of the operator's settings, and an
+  // agent that does not know about it will not use it.
   const agentsMd = resolveAgentsMd(settings.agentsMd, repoKey);
-  if (agentsMd) {
-    files.push({
-      path: CONTAINER_AGENTS_MD_PATH,
-      content: ensureTrailingNewline(agentsMd),
-      mode: '644'
-    });
-  }
+  files.push({
+    path: CONTAINER_AGENTS_MD_PATH,
+    content: ensureTrailingNewline(
+      agentsMd
+        ? `${agentsMd}\n\n${ARTIFACTS_INSTRUCTIONS}`
+        : ARTIFACTS_INSTRUCTIONS
+    ),
+    mode: '644'
+  });
   if (settings.mcpAuth) {
     // Staged only; the guarded seed command decides whether it reaches the
     // workspace store or is discarded. Writing through the batch keeps the

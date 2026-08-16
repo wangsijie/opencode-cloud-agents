@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, type CSSProperties } from 'react';
 import type { SessionView } from '../api';
 import { useResizable } from '../useResizable';
+import { ArtifactsPanel } from './ArtifactsPanel';
 import { CloseIcon } from './icons';
 import { WorkspacePanel } from './WorkspacePanel';
 
@@ -11,7 +12,7 @@ const ChangesPanel = lazy(() =>
   import('./ChangesPanel').then((m) => ({ default: m.ChangesPanel }))
 );
 
-type Tab = 'changes' | 'workspace';
+type Tab = 'changes' | 'workspace' | 'artifacts';
 
 /**
  * Everything about the session that is not the conversation.
@@ -27,6 +28,8 @@ type Tab = 'changes' | 'workspace';
  *
  * A session created without a repository has no diff at all, so it gets the
  * workspace alone rather than a Changes tab that can only report the absence.
+ * Artifacts is always there: every session has the directory, whether or not it
+ * has a repository.
  */
 export function SessionDetails({
   session,
@@ -90,6 +93,15 @@ export function SessionDetails({
           >
             Workspace
           </button>
+          <button
+            className={`link-button${tab === 'artifacts' ? ' active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'artifacts'}
+            onClick={() => setTab('artifacts')}
+          >
+            Artifacts
+          </button>
         </div>
         <button
           className="icon-button"
@@ -119,6 +131,12 @@ export function SessionDetails({
               onWoke={onWoke}
             />
           </Suspense>
+        ) : tab === 'artifacts' ? (
+          <ArtifactsPanel
+            sessionId={session.id}
+            attached={attached}
+            cleaned={cleaned}
+          />
         ) : (
           <WorkspacePanel
             sessionId={session.id}

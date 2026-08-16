@@ -7,6 +7,7 @@ import {
   MAX_VIEWABLE_FILE_BYTES,
   normalizeWorkspaceRelativePath,
   parentPath,
+  parseWorkspaceRoot,
   resolveWorkspacePath,
   workspaceDownloadBytes,
   workspaceDownloadDisposition,
@@ -29,6 +30,18 @@ test('refuses paths that leave the checkout', () => {
   assert.throws(() => normalizeWorkspaceRelativePath('src/\0/x'), /Invalid path/)
   assert.throws(() => normalizeWorkspaceRelativePath(42), /Invalid path/)
   assert.throws(() => normalizeWorkspaceRelativePath('a'.repeat(5000)), /Invalid path/)
+})
+
+test('a file request names one of two roots, and nothing else', () => {
+  // An absent root is the checkout, which is what keeps every URL written
+  // before artifacts existed meaning what it used to.
+  for (const value of [undefined, null, '', 'checkout']) {
+    assert.equal(parseWorkspaceRoot(value), 'checkout')
+  }
+  assert.equal(parseWorkspaceRoot('artifacts'), 'artifacts')
+  for (const value of ['/etc', 'workspace', 'ARTIFACTS', 42]) {
+    assert.throws(() => parseWorkspaceRoot(value), /Unknown workspace root/)
+  }
 })
 
 test('resolves against the session checkout', () => {

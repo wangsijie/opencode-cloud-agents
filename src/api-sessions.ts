@@ -55,8 +55,10 @@ import {
 } from './sessions';
 import { getTranscriptMirror } from './transcript-mirror';
 import {
+  parseWorkspaceRoot,
   workspaceDownloadBytes,
-  workspaceDownloadDisposition
+  workspaceDownloadDisposition,
+  type WorkspaceRoot
 } from './workspace-files';
 
 /**
@@ -183,10 +185,16 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   }
 
   if (action === 'files') {
-    if (request.method !== 'GET') {
-      return methodNotAllowed('GET');
+    if (request.method === 'GET') {
+      return await readSessionFiles(url, env, record);
     }
-    return await readSessionFiles(url, env, record);
+    if (request.method === 'POST') {
+      return await writeSessionFile(request, url, env, record);
+    }
+    if (request.method === 'DELETE') {
+      return await deleteSessionFile(url, env, record);
+    }
+    return methodNotAllowed('GET, POST, DELETE');
   }
 
   if (action === 'read') {
@@ -965,7 +973,12 @@ async function patchSession(
 }
 
 /**
- * Browse the session's checkout: one directory, or one file's content.
+ * Browse the session's files: one directory, or one file's content.
+ *
+ * `root` chooses between the checkout and the session's artifacts directory;
+ * both live in the same container and follow the same rules, which is why this
+ * is one route with a parameter rather than two that would differ only in the
+ * directory they resolve against.
  *
  * A passive read like the transcript — it needs a container that is already
  * running and never starts one — but unlike the transcript it has no mirror
@@ -984,8 +997,13 @@ async function readSessionFiles(
   const sandbox = resolveSandbox(env, instance);
   const path = url.searchParams.get('path') ?? '';
   try {
+    const root = parseWorkspaceRoot(url.searchParams.get('root'));
     if (url.searchParams.get('download') === '1') {
-      const download = await sandbox.downloadWorkspaceFile(runtimeEpoch, path);
+      const download = await sandbox.downloadWorkspaceFile(
+        runtimeEpoch,
+        path,
+        root
+      );
       // Always an opaque attachment: serving repository content as a renderable
       // type from the Hub's own origin would hand it the admin cookie's scope.
       return new Response(workspaceDownloadBytes(download), {
@@ -998,21 +1016,153 @@ async function readSessionFiles(
     }
     return json(
       url.searchParams.get('read') === '1'
-        ? await sandbox.readWorkspaceFile(runtimeEpoch, path)
-        : await sandbox.listWorkspaceDirectory(runtimeEpoch, path)
+        ? await sandbox.readWorkspaceFile(runtimeEpoch, path, root)
+        : await sandbox.listWorkspaceDirectory(runtimeEpoch, path, root)
     );
   } catch (error) {
-    // A path that leaves the checkout is the caller's mistake, and so is asking
-    // for a file that is not there. Neither is a container failure.
-    const message = error instanceof Error ? error.message : String(error);
-    if (/escapes the workspace|Invalid path|file path is required/i.test(message)) {
-      throw new HttpError(400, message);
-    }
-    if (/not found|no such file|ENOENT/i.test(message)) {
-      throw new HttpError(404, 'File not found');
-    }
-    throw error;
+    throwFileRequestError(error);
   }
+}
+
+/**
+ * The largest file the Hub will move in or out of a container.
+ *
+ * Not a policy about what a session may hold — the agent writes whatever it
+ * likes — but the ceiling of the transport: the host protocol carries file
+ * content as base64 inside a JSON body, so a large file costs a third again as
+ * much memory in the Worker on the way through. Streaming file routes are the
+ * fix when one is wanted; raising this number is not.
+ */
+const MAX_ARTIFACT_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Put a file into the session's artifacts directory.
+ *
+ * The body is the file's bytes and the path rides in a header, so nothing has
+ * to base64 a large upload twice. Only the artifacts root accepts a write; the
+ * checkout is the agent's working tree and git's record of it.
+ */
+async function writeSessionFile(
+  request: Request,
+  url: URL,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  requireArtifactsRoot(url, 'uploads');
+  // Percent-encoded by the client: a header value is ASCII and a filename very
+  // often is not.
+  const header = request.headers.get('x-file-path') ?? '';
+  if (!header) {
+    throw new HttpError(400, 'An x-file-path header is required');
+  }
+  let path: string;
+  try {
+    path = decodeURIComponent(header);
+  } catch {
+    throw new HttpError(400, 'Invalid path');
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength > MAX_ARTIFACT_UPLOAD_BYTES) {
+    throw new HttpError(
+      413,
+      `Files up to ${MAX_ARTIFACT_UPLOAD_BYTES / (1024 * 1024)} MB can be uploaded here`
+    );
+  }
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    'upload a file to'
+  );
+  try {
+    return json(
+      await resolveSandbox(env, instance).writeArtifactFile(
+        runtimeEpoch,
+        path,
+        encodeBase64(bytes),
+        'base64'
+      ),
+      201
+    );
+  } catch (error) {
+    throwFileRequestError(error);
+  }
+}
+
+/** Remove one file or directory from the session's artifacts. */
+async function deleteSessionFile(
+  url: URL,
+  env: Env,
+  record: SessionRecord
+): Promise<Response> {
+  requireArtifactsRoot(url, 'deletions');
+  const { instance, runtimeEpoch } = await requireAwakeRuntime(
+    env,
+    record,
+    'delete a file from'
+  );
+  try {
+    return json(
+      await resolveSandbox(env, instance).deleteArtifactFile(
+        runtimeEpoch,
+        url.searchParams.get('path') ?? ''
+      )
+    );
+  } catch (error) {
+    throwFileRequestError(error);
+  }
+}
+
+/**
+ * Refuse a write aimed anywhere but the artifacts directory.
+ *
+ * The checkout is the agent's working tree and git's record of it: a file the
+ * Hub dropped into it would turn up in the diff with nothing to explain it, and
+ * a file the Hub removed from it would look like the agent's doing.
+ */
+function requireArtifactsRoot(url: URL, what: string): void {
+  let root: WorkspaceRoot;
+  try {
+    root = parseWorkspaceRoot(url.searchParams.get('root'));
+  } catch (error) {
+    throwFileRequestError(error);
+  }
+  if (root !== 'artifacts') {
+    throw new HttpError(
+      400,
+      `Only the artifacts directory accepts ${what}; the checkout is the agent's to change`
+    );
+  }
+}
+
+/**
+ * A path that leaves the workspace is the caller's mistake, and so is asking
+ * for a file that is not there. Neither is a container failure.
+ */
+function throwFileRequestError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /escapes the workspace|Invalid path|file path is required|Unknown workspace root/i.test(
+      message
+    )
+  ) {
+    throw new HttpError(400, message);
+  }
+  if (/not found|no such file|ENOENT/i.test(message)) {
+    throw new HttpError(404, 'File not found');
+  }
+  throw error;
+}
+
+/** Bytes as base64, for the host protocol's JSON file writes. */
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  // Chunked because a spread of a multi-megabyte array overflows the argument
+  // limit that `String.fromCharCode` is subject to.
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
 }
 
 /**

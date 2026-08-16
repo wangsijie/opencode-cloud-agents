@@ -32,6 +32,25 @@ export interface RepoDefinition {
 export const WORKSPACE_ROOT = '/workspace';
 
 /**
+ * The directory below /workspace that holds the session's files.
+ *
+ * A place to put things that are not the repository: what the user uploads for
+ * the agent to work on, and what the agent produces that does not belong in a
+ * commit. A sibling of the checkout rather than a directory inside it, which is
+ * what keeps it out of `git status` by construction instead of by convention.
+ *
+ * It lives in the workspace, so it is exactly as durable as the session: the
+ * snapshot carries it on a Cloudflare host and the volume carries it on a
+ * Docker one, and a session that is lost loses it too. There is no mirror
+ * outside the container, so a sleeping session cannot be browsed — the same
+ * rule the workspace panel already follows.
+ */
+export const ARTIFACTS_DIRECTORY_NAME = 'artifacts';
+
+/** Absolute container path of that directory. */
+export const ARTIFACTS_ROOT = `${WORKSPACE_ROOT}/${ARTIFACTS_DIRECTORY_NAME}`;
+
+/**
  * Absolute container path a session works in.
  *
  * Derived from the key alone, so an existing session can always locate its own
@@ -62,11 +81,20 @@ const SAFE_REPO_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_GIT_REF = /^[A-Za-z0-9._/-]{1,255}$/;
 const SAFE_CLONE_URL = /^(?:https:\/\/|git@)[A-Za-z0-9._/:@-]+$/;
 
+/**
+ * Names that are already something else below /workspace. A repository called
+ * `artifacts` is a perfectly ordinary GitHub repository and an entirely
+ * reasonable key, and cloning it would land on top of the session's artifacts
+ * directory.
+ */
+const RESERVED_REPO_KEYS = new Set([ARTIFACTS_DIRECTORY_NAME]);
+
 export function isSafeRepoKey(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     SAFE_REPO_KEY.test(value) &&
-    !value.includes('..')
+    !value.includes('..') &&
+    !RESERVED_REPO_KEYS.has(value)
   );
 }
 

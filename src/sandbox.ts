@@ -86,12 +86,13 @@ import {
   type OpenCodeLocation
 } from './opencode-activity';
 import {
+  ARTIFACTS_ROOT,
   isSafeRepoDefinition,
   workspaceDirectory,
   WORKSPACE_ROOT,
   type RepoDefinition
 } from './repos';
-import type { SessionChanges } from './session-changes';
+import { shellQuote, type SessionChanges } from './session-changes';
 import { classifySessionEvent, SseFrameBuffer } from './session-events';
 import {
   walkSessionLineage,
@@ -104,7 +105,8 @@ import {
   resolveWorkspacePath,
   type WorkspaceDownload,
   type WorkspaceFile,
-  type WorkspaceListing
+  type WorkspaceListing,
+  type WorkspaceRoot
 } from './workspace-files';
 import type {
   BootStep,
@@ -1638,7 +1640,20 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /**
-   * List one directory of the session's checkout.
+   * The absolute container directory one of the file roots names.
+   *
+   * The artifacts directory is a fixed path below /workspace and exists from
+   * the first wake, so unlike the checkout it needs nothing from the instance
+   * identity — but going through `requireCheckout` anyway keeps an instance
+   * with no workspace at all refusing the same way for both roots.
+   */
+  private rootDirectory(root: WorkspaceRoot): string {
+    const { directory } = this.requireCheckout();
+    return root === 'artifacts' ? ARTIFACTS_ROOT : directory;
+  }
+
+  /**
+   * List one directory of the session's checkout or its artifacts.
    *
    * A read, in the lifecycle sense: it needs a container that is already
    * running and never starts one, and it takes no work lease — browsing files
@@ -1646,13 +1661,14 @@ export class Sandbox extends DurableObject<Env> {
    */
   async listWorkspaceDirectory(
     runtimeEpoch: string,
-    path?: string
+    path?: string,
+    root: WorkspaceRoot = 'checkout'
   ): Promise<WorkspaceListing> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Listing workspace files');
     this.beginActiveOperation();
     try {
-      const { directory } = this.requireCheckout();
+      const directory = this.rootDirectory(root);
       const relative = normalizeWorkspaceRelativePath(path);
       const target = resolveWorkspacePath(directory, relative);
       const listing = await this.onHost(async () =>
@@ -1664,16 +1680,17 @@ export class Sandbox extends DurableObject<Env> {
     }
   }
 
-  /** Read one file of the session's checkout, under the same rules as listing. */
+  /** Read one file, under the same rules as listing. */
   async readWorkspaceFile(
     runtimeEpoch: string,
-    path: string
+    path: string,
+    root: WorkspaceRoot = 'checkout'
   ): Promise<WorkspaceFile> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Reading a workspace file');
     this.beginActiveOperation();
     try {
-      const { directory } = this.requireCheckout();
+      const directory = this.rootDirectory(root);
       const relative = normalizeWorkspaceRelativePath(path);
       if (!relative) {
         throw new Error('A file path is required');
@@ -1700,13 +1717,14 @@ export class Sandbox extends DurableObject<Env> {
    */
   async downloadWorkspaceFile(
     runtimeEpoch: string,
-    path: string
+    path: string,
+    root: WorkspaceRoot = 'checkout'
   ): Promise<WorkspaceDownload> {
     await this.lifecycleReady;
     this.assertCurrentRuntime(runtimeEpoch, 'Downloading a workspace file');
     this.beginActiveOperation();
     try {
-      const { directory } = this.requireCheckout();
+      const directory = this.rootDirectory(root);
       const relative = normalizeWorkspaceRelativePath(path);
       if (!relative) {
         throw new Error('A file path is required');
@@ -1719,6 +1737,77 @@ export class Sandbox extends DurableObject<Env> {
         content: result.content,
         encoding: result.encoding
       };
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /**
+   * Put a file into the session's artifacts directory.
+   *
+   * Only the artifacts root is writable: the checkout is the agent's working
+   * tree and git's record of it, and a file the Hub dropped in from outside
+   * would appear in the diff with no message explaining it.
+   *
+   * Still a read in the lifecycle sense — no work lease, and no wake. Writing a
+   * file is not asking the agent to do anything, and a session that has to be
+   * woken to receive an upload can be woken by the message that follows it.
+   */
+  async writeArtifactFile(
+    runtimeEpoch: string,
+    path: string,
+    content: string,
+    encoding: 'utf-8' | 'base64'
+  ): Promise<{ path: string }> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Writing an artifact');
+    this.beginActiveOperation();
+    try {
+      const relative = normalizeWorkspaceRelativePath(path);
+      if (!relative) {
+        throw new Error('A file path is required');
+      }
+      await this.onHost(async () =>
+        (await this.host()).writeBatch([
+          {
+            path: resolveWorkspacePath(ARTIFACTS_ROOT, relative),
+            content,
+            encoding
+          }
+        ])
+      );
+      return { path: relative };
+    } finally {
+      this.finishActiveOperation();
+    }
+  }
+
+  /** Remove one file or directory from the session's artifacts. */
+  async deleteArtifactFile(
+    runtimeEpoch: string,
+    path: string
+  ): Promise<{ path: string }> {
+    await this.lifecycleReady;
+    this.assertCurrentRuntime(runtimeEpoch, 'Deleting an artifact');
+    this.beginActiveOperation();
+    try {
+      const relative = normalizeWorkspaceRelativePath(path);
+      if (!relative) {
+        // `rm -rf` on the empty relative path would be the artifacts root
+        // itself, which is the one delete this must never perform.
+        throw new Error('A file path is required');
+      }
+      const target = resolveWorkspacePath(ARTIFACTS_ROOT, relative);
+      await this.onHost(async () => {
+        const result = await (
+          await this.host()
+        ).exec(`rm -rf ${shellQuote(target)}`);
+        if (!result.success) {
+          throw new Error(`Failed to delete ${relative}`);
+        }
+        return result;
+      });
+      return { path: relative };
     } finally {
       this.finishActiveOperation();
     }

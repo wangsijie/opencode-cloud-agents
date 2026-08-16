@@ -2606,8 +2606,23 @@ button.diff-file-header:hover .diff-file-path {
   flex-wrap: wrap;
 }
 
-.file-path .refresh {
+.file-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
+}
+
+/* The real control is the button beside it; this only opens the dialog. */
+.file-picker {
+  display: none;
+}
+
+/* The whole panel is the drop target, so the cue is on the panel. */
+.file-browser.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: 8px;
 }
 
 .file-list {
@@ -2639,6 +2654,23 @@ button.diff-file-header:hover .diff-file-path {
 
 .file-entry:hover:not(:disabled) {
   background: var(--surface-raised);
+}
+
+/* Only the writable browser has a second control per row. */
+.file-list li:has(> .file-delete) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-delete {
+  flex: 0 0 auto;
+  opacity: 0.55;
+}
+
+.file-delete:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--accent);
 }
 
 .file-icon {

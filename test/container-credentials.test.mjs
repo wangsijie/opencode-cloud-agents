@@ -53,7 +53,8 @@ test('every configured credential lands at its container path with its mode', ()
     '# skill\n'
   )
   assert.ok(byPath.has(`${CONTAINER_SKILLS_ROOT}/review/SKILL.md`))
-  assert.equal(files.length, 5 + BUILTIN_SKILLS.length)
+  // Plus AGENTS.md, which is written on every wake whatever the settings say.
+  assert.equal(files.length, 6 + BUILTIN_SKILLS.length)
 })
 
 test('the merged AGENTS.md lands at the global config path', () => {
@@ -71,11 +72,30 @@ test('the merged AGENTS.md lands at the global config path', () => {
   const merged = agentsFile(credentialFiles(settings, 'opencode-cloud'))
   assert.equal(merged.mode, '644')
   // Global first, the repo addition after, one blank line between.
-  assert.equal(merged.content, '# House rules\n\nUse pnpm.\n')
+  assert.ok(merged.content.startsWith('# House rules\n\nUse pnpm.\n\n'))
 
   // A session on another repo — or none — gets only the global block.
   for (const repoKey of ['other-repo', undefined]) {
-    assert.equal(agentsFile(credentialFiles(settings, repoKey)).content, '# House rules\n')
+    assert.ok(
+      agentsFile(credentialFiles(settings, repoKey)).content.startsWith('# House rules\n\n')
+    )
+  }
+})
+
+test('the artifacts directory is described to every container', () => {
+  // Appended to the operator's own instructions rather than merged into the
+  // setting, so it cannot be edited away and is written even when nothing is
+  // configured at all.
+  for (const settings of [
+    { env: [], skills: [] },
+    { env: [], skills: [], agentsMd: { global: '# House rules' } }
+  ]) {
+    const agents = credentialFiles(settings).find(
+      (file) => file.path === CONTAINER_AGENTS_MD_PATH
+    )
+    assert.equal(agents.mode, '644')
+    assert.ok(agents.content.includes('/workspace/artifacts'))
+    assert.ok(agents.content.endsWith('\n'))
   }
 })
 
@@ -124,10 +144,13 @@ test('resolveAgentsMd merges what exists and yields nothing for nothing', () => 
   )
 })
 
-test('nothing configured writes only the built-in skills', () => {
+test('nothing configured writes only the built-in skills and the standing instructions', () => {
   assert.deepEqual(
     credentialFiles({ env: [], skills: [] }).map((file) => file.path),
-    BUILTIN_SKILLS.map((skill) => `${CONTAINER_SKILLS_ROOT}/${skill.name}/SKILL.md`)
+    [
+      ...BUILTIN_SKILLS.map((skill) => `${CONTAINER_SKILLS_ROOT}/${skill.name}/SKILL.md`),
+      CONTAINER_AGENTS_MD_PATH
+    ]
   )
   assert.deepEqual(gitConfigCommands({ env: [], skills: [] }), [])
   assert.deepEqual(containerEnv({ env: [], skills: [] }), {})

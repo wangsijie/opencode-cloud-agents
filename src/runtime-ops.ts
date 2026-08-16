@@ -29,6 +29,8 @@ import {
 } from './container-credentials.ts';
 import { truncateOutput } from './http.ts';
 import {
+  ARTIFACTS_DIRECTORY_NAME,
+  ARTIFACTS_ROOT,
   WORKSPACE_ROOT,
   repoOwnerFromCloneUrl,
   type RepoDefinition
@@ -118,7 +120,11 @@ export const CONTAINER_RUNTIME_ENV = {
  */
 const SEED_DONOR_STATE = [
   '.opencode-state/data/opencode',
-  '.opencode-state/state'
+  '.opencode-state/state',
+  // The donor's uploads and outputs. Belongs to whoever ran the prebuild, not
+  // to the repository, and inheriting it would hand every new session another
+  // session's files.
+  ARTIFACTS_DIRECTORY_NAME
 ];
 
 /**
@@ -188,6 +194,11 @@ export async function injectContainerCredentials(
   const leading = [
     `rm -rf ${shellQuote(CONTAINER_SKILLS_ROOT)}`,
     `rm -f ${shellQuote(CONTAINER_AGENTS_MD_PATH)}`,
+    // The artifacts directory exists from the first wake, so the agent finds it
+    // where the instructions say it is rather than having to create it — and so
+    // the panel shows an empty directory instead of an error. Rides the leading
+    // script because it depends on nothing and costs no extra round trip.
+    `mkdir -p ${shellQuote(ARTIFACTS_ROOT)}`,
     ...gitConfigCommands(settings, repoOwner),
     // Nothing to install means nothing to wait for the batch on, so the
     // cleanup of a previously seeded store goes here too.
@@ -325,7 +336,12 @@ export async function sanitizeSeededWorkspace(
   );
   await mustExec(
     host,
-    removals.map((path) => `rm -rf ${shellQuote(path)}`).join(' && ')
+    [
+      ...removals.map((path) => `rm -rf ${shellQuote(path)}`),
+      // The donor's artifacts were among those removals, and the wake created
+      // this directory before the seed was sanitized. Put it back.
+      `mkdir -p ${shellQuote(ARTIFACTS_ROOT)}`
+    ].join(' && ')
   );
 
   const existing = await host.exists(`${directory}/.git`);
@@ -372,7 +388,10 @@ export async function wipeSeededWorkspace(
   ];
   await mustExec(
     host,
-    targets.map((path) => `rm -rf ${shellQuote(path)}`).join(' && ')
+    [
+      ...targets.map((path) => `rm -rf ${shellQuote(path)}`),
+      `mkdir -p ${shellQuote(ARTIFACTS_ROOT)}`
+    ].join(' && ')
   );
 }
 

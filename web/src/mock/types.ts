@@ -35,6 +35,12 @@ export interface MockSessionState {
   lineages: Record<string, AgentSessionEntry[]>;
   changes?: SessionChanges;
   workspace?: MockWorkspaceDir;
+  /**
+   * The session's artifacts directory. Every session has one in the real
+   * runtime, so the mock creates an empty tree on first use rather than making
+   * every fixture declare one.
+   */
+  artifacts?: MockWorkspaceDir;
   /** Question requests waiting on the reader, matched to parts by callID. */
   pendingQuestions?: QuestionRequest[];
 }

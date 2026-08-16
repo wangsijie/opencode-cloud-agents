@@ -92,7 +92,8 @@ test('credentials with no stored MCP auth are one script and one batch', async (
       '/root/.ssh/id_ed25519',
       '/root/.ssh/id_ed25519.pub',
       '/root/.config/gh/hosts.yml',
-      '/root/.config/opencode/skills/review/SKILL.md'
+      '/root/.config/opencode/skills/review/SKILL.md',
+      '/root/.config/opencode/AGENTS.md'
     ]
   )
   // OpenSSH refuses a private key others could read, so the mode travels with
@@ -100,6 +101,28 @@ test('credentials with no stored MCP auth are one script and one batch', async (
   assert.equal(written[0].mode, '600')
   assert.equal(written[1].mode, '644')
   assert.deepEqual(env, { FOO: 'bar' })
+})
+
+test('the artifacts directory exists from the first wake, and survives a seed', async () => {
+  // Created by the leading script, so the agent finds the directory the
+  // instructions name and the panel opens on an empty listing rather than an
+  // error. No extra round trip: it rides a script that had to run anyway.
+  const wake = stubHost()
+  await injectContainerCredentials(wake, { env: [], skills: [] }, {})
+  assert.equal(wake.calls.exec.length, 1)
+  assert.match(wake.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
+
+  // A prebuild seed carries the donor's artifacts, which belong to whoever ran
+  // the prebuild. Both seed paths drop them and put the empty directory back.
+  const seeded = stubHost({}, { '/workspace/owner/repo/.git': true })
+  await sanitizeSeededWorkspace(seeded, CHECKOUT)
+  assert.match(seeded.calls.exec[0].command, /rm -rf '\/workspace\/artifacts'/)
+  assert.match(seeded.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
+
+  const wiped = stubHost()
+  await wipeSeededWorkspace(wiped, CHECKOUT)
+  assert.match(wiped.calls.exec[0].command, /rm -rf '\/workspace\/artifacts'/)
+  assert.match(wiped.calls.exec[0].command, /mkdir -p '\/workspace\/artifacts'/)
 })
 
 test('no credentials at all still clears what a previous wake wrote', async () => {
@@ -114,10 +137,13 @@ test('no credentials at all still clears what a previous wake wrote', async () =
     host.calls.exec[0].command,
     / && if \[ -e '\/workspace\/\.opencode-state\/data\/opencode\/\.mcp-auth\.seeded' \]/
   )
-  // The built-in skills still ride the batch — they are not credentials.
+  // The built-in skills and the standing instructions still ride the batch —
+  // they are not credentials.
   assert.equal(host.calls.writeBatch.length, 1)
   assert.ok(
-    host.calls.writeBatch[0].every((file) => file.path.startsWith('/root/.config/opencode/skills/'))
+    host.calls.writeBatch[0].every((file) =>
+      file.path.startsWith('/root/.config/opencode/')
+    )
   )
   assert.deepEqual(env, {})
 })

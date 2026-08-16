@@ -663,19 +663,37 @@ export const fetchChanges = (id: string) =>
   call<SessionChanges>(`/api/sessions/${encodeURIComponent(id)}/changes`);
 
 /**
- * Browse the checkout inside a running container.
- *
- * Like the diff, these need the container up: there is no mirror of a working
- * tree, so a sleeping session answers 409 and the panel says to send a message.
+ * Which directory a file request is relative to: the checkout, or the session's
+ * own artifacts directory. The checkout is read-only from here.
  */
-export const listWorkspaceFiles = (id: string, path = '') =>
+export type WorkspaceRoot = 'checkout' | 'artifacts';
+
+const filesPath = (id: string, root: WorkspaceRoot, query: string) =>
+  `/api/sessions/${encodeURIComponent(id)}/files?root=${root}&${query}`;
+
+/**
+ * Browse the files inside a running container.
+ *
+ * Like the diff, these need the container up: neither the working tree nor the
+ * artifacts directory is mirrored outside the container, so a sleeping session
+ * answers 409 and the panel says to send a message.
+ */
+export const listWorkspaceFiles = (
+  id: string,
+  path = '',
+  root: WorkspaceRoot = 'checkout'
+) =>
   call<WorkspaceListing>(
-    `/api/sessions/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`
+    filesPath(id, root, `path=${encodeURIComponent(path)}`)
   );
 
-export const readWorkspaceFile = (id: string, path: string) =>
+export const readWorkspaceFile = (
+  id: string,
+  path: string,
+  root: WorkspaceRoot = 'checkout'
+) =>
   call<WorkspaceFile>(
-    `/api/sessions/${encodeURIComponent(id)}/files?read=1&path=${encodeURIComponent(path)}`
+    filesPath(id, root, `read=1&path=${encodeURIComponent(path)}`)
   );
 
 /**
@@ -686,10 +704,11 @@ export const readWorkspaceFile = (id: string, path: string) =>
  */
 export async function downloadWorkspaceFile(
   id: string,
-  path: string
+  path: string,
+  root: WorkspaceRoot = 'checkout'
 ): Promise<Blob> {
   const response = await fetchImpl(
-    `/api/sessions/${encodeURIComponent(id)}/files?download=1&path=${encodeURIComponent(path)}`
+    filesPath(id, root, `download=1&path=${encodeURIComponent(path)}`)
   );
   if (!response.ok) {
     if (response.status === 401) {
@@ -702,6 +721,35 @@ export async function downloadWorkspaceFile(
   }
   return await response.blob();
 }
+
+/**
+ * Put a file into the session's artifacts directory.
+ *
+ * The bytes are the body and the path is a header, so a file is not base64'd
+ * in the browser only to be decoded again — the Worker does that once, on the
+ * way into the host protocol. The header is percent-encoded because a header
+ * value is ASCII and a filename very often is not.
+ */
+export async function uploadArtifactFile(
+  id: string,
+  path: string,
+  file: Blob
+): Promise<{ path: string }> {
+  return await call<{ path: string }>(filesPath(id, 'artifacts', ''), {
+    method: 'POST',
+    body: file,
+    headers: {
+      'content-type': 'application/octet-stream',
+      'x-file-path': encodeURIComponent(path)
+    }
+  });
+}
+
+export const deleteArtifactFile = (id: string, path: string) =>
+  call<{ path: string }>(
+    filesPath(id, 'artifacts', `path=${encodeURIComponent(path)}`),
+    { method: 'DELETE' }
+  );
 
 /**
  * Repository and model choices.

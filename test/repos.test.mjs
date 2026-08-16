@@ -44,7 +44,10 @@ test('repository keys stay usable as a path segment', () => {
     '$(x)',
     'a'.repeat(65),
     42,
-    undefined
+    undefined,
+    // Already a directory below /workspace: cloning a repository of that name
+    // would land on top of the session's artifacts.
+    'artifacts'
   ]) {
     assert.equal(isSafeRepoKey(key), false, String(key))
   }
