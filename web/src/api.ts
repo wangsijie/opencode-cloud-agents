@@ -791,5 +791,17 @@ export const retrySession = (id: string) =>
     method: 'POST'
   });
 
+/**
+ * Start the container without saying anything to the agent.
+ *
+ * The counterpart to `stopInstance`, and the way a reader gets back to a
+ * sleeping session's diff or files without having to send a message into the
+ * conversation to do it.
+ */
+export const wakeSession = (id: string) =>
+  call<SessionView>(`/api/sessions/${encodeURIComponent(id)}/wake`, {
+    method: 'POST'
+  });
+
 export const stopInstance = (id: string) =>
   call<unknown>(`/api/instances/${encodeURIComponent(id)}/stop`, { method: 'POST' });

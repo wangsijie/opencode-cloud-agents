@@ -741,6 +741,7 @@ export function SessionPage({
               session={session}
               attached={attached}
               onClose={() => setDetailsOpen(false)}
+              onWoke={refreshAll}
             />
           </>
         ) : null}

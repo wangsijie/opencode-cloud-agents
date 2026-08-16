@@ -31,11 +31,14 @@ type Tab = 'changes' | 'workspace';
 export function SessionDetails({
   session,
   attached,
-  onClose
+  onClose,
+  onWoke
 }: {
   session: SessionView;
   attached: boolean;
   onClose: () => void;
+  /** The Changes tab woke the container; the page's own poll should catch up. */
+  onWoke?: () => void;
 }) {
   const cleaned = session.status === 'cleaned';
   const hasChanges = Boolean(session.repoKey);
@@ -113,6 +116,7 @@ export function SessionDetails({
               sessionId={session.id}
               attached={attached}
               cleaned={cleaned}
+              onWoke={onWoke}
             />
           </Suspense>
         ) : (

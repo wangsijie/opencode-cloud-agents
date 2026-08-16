@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchChanges, type ChangedFile, type SessionChanges } from '../api';
+import {
+  fetchChanges,
+  wakeSession,
+  type ChangedFile,
+  type SessionChanges
+} from '../api';
 import { usePrefersDark } from '../usePrefersDark';
 import { FileDiff, type DiffMode } from './FileDiff';
 import {
@@ -284,16 +289,20 @@ function FileDiffBody({
 export function ChangesPanel({
   sessionId,
   attached,
-  cleaned = false
+  cleaned = false,
+  onWoke
 }: {
   sessionId: string;
   attached: boolean;
   /** The container was removed by the idle sweep; there is no diff left. */
   cleaned?: boolean;
+  /** Let the page re-read the session, so the wake shows everywhere at once. */
+  onWoke?: () => void;
 }) {
   const [changes, setChanges] = useState<SessionChanges>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
+  const [waking, setWaking] = useState(false);
   const [mode, setMode] = useState<DiffMode>(readMode);
   // Which files are folded shut. Deliberately component state and nothing
   // else: it is a reading position, not a preference, and a stale one restored
@@ -335,12 +344,30 @@ export function ChangesPanel({
     setLoading(false);
   }, [sessionId]);
 
+  // Reading a diff must never wake a container, so this is the button that
+  // says the reader meant to. Nothing is loaded here: the wake moves the
+  // session's lifecycle, the page's poll sees it, `attached` flips, and the
+  // effect below does the read it always does.
+  const wake = useCallback(async () => {
+    setWaking(true);
+    setError(undefined);
+    try {
+      await wakeSession(sessionId);
+      onWoke?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWaking(false);
+    }
+  }, [sessionId, onWoke]);
+
   // Another session is another workspace: nothing read here survives the
   // switch, including a failure that must not suppress the next read.
   useEffect(() => {
     setChanges(undefined);
     setError(undefined);
     setCollapsed(new Set());
+    setWaking(false);
     requested.current = undefined;
   }, [sessionId]);
 
@@ -482,11 +509,34 @@ export function ChangesPanel({
       ) : null}
 
       {!attached ? (
-        <p className="muted">
-          {cleaned
-            ? 'This session was cleaned up, so its workspace and changes no longer exist.'
-            : 'This session is asleep. Send a message to wake the container, then the changes show up here.'}
-        </p>
+        cleaned ? (
+          <p className="muted">
+            This session was cleaned up, so its workspace and changes no longer
+            exist.
+          </p>
+        ) : (
+          <>
+            <p className="muted">
+              This session is asleep. Wake the container to read its changes —
+              this starts it and nothing else; the agent is not sent anything.
+            </p>
+            <div className="actions">
+              <button
+                className="button"
+                type="button"
+                disabled={waking}
+                onClick={() => void wake()}
+              >
+                {waking ? 'Waking…' : 'Wake container'}
+              </button>
+            </div>
+            {error ? (
+              <p className="banner error" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </>
+        )
       ) : loading && !changes ? (
         <p className="muted">Reading the workspace…</p>
       ) : (

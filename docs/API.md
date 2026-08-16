@@ -61,6 +61,12 @@ curl -X POST http://localhost:8787/api/sessions/<session-id>/messages \
 # rather than waking it.
 curl http://localhost:8787/api/sessions/<session-id>/changes
 
+# Start the container and nothing else: no prompt, no OpenCode session, nothing
+# queued. This is how a reader gets back to the diff or the files of a sleeping
+# session without sending the agent a message to do it. Answers with the session
+# view; 503 while a wake is still queued behind an idle-stop, which is a retry.
+curl -X POST http://localhost:8787/api/sessions/<session-id>/wake
+
 # There is no publish route: pushing is the agent's own job. Ask it in a prompt
 # — it has git, `gh` and the credentials inside the container.
 

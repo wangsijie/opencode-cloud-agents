@@ -19,7 +19,8 @@ import * as hubStore from './hub-store';
 import {
   getInstanceView,
   resolveSandbox,
-  unknownRuntimeStatus
+  unknownRuntimeStatus,
+  wakeInstance
 } from './instance-access';
 import { ensureLifecycleInitialized } from './instance-runtime';
 import type { InstanceRecord, InstanceView } from './instances';
@@ -200,6 +201,9 @@ export async function handleSessionApi(request: Request, env: Env): Promise<Resp
   }
   if (action === 'abort') {
     return await abortSession(env, record);
+  }
+  if (action === 'wake') {
+    return await wakeSession(env, record);
   }
   if (action !== 'retry') {
     throw new HttpError(404, 'Session action not found');
@@ -878,6 +882,42 @@ async function abortSession(env: Env, record: SessionRecord): Promise<Response> 
     aborted,
     session: await getSessionView(env, await requireSession(env, record.id))
   });
+}
+
+/**
+ * Start the container behind a session, and nothing else.
+ *
+ * Everything that reads the container — the diff, the files, the subagents —
+ * refuses a sleeping session rather than waking one, because a panel being
+ * opened is not intent. Sending a message was therefore the only way back up,
+ * which is fine when there is something to say and wrong when the user only
+ * wants to look at what the agent already did. This is that intent, expressed
+ * on its own: a wake with no prompt, no OpenCode session created and nothing
+ * queued.
+ *
+ * It answers with the session view, so the caller sees the wake as the same
+ * `starting` → `idle` progression a prompt produces. A wake still racing the
+ * final idle-stop barrier comes back 503 from `wakeInstance`, which the caller
+ * may simply retry.
+ */
+async function wakeSession(env: Env, record: SessionRecord): Promise<Response> {
+  if (record.phase === 'lost') {
+    throw new HttpError(
+      409,
+      'This session was lost when its container restarted without a checkpoint. Starting the container would not bring it back.'
+    );
+  }
+  const instance = await hubStore.getInstance(env, record.instanceId);
+  if (instance && isCleanedLifecycle(instance.lifecycle)) {
+    throw new HttpError(409, CLEANED_SESSION_MESSAGE);
+  }
+  if (!instance || instance.lifecycle !== 'ready') {
+    throw new HttpError(409, 'This session is not ready to wake');
+  }
+  await wakeInstance(env, instance);
+  // The wake moves the runtime; keep the list calibrating until it settles.
+  await hubStore.markSessionStatusQuery(env, record.id).catch(() => undefined);
+  return json(await getSessionView(env, await requireSession(env, record.id)));
 }
 
 /**

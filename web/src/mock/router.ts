@@ -30,7 +30,8 @@ import {
   stopInstance,
   store,
   transcriptFor,
-  wakeAndRespond
+  wakeAndRespond,
+  wakeOnly
 } from './store';
 import type { MockSessionState, MockWorkspaceDir, MockWorkspaceNode } from './types';
 
@@ -639,6 +640,24 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
     if (sub === 'abort' && method === 'POST') {
       abortSessionRun(session);
       return json({ aborted: true });
+    }
+    if (sub === 'wake' && method === 'POST') {
+      if (view.phase === 'lost') {
+        return json({ error: 'This session was lost and cannot be woken' }, 409);
+      }
+      if (view.status === 'cleaned') {
+        return json(
+          {
+            error:
+              'This session was cleaned up after 3 days of inactivity and is read-only'
+          },
+          409
+        );
+      }
+      if (!attached(view)) {
+        wakeOnly(session);
+      }
+      return json(view);
     }
     if (sub === 'retry' && method === 'POST') {
       if (view.status === 'cleaned') {

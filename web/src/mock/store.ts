@@ -543,6 +543,42 @@ export function wakeAndRespond(session: MockSessionState, userId: string): void 
   })();
 }
 
+/**
+ * A wake with no prompt: the Changes tab's "Wake container".
+ *
+ * It ends at idle rather than at a reply, because nothing was said — the
+ * container comes up and the countdown starts again.
+ */
+export function wakeOnly(session: MockSessionState): void {
+  const token = newRun(session.view.id);
+  void (async () => {
+    setRuntime(session, {
+      status: 'starting',
+      lifecycle: 'waking',
+      container: 'provisioning'
+    });
+    await sleep(2_800);
+    if (token.cancelled) {
+      return;
+    }
+    // Deliberately not `finishToIdle`: nothing ran, so there is nothing new to
+    // read and the session must not gain an unread dot for having been woken.
+    const timeoutMs =
+      session.view.provider === 'docker'
+        ? DOCKER_IDLE_TIMEOUT_MS
+        : CLOUDFLARE_IDLE_TIMEOUT_MS;
+    const deadline = new Date(Date.now() + timeoutMs).toISOString();
+    setRuntime(session, {
+      status: 'idle',
+      lifecycle: 'idle',
+      container: 'running',
+      idleDeadlineAt: deadline,
+      lastWake: coldWake()
+    });
+    scheduleIdleSleep(session.view.id, deadline);
+  })();
+}
+
 /** Cold boot for a brand-new (or fixture-queued) session with a first prompt. */
 export function bootAndRespond(
   session: MockSessionState,
