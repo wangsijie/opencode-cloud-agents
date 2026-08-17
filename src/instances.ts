@@ -67,9 +67,13 @@ export interface WakeStageTimings {
   restoreMs?: number;
   /** Credential and skill injection from the settings table. */
   credentialsMs?: number;
-  /** Repository provisioning: a clone on the first wake, nothing later. */
+  /**
+   * Repository provisioning: a clone on the first wake, a fetch later. Runs
+   * alongside the server start, so this and `serverMs` overlap and do not sum —
+   * the stage that wins is the one the wake actually waited on.
+   */
   repoMs?: number;
-  /** OpenCode server start, overlapped with the resumed checkout's fetch. */
+  /** OpenCode server start, overlapped with the checkout's clone or fetch. */
   serverMs?: number;
 }
 

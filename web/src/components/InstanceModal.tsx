@@ -136,15 +136,20 @@ export function InstanceModal({
                       <dd className="mono">{formatDuration(wake.restoreMs)}</dd>
                     </>
                   ) : null}
+                  {/*
+                    These two overlap — the clone or fetch runs alongside the
+                    server start — so they do not sum to the total, and the
+                    labels say so rather than reading as a broken sum.
+                  */}
                   {wake.repoMs !== undefined ? (
                     <>
-                      <dt>Repo provisioning</dt>
+                      <dt>Repo provisioning ∥</dt>
                       <dd className="mono">{formatDuration(wake.repoMs)}</dd>
                     </>
                   ) : null}
                   {wake.serverMs !== undefined ? (
                     <>
-                      <dt>OpenCode startup</dt>
+                      <dt>OpenCode startup ∥</dt>
                       <dd className="mono">{formatDuration(wake.serverMs)}</dd>
                     </>
                   ) : null}

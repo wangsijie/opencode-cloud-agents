@@ -169,13 +169,42 @@ test('a stored MCP auth store is staged in the batch and installed by the guarde
 
 test('a fresh workspace is cloned at the pinned default branch', async () => {
   const host = stubHost()
-  const { fetching } = await provisionRepository(host, CHECKOUT)
-  assert.equal(fetching, undefined)
+  const { provisioning } = await provisionRepository(host, CHECKOUT)
+  await provisioning
   assert.deepEqual(host.calls.exists, ['/workspace/owner/repo/.git'])
   assert.match(
     host.calls.exec[0].command,
     /^git clone --depth 1 --branch 'main' 'git@github.com:owner\/repo\.git' '\/workspace\/owner\/repo'$/
   )
+})
+
+test('the clone is handed back unawaited, so it can overlap the server start', async () => {
+  // The whole point of the return value: the clone is in flight when this
+  // resolves, which is what lets the caller start OpenCode beside it.
+  let releaseClone
+  const host = stubHost()
+  const exec = host.exec
+  host.exec = async (command, options) => {
+    await new Promise((resolve) => {
+      releaseClone = resolve
+    })
+    return exec.call(host, command, options)
+  }
+
+  const { provisioning } = await provisionRepository(host, CHECKOUT)
+  assert.ok(provisioning instanceof Promise)
+  assert.equal(host.calls.exec.length, 0, 'the clone has not finished yet')
+  releaseClone()
+  await provisioning
+  assert.equal(host.calls.exec.length, 1)
+})
+
+test('a failed clone rejects through the returned promise', async () => {
+  const host = stubHost({
+    'git clone': { success: false, stderr: 'permission denied' }
+  })
+  const { provisioning } = await provisionRepository(host, CHECKOUT)
+  await assert.rejects(provisioning, /git clone failed for owner\/repo/)
 })
 
 test('onClone fires before a clone and never for a restored checkout', async () => {
@@ -193,20 +222,20 @@ test('onClone fires before a clone and never for a restored checkout', async () 
 
   const restored = stubHost({}, { '/workspace/owner/repo/.git': true })
   let fired = false
-  const { fetching } = await provisionRepository(restored, CHECKOUT, {
+  const { provisioning } = await provisionRepository(restored, CHECKOUT, {
     onClone: async () => {
       fired = true
     }
   })
-  await fetching
+  await provisioning
   assert.equal(fired, false)
 })
 
 test('a restored checkout is fetched, and the fetch is handed back unawaited', async () => {
   const host = stubHost({}, { '/workspace/owner/repo/.git': true })
-  const { fetching } = await provisionRepository(host, CHECKOUT)
-  assert.ok(fetching instanceof Promise)
-  await fetching
+  const { provisioning } = await provisionRepository(host, CHECKOUT)
+  assert.ok(provisioning instanceof Promise)
+  await provisioning
   assert.match(host.calls.exec[0].command, /fetch origin --prune$/)
 })
 
@@ -215,7 +244,7 @@ test('a fetch that fails does not fail the wake', async () => {
     { fetch: { success: false, stderr: 'host key mismatch' } },
     { '/workspace/owner/repo/.git': true }
   )
-  await (await provisionRepository(host, CHECKOUT)).fetching
+  await (await provisionRepository(host, CHECKOUT)).provisioning
 })
 
 test('a session with no repository provisions nothing', async () => {

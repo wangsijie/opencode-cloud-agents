@@ -119,17 +119,24 @@ export function formatUsage(usage: SessionUsage): string {
  *
  * Which stage dominates is the only actionable part of a cold-start number, and
  * it is developer detail rather than something the line itself should carry.
+ *
+ * The last two run concurrently, so they will not add up to the total — the
+ * separator says so rather than letting the arithmetic look broken.
  */
 export function describeWakeStages(wake: WakeTimings): string {
   const stages: string[] = [];
   if (wake.restoreMs !== undefined) {
     stages.push(`container start + snapshot restore ${formatDuration(wake.restoreMs)}`);
   }
+  const concurrent: string[] = [];
   if (wake.repoMs !== undefined) {
-    stages.push(`repo provisioning ${formatDuration(wake.repoMs)}`);
+    concurrent.push(`repo provisioning ${formatDuration(wake.repoMs)}`);
   }
   if (wake.serverMs !== undefined) {
-    stages.push(`OpenCode startup ${formatDuration(wake.serverMs)}`);
+    concurrent.push(`OpenCode startup ${formatDuration(wake.serverMs)}`);
+  }
+  if (concurrent.length > 0) {
+    stages.push(concurrent.join(' ∥ '));
   }
   return `${formatTime(wake.at)} · ${stages.join(' · ')}`;
 }

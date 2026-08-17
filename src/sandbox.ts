@@ -716,14 +716,21 @@ export class Sandbox extends DurableObject<Env> {
       );
       timings.credentialsMs = since(credentialsStartedAt);
 
+      // The git work — a clone on the first wake, a fetch on every later one —
+      // gates nothing the OpenCode server needs: `serve` is started at the
+      // workspace root, and the checkout is not named until `session.create`,
+      // which is after this wake returns. So it is started here and awaited
+      // below, alongside the server start rather than in front of it. On a cold
+      // wake that takes the clone — the longest single stage there was — off the
+      // serial path entirely; on a warm one it does the same for the fetch.
       const provisionStartedAt = Date.now();
-      const { fetching } = await this.provisionWorkspace(host);
-      timings.repoMs = since(provisionStartedAt);
+      const { provisioning } = await this.provisionWorkspace(host);
 
+      // Both stages time themselves, because they no longer follow one another:
+      // measuring the second from the end of the first would report the whole
+      // overlapped window as the server's, which is the one number that would
+      // make the change invisible.
       const serverStartedAt = Date.now();
-      // That fetch gates nothing the server needs, so it runs alongside the
-      // server start instead of in front of it. On a warm wake this takes the
-      // fetch — seconds against an SSH remote — off the serial path.
       await Promise.all([
         this.onHost(() =>
           host.opencodeStart({
@@ -737,10 +744,16 @@ export class Sandbox extends DurableObject<Env> {
               ...OPENCODE_ENV
             })
           })
-        ),
-        fetching ?? Promise.resolve()
+        ).then(() => {
+          timings.serverMs = since(serverStartedAt);
+        }),
+        // A failed clone still fails the wake: a session whose checkout never
+        // arrived has nothing to work in. It is only *when* that is discovered
+        // that moved.
+        (provisioning ?? Promise.resolve()).then(() => {
+          timings.repoMs = since(provisionStartedAt);
+        })
       ]);
-      timings.serverMs = since(serverStartedAt);
 
       await this.setRuntimeGate({
         phase: 'running',
@@ -766,11 +779,12 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /**
-   * Bring the checkout to a usable state: the ordinary clone-or-fetch.
+   * Start bringing the checkout to a usable state: the ordinary clone-or-fetch.
+   * Returns it in flight; see {@link provisionRepository}.
    */
   private async provisionWorkspace(
     host: HostClient
-  ): Promise<{ fetching?: Promise<void> }> {
+  ): Promise<{ provisioning?: Promise<void> }> {
     const checkout = this.requireCheckout();
     // The boot step rides `provisionRepository`'s own look at the checkout
     // rather than a second `exists` of the same path: that answer costs a round

@@ -209,7 +209,8 @@ function coldWake(): SessionView['instance']['runtime']['lastWake'] {
     restoreMs,
     repoMs,
     serverMs,
-    totalMs: restoreMs + repoMs + serverMs + 300,
+    // Repo and server overlap, so the total carries the longer of the two.
+    totalMs: restoreMs + Math.max(repoMs, serverMs) + 300,
     at: new Date().toISOString(),
     cold: true
   };

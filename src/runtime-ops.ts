@@ -208,11 +208,23 @@ export async function injectContainerCredentials(
  * An instance created without a repository has nothing to provision: the
  * workspace root is where its session works, and it is already there.
  *
- * Returns the fetch when there was already a checkout, wrapped rather than
- * returned bare: an `async` function adopts a promise it returns, so handing it
- * back on its own would await it here and cost the caller exactly the overlap
- * this exists to buy. Nothing the OpenCode server needs depends on the refs it
- * updates, so the caller runs the two together.
+ * **Nothing here is awaited.** What this returns is the git work in flight —
+ * a clone or a fetch — because the OpenCode server does not need a checkout to
+ * start: `opencode serve` is launched at the workspace root, and the session's
+ * directory is not named until `session.create`, which happens after the wake.
+ * So the caller runs this alongside the server start, and the clone that used
+ * to be the longest serial stage of a cold wake now costs whatever it exceeds
+ * the server start by. Only the `exists` probe deciding *which* of the two this
+ * is has to happen here, and it is one round trip.
+ *
+ * The promise is wrapped rather than returned bare: an `async` function adopts
+ * a promise it returns, so handing it back on its own would await it here and
+ * cost the caller exactly the overlap this exists to buy.
+ *
+ * The two halves fail differently, and that difference is the caller's:
+ * a failed clone rejects, because a session with no checkout has nothing to
+ * work in, while a failed fetch (offline remote, revoked key) only warns —
+ * the checkout it was refreshing is already restored and usable.
  *
  * `onClone` is awaited once this has established there is no checkout and
  * before the clone starts. It is a hook rather than something the caller does
@@ -223,7 +235,7 @@ export async function provisionRepository(
   host: RuntimeHost,
   checkout: RuntimeCheckout,
   hooks: { onClone?: () => Promise<void> } = {}
-): Promise<{ fetching?: Promise<void>; cloned?: boolean }> {
+): Promise<{ provisioning?: Promise<void> }> {
   const { repo, repoKey, directory, sessionId } = checkout;
   if (!repoKey) {
     return {};
@@ -234,11 +246,7 @@ export async function provisionRepository(
     // from the catalog. That is what keeps an instance created before the
     // catalog was dynamic — or one whose repository has since left it —
     // working exactly as it did.
-    //
-    // A fetch failure (offline remote, revoked key) must not block resuming the
-    // already-restored workspace — and neither must its latency, so this is
-    // handed back unawaited.
-    const fetching = host
+    const provisioning = host
       .exec(`git -C ${shellQuote(directory)} fetch origin --prune`, {
         timeoutMs: REPO_FETCH_TIMEOUT_MS
       })
@@ -251,12 +259,11 @@ export async function provisionRepository(
           }
         },
         (error) => {
-          // A timed-out or refused fetch is a warning, not a failed wake: the
-          // checkout it was refreshing is already restored and usable.
+          // A timed-out or refused fetch is a warning, not a failed wake.
           console.warn(`Repo fetch failed for ${repoKey}`, error);
         }
       );
-    return { fetching };
+    return { provisioning };
   }
 
   if (!repo) {
@@ -265,18 +272,21 @@ export async function provisionRepository(
     );
   }
   await hooks.onClone?.();
-  const cloned = await host.exec(
-    `git clone --depth 1 --branch ${shellQuote(repo.defaultBranch)} ${shellQuote(
-      repo.cloneUrl
-    )} ${shellQuote(directory)}`,
-    { timeoutMs: REPO_CLONE_TIMEOUT_MS }
-  );
-  if (!cloned.success) {
-    throw new Error(
-      `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
-    );
-  }
-  return { cloned: true };
+  const provisioning = host
+    .exec(
+      `git clone --depth 1 --branch ${shellQuote(
+        repo.defaultBranch
+      )} ${shellQuote(repo.cloneUrl)} ${shellQuote(directory)}`,
+      { timeoutMs: REPO_CLONE_TIMEOUT_MS }
+    )
+    .then((cloned) => {
+      if (!cloned.success) {
+        throw new Error(
+          `git clone failed for ${repoKey}: ${truncateOutput(cloned.stderr)}`
+        );
+      }
+    });
+  return { provisioning };
 }
 
 /**

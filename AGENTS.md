@@ -96,6 +96,27 @@ checkout instead — directory from `repoKey`, default branch from `origin/HEAD`
 Do not reintroduce catalog lookups on paths that serve existing sessions: they
 would make a rename, a revoked grant or a GitHub outage break running work.
 
+## The checkout and the server come up together
+
+`opencode serve` is started at `/workspace`, not at the checkout — the session's
+directory is not named until `session.create`, which happens after the wake
+returns. So the server needs no repository, and `provisionRepository` returns
+the git work *in flight* rather than awaiting it: `performWakeForLifecycle`
+runs it in the same `Promise.all` as `opencodeStart`. On a cold wake that takes
+the clone, which was the longest single stage there was, off the serial path;
+on a warm one it does the same for the fetch.
+
+What did not move is where it starts. The clone runs over SSH with the key that
+`injectContainerCredentials` writes, so it cannot begin before credentials — the
+only real ordering constraint left in the wake, and the reason the answer is not
+"clone the moment the container boots".
+
+Two consequences. `repoMs` and `serverMs` now overlap: each stage times itself,
+they do not sum to `totalMs`, and the UI marks them `∥` rather than letting the
+arithmetic read as a bug. And a failed clone still fails the wake — a session
+whose checkout never arrived has nothing to work in — while a failed fetch is
+still only a warning; only *when* that is discovered changed.
+
 ## The Hub does not publish; the agent does
 
 There was a `POST /api/sessions/:id/publish` that committed the working tree
