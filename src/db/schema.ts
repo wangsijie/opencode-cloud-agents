@@ -111,10 +111,14 @@ export const adminSessions = sqliteTable(
 /**
  * `MAX(a, b)` over two columns — SQLite's scalar form, not the aggregate.
  *
- * A session counts as used at its most recent prompt, not its creation, and
- * `last_prompt_at` is nullable, so every ordering and grouping that means "when
- * was this session last touched" goes through this expression. ISO timestamps
- * compare lexicographically, so the string maximum is the later moment.
+ * "When was this repository last worked in": a session counts as used at its
+ * most recent prompt, not its creation, and `last_prompt_at` is nullable, so
+ * the repository ordering goes through this expression. ISO timestamps compare
+ * lexicographically, so the string maximum is the later moment.
+ *
+ * The composer's default *model* deliberately does not — see
+ * `lastModelSelection` in [hub-store.ts](../hub-store.ts). A repository is
+ * remembered by where work happens; a model by where it was chosen.
  */
 export const lastActivityAt = sql<string>`CASE WHEN ${sessions.lastPromptAt} > ${sessions.createdAt}
        THEN ${sessions.lastPromptAt} ELSE ${sessions.createdAt} END`;

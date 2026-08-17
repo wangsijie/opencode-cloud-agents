@@ -728,17 +728,24 @@ export async function findCatalogRepo(
   );
 }
 
-/** The model and effort attached to the session worked in most recently. */
+/**
+ * The model and effort attached to the most recently *created* session.
+ *
+ * Creation only — not {@link lastActivityAt}. Prompting used to count as use,
+ * which meant the composer's default followed whichever session was answered
+ * last: replying in an old session set the default back to the model that
+ * session had started on, so working across two conversations made the picker
+ * jump between models with nobody having chosen either. What the default is
+ * meant to remember is the deliberate act, and the deliberate act is starting a
+ * session. The trailing key only breaks ties deterministically.
+ */
 export async function lastModelSelection(
   env: Env
 ): Promise<ModelSelection | undefined> {
   const [row] = await db(env)
     .select({ model: sessions.model, variant: sessions.variant })
     .from(sessions)
-    // A prompt counts as use, not only creation, so going back to an old
-    // session makes its selection the current one. The trailing keys only
-    // break ties deterministically.
-    .orderBy(desc(lastActivityAt), desc(sessions.createdAt), desc(sessions.id))
+    .orderBy(desc(sessions.createdAt), desc(sessions.id))
     .limit(1);
   return row
     ? { model: row.model, ...(row.variant ? { variant: row.variant } : {}) }

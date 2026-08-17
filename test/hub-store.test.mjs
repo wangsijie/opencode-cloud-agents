@@ -679,12 +679,12 @@ test('a failed cleanup is swept again, a finished one is not', async () => {
   assert.equal(await sweepIdleSessions(env, now), 0);
 });
 
-test('the last model selection follows the most recent activity', async () => {
+test('the last model selection follows the most recently created session', async () => {
   const { env } = testEnv();
   assert.equal(await lastModelSelection(env), undefined);
 
   const older = await seed(env, { createdAt: '2026-07-01T00:00:00.000Z' });
-  const newer = await seed(env, {
+  await seed(env, {
     createdAt: '2026-07-02T00:00:00.000Z',
     model: 'openai/gpt-example',
     variant: 'high'
@@ -695,11 +695,12 @@ test('the last model selection follows the most recent activity', async () => {
     variant: 'high'
   });
 
-  // Going back to an older session makes its selection the current one: a
-  // prompt counts as use, not only creation.
+  // Answering in an older session must not move the composer's default: that
+  // is what made the picker jump between models while two conversations ran.
   await updateSession(env, older, { lastPromptAt: '2026-07-03T00:00:00.000Z' });
   assert.deepEqual(await lastModelSelection(env), {
-    model: 'anthropic/claude-fable-5'
+    model: 'openai/gpt-example',
+    variant: 'high'
   });
 });
 
