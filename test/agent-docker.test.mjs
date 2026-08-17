@@ -27,7 +27,14 @@ import {
   volumeName,
   writeFileScript
 } from '../agent/docker.mjs'
-import { matchSessionRoute as agentMatch } from '../agent/server.mjs'
+import {
+  LIVENESS_CHECK_INTERVAL_MS,
+  PROBE_INTERVAL_MS,
+  PROBE_TIMEOUT_MAX_MS,
+  PROBE_TIMEOUT_MIN_MS,
+  awaitServerReady,
+  matchSessionRoute as agentMatch
+} from '../agent/server.mjs'
 import { matchSessionRoute as protocolMatch } from '../protocol/routes.ts'
 
 test('names are derived from the session id, and bad ids never reach docker', () => {
@@ -299,3 +306,168 @@ test('the agent routes exactly as the protocol table does', () => {
   }
 })
 
+/**
+ * `opencode serve` binds its port about a second before it answers `GET
+ * /path`, so a probe landing in that window connects and then hangs for its
+ * whole timeout. With one flat 5 s timeout that single hung probe, not the
+ * server, decided the wake: a server ready at 1.6 s produced a 6.6 s start.
+ * These tests pin the pacing that fixed it.
+ */
+function pacingHarness({ script, budgetMs = 180_000 }) {
+  let clock = 0
+  const probes = []
+  const slept = []
+  let livenessCalls = 0
+  const remaining = [...script]
+  return {
+    probes,
+    slept,
+    get livenessCalls() {
+      return livenessCalls
+    },
+    get clock() {
+      return clock
+    },
+    options: {
+      budgetMs,
+      now: () => clock,
+      sleep: async (ms) => {
+        slept.push(ms)
+        clock += ms
+      },
+      resolvePort: async () => 4096,
+      probe: async (_port, timeoutMs) => {
+        probes.push(timeoutMs)
+        const step = remaining.shift() ?? { ready: true }
+        // A hung probe burns its whole timeout; a refusal is instant.
+        if (step.hung) clock += timeoutMs
+        return { ready: step.ready === true, hung: step.hung === true }
+      },
+      alive: async () => {
+        livenessCalls += 1
+        return true
+      },
+      logTail: async () => '(log)'
+    }
+  }
+}
+
+test('a refused probe is cheap and retried on the short interval', async () => {
+  const h = pacingHarness({
+    script: [{}, {}, {}, { ready: true }]
+  })
+  await awaitServerReady(h.options)
+  // Every probe used the minimum timeout: nothing hung, so nothing escalated.
+  assert.deepEqual(h.probes, [
+    PROBE_TIMEOUT_MIN_MS,
+    PROBE_TIMEOUT_MIN_MS,
+    PROBE_TIMEOUT_MIN_MS,
+    PROBE_TIMEOUT_MIN_MS
+  ])
+  assert.deepEqual(h.slept, [
+    PROBE_INTERVAL_MS,
+    PROBE_INTERVAL_MS,
+    PROBE_INTERVAL_MS
+  ])
+})
+
+test('only a hung probe escalates the timeout, and it does not sleep after', async () => {
+  const h = pacingHarness({
+    script: [{}, { hung: true }, { ready: true }]
+  })
+  await awaitServerReady(h.options)
+  assert.deepEqual(h.probes, [
+    PROBE_TIMEOUT_MIN_MS,
+    PROBE_TIMEOUT_MIN_MS,
+    PROBE_TIMEOUT_MIN_MS * 2
+  ])
+  // One sleep, after the refusal. The hung probe already waited, so the retry
+  // is immediate — that is what keeps the bind-to-ready gap off the wake.
+  assert.deepEqual(h.slept, [PROBE_INTERVAL_MS])
+})
+
+test('escalation is capped, so a wedged port never waits longer than the cap', async () => {
+  const h = pacingHarness({
+    script: [
+      { hung: true },
+      { hung: true },
+      { hung: true },
+      { hung: true },
+      { hung: true },
+      { ready: true }
+    ]
+  })
+  await awaitServerReady(h.options)
+  assert.deepEqual(h.probes, [500, 1000, 2000, 4000, 5000, 5000])
+  assert.equal(Math.max(...h.probes), PROBE_TIMEOUT_MAX_MS)
+})
+
+test('a start that is ready on the first probe costs nothing', async () => {
+  const h = pacingHarness({ script: [{ ready: true }] })
+  await awaitServerReady(h.options)
+  assert.deepEqual(h.probes, [PROBE_TIMEOUT_MIN_MS])
+  assert.deepEqual(h.slept, [])
+  assert.equal(h.livenessCalls, 0)
+})
+
+test('liveness is checked on a clock, not on an attempt count', async () => {
+  // Nine cheap failures inside a second: the old every-fifth-attempt rule
+  // would have run two docker execs, the clock runs none until a second is up.
+  const h = pacingHarness({
+    script: [{}, {}, {}, {}, {}, {}, {}, {}, {}, { ready: true }]
+  })
+  await awaitServerReady(h.options)
+  const expected = Math.floor(
+    (PROBE_INTERVAL_MS * 9) / LIVENESS_CHECK_INTERVAL_MS
+  )
+  assert.equal(h.livenessCalls, expected)
+  assert.ok(h.livenessCalls < 9, 'fewer liveness execs than attempts')
+})
+
+test('a server that exits during startup fails fast and quotes its log', async () => {
+  let clock = 0
+  await assert.rejects(
+    awaitServerReady({
+      budgetMs: 180_000,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms
+      },
+      resolvePort: async () => 4096,
+      probe: async () => ({ ready: false, hung: false }),
+      alive: async () => false,
+      logTail: async () => 'boom'
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENCODE_START_FAILED')
+      assert.match(error.message, /exited during startup/)
+      assert.match(error.message, /boom/)
+      return true
+    }
+  )
+  // It gave up about a second in, not three minutes in.
+  assert.ok(clock <= LIVENESS_CHECK_INTERVAL_MS + PROBE_INTERVAL_MS, clock)
+})
+
+test('the budget is still the protocol budget, and exhausting it reports it', async () => {
+  let clock = 0
+  await assert.rejects(
+    awaitServerReady({
+      budgetMs: 180_000,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms
+      },
+      resolvePort: async () => 4096,
+      probe: async () => ({ ready: false, hung: false }),
+      alive: async () => true,
+      logTail: async () => '(log)'
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENCODE_START_FAILED')
+      assert.match(error.message, /did not answer within 180000ms/)
+      return true
+    }
+  )
+  assert.ok(clock >= 180_000)
+})

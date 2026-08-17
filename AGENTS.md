@@ -357,6 +357,39 @@ unit test passed through (a proxy that destroyed its own upstream, an
 `EXEC_TIMEOUT` that could not fire, a `CONTAINER_NOT_RUNNING` that could not
 fire) were only ever visible there.
 
+## A readiness probe's timeout is a cost, not a safety margin
+
+`opencode serve` binds its port about a second before it will answer `GET
+/path`. A probe that lands in that gap is therefore not refused — it connects,
+sends, and waits, and what it waits for is *its own timeout*, not the server.
+
+That is why the wake spent about seven seconds on a server that was ready in
+1.6. `waitForServer` probed every 500 ms with a flat 5 s socket timeout: two
+probes were refused instantly, the third landed in the gap and burned the full
+five seconds, and the fourth got its 200. The server was never the slow part —
+one badly-sized constant was, on every single Docker wake.
+
+So the pacing in `agent/server.mjs` is deliberate: probe at
+`PROBE_TIMEOUT_MIN_MS` (500 ms) every `PROBE_INTERVAL_MS` (250 ms), double the
+timeout only for a probe that actually *hung* — `probeReady` returns `hung` to
+tell "nothing is listening" apart from "something accepted and went quiet" —
+and do not sleep after one, since it already waited. A genuinely slow server
+still gets a long probe within a few attempts, and the 180 s budget is
+unchanged; only its granularity moved. Measured against a real server:
+6.6 s → 1.6 s, reproducibly.
+
+Two things to keep. Liveness is checked on a clock
+(`LIVENESS_CHECK_INTERVAL_MS`), not every fifth attempt — tying it to a count
+means a faster probe silently buys more `docker exec` calls per second. And the
+loop is `awaitServerReady`, with the docker calls injected, precisely so the
+pacing is tested without a daemon; the escalation and the cap are pinned in
+`test/agent-docker.test.mjs`, because this is a bug that no functional test
+would ever have failed on.
+
+The Cloudflare host does not share the bug — the SDK watches the port from
+*inside* the container and streams `ready`, so there is no client-side socket
+timeout to mis-size. Worth remembering before copying a poll loop between them.
+
 ## Snapshots are a host capability, not an assumption
 
 A session's provider is chosen when it is created and stored on both the Hub row

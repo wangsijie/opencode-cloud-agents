@@ -69,6 +69,25 @@ const DEFAULT_STOP_GRACE_SEC = 5;
 /** Beyond a stop's own grace period, how long the CLI itself may take. */
 const CLI_SLACK_MS = 15_000;
 
+/**
+ * How the readiness probe is paced. These are small on purpose: `opencode
+ * serve` binds its port about a second before it will answer `GET /path`, so
+ * the probe that lands in that window connects and then hangs until its own
+ * timeout. That timeout, not the server, is what the wake waits for — a flat
+ * 5 s one turned a server ready at 1.6 s into a 6.6 s wake, every time.
+ *
+ * So the first probes are cheap and frequent, and only a probe that actually
+ * hangs — proof the port is up and the server is mid-start — earns a longer
+ * one. The budget is still OPENCODE_START_TIMEOUT_MS; this only decides how
+ * finely it is spent.
+ */
+export const PROBE_TIMEOUT_MIN_MS = 500;
+export const PROBE_TIMEOUT_MAX_MS = 5_000;
+export const PROBE_INTERVAL_MS = 250;
+
+/** Liveness is checked once a second, whatever the probe cadence. */
+export const LIVENESS_CHECK_INTERVAL_MS = 1_000;
+
 /** Body cap for JSON routes. A write-batch of skills is the large one. */
 const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
 
@@ -705,55 +724,97 @@ async function serverAlive(sessionId, port) {
 }
 
 async function waitForServer(context, sessionId, port) {
-  const deadline = Date.now() + OPENCODE_START_TIMEOUT_MS;
+  await awaitServerReady({
+    resolvePort: (attempt) =>
+      resolvePublishedPort(context, sessionId, port, { refresh: attempt === 0 }),
+    probe: probeReady,
+    alive: () => serverAlive(sessionId, port),
+    logTail: () => serverLogTail(sessionId)
+  });
+}
+
+/**
+ * The readiness loop, with every docker seam injected so the pacing can be
+ * tested without a daemon. See PROBE_TIMEOUT_MIN_MS for why the pacing is the
+ * interesting part.
+ */
+export async function awaitServerReady({
+  resolvePort,
+  probe,
+  alive,
+  logTail,
+  sleep = delay,
+  now = Date.now,
+  budgetMs = OPENCODE_START_TIMEOUT_MS
+}) {
+  const deadline = now() + budgetMs;
   let attempt = 0;
-  while (Date.now() < deadline) {
-    const published = await resolvePublishedPort(context, sessionId, port, {
-      refresh: attempt === 0
-    });
-    if (await probeReady(published)) {
+  let probeTimeoutMs = PROBE_TIMEOUT_MIN_MS;
+  let livenessCheckedAt = now();
+  while (now() < deadline) {
+    const published = await resolvePort(attempt);
+    const result = await probe(published, probeTimeoutMs);
+    if (result.ready) {
       return;
     }
     attempt += 1;
-    // Every fifth attempt — about every 2.5 s — ask whether there is still a
-    // process to wait for. A server that exits on a bad config would otherwise
-    // hold the wake for the full three minutes before reporting anything.
-    if (attempt % 5 === 0 && !(await serverAlive(sessionId, port))) {
-      throw new HostRequestError(
-        'OPENCODE_START_FAILED',
-        `The OpenCode server exited during startup. ${await serverLogTail(
-          sessionId
-        )}`
-      );
+    // Ask about once a second whether there is still a process to wait for. A
+    // server that exits on a bad config would otherwise hold the wake for the
+    // full three minutes before reporting anything.
+    if (now() - livenessCheckedAt >= LIVENESS_CHECK_INTERVAL_MS) {
+      livenessCheckedAt = now();
+      if (!(await alive())) {
+        throw new HostRequestError(
+          'OPENCODE_START_FAILED',
+          `The OpenCode server exited during startup. ${await logTail()}`
+        );
+      }
     }
-    await delay(500);
+    if (result.hung) {
+      // The socket was accepted and then produced nothing: the port is bound
+      // and the server is still starting. Wait longer next time rather than
+      // hammering a socket that will hang again — and do not sleep first,
+      // since this probe already spent its timeout waiting.
+      probeTimeoutMs = Math.min(probeTimeoutMs * 2, PROBE_TIMEOUT_MAX_MS);
+      continue;
+    }
+    await sleep(PROBE_INTERVAL_MS);
   }
   throw new HostRequestError(
     'OPENCODE_START_FAILED',
-    `The OpenCode server did not answer within ${OPENCODE_START_TIMEOUT_MS}ms. ${await serverLogTail(
-      sessionId
-    )}`
+    `The OpenCode server did not answer within ${budgetMs}ms. ${await logTail()}`
   );
 }
 
-/** Readiness is `GET /path` returning 200, as PROTOCOL.md specifies. */
-function probeReady(publishedPort) {
+/**
+ * Readiness is `GET /path` returning 200, as PROTOCOL.md specifies.
+ *
+ * `hung` distinguishes the two ways a probe fails. A refused connection means
+ * nothing is listening yet; a timeout means something accepted the socket and
+ * did not answer, which is `opencode serve` between binding its port and
+ * serving routes. Only the second is a reason to wait longer.
+ */
+function probeReady(publishedPort, timeoutMs) {
   return new Promise((resolve) => {
+    let hung = false;
     const request = http.request(
       {
         host: '127.0.0.1',
         port: publishedPort,
         path: '/path',
         method: 'GET',
-        timeout: 5_000
+        timeout: timeoutMs
       },
       (response) => {
         response.resume();
-        resolve(response.statusCode === 200);
+        resolve({ ready: response.statusCode === 200, hung: false });
       }
     );
-    request.on('timeout', () => request.destroy());
-    request.on('error', () => resolve(false));
+    request.on('timeout', () => {
+      hung = true;
+      request.destroy();
+    });
+    request.on('error', () => resolve({ ready: false, hung }));
     request.end();
   });
 }

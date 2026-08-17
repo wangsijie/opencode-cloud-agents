@@ -151,6 +151,14 @@ with exactly the given `env`. Then poll `GET /path` on that port until 200
 (budget 180 s). → `OpencodeStartResponse { started, reused }`. On failure →
 502 `OPENCODE_START_FAILED` with captured stderr in `message`.
 
+The budget is the only timing this protocol fixes; the *pacing* is the host's,
+and it is worth getting right. `opencode serve` binds its port roughly a second
+before it answers `/path`, so a probe that lands in that window connects and
+then hangs — and it hangs for the probe's own timeout, not the server's
+remaining startup. A host polling with one flat multi-second socket timeout
+therefore reports a server that was ready at 1.6 s as a start of 6.6 s. Probe
+cheaply and often, and lengthen the timeout only for a probe that actually hung.
+
 ### `ANY /sessions/:id/proxy/<path>?<query>`
 
 Reverse proxy to the container's OpenCode port. Method, request body, query
