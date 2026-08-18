@@ -48,7 +48,14 @@ Artifacts tab.
 
 Write there with ordinary tools; the directory already exists. Never commit it,
 and do not put a build artifact of the repository there when the repository is
-where it belongs.`;
+where it belongs.
+
+It is also the only way to hand the user a file. Your reply is text: an image
+cannot be shown in it, and a path under \`/tmp\` is a path they cannot reach.
+So when you are asked for a screenshot, a diagram, a chart, an exported
+document or any other file to look at, write it into \`${ARTIFACTS_ROOT}\`
+under a descriptive name and say where it is — do not describe the picture and
+leave the file behind in \`/tmp\`.`;
 
 /**
  * Where OpenCode keeps its MCP OAuth store: `$XDG_DATA_HOME/opencode`, and the

@@ -1,3 +1,4 @@
+import { ARTIFACTS_ROOT } from './repos.ts';
 import type { SkillSetting } from './settings';
 
 /**
@@ -167,9 +168,15 @@ for its tests, and a version mismatch you should expect if you mix the two.
 ## Read the screenshot
 
 You can see images. After writing one, open it with your file-reading tool —
-a screenshot you never look at has told you nothing. \`/tmp\` is the right
-place for it: it is outside the workspace, so it is neither snapshotted nor
-mistaken for a change the user asked for. Never leave one in the repository.
+a screenshot you never look at has told you nothing.
+
+Where it goes depends on who it is for. A shot you took to see something for
+yourself belongs in \`/tmp\`: outside the workspace, so it is neither
+snapshotted nor mistaken for a change the user asked for. A shot the *user*
+asked for belongs in \`${ARTIFACTS_ROOT}\`, because that is the only place they
+can open it — your reply is text and cannot carry the image, and a \`/tmp\`
+path is one they cannot reach. Write it there under a descriptive name and say
+so. Never leave one in the repository.
 
 For a quick look with no script at all:
 
