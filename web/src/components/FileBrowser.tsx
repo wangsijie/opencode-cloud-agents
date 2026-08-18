@@ -9,6 +9,11 @@ import {
   type WorkspaceListing,
   type WorkspaceRoot
 } from '../api';
+import {
+  imageMimeForPath,
+  isPreviewableImage,
+  MAX_INLINE_IMAGE_BYTES
+} from '../file-preview';
 import { formatBytes } from '../format';
 import { DownloadIcon, RefreshIcon, TrashIcon, UploadIcon } from './icons';
 
@@ -39,6 +44,7 @@ export function FileBrowser({
 }) {
   const [listing, setListing] = useState<WorkspaceListing>();
   const [file, setFile] = useState<WorkspaceFile>();
+  const [image, setImage] = useState<{ path: string; href: string }>();
   const [path, setPath] = useState('');
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -53,6 +59,7 @@ export function FileBrowser({
         const result = await listWorkspaceFiles(sessionId, next, root);
         setListing(result);
         setFile(undefined);
+        setImage(undefined);
         setPath(result.path);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
@@ -63,12 +70,41 @@ export function FileBrowser({
     [sessionId, root]
   );
 
+  /**
+   * Open a file, and for an image fetch its bytes as well.
+   *
+   * The read is the same one text gets — it is what says how big the file is
+   * and whether it was capped — and the picture is a second request, because
+   * the preview JSON never carries bytes for a binary file and inlining them
+   * as base64 would put every image through a string a third larger than the
+   * file. The blob URL is the download route's answer, retyped from
+   * `application/octet-stream` (which the Hub sends so nothing from a
+   * repository executes under its origin) to the MIME the extension names.
+   * Retyping is safe for the one format where it would not be otherwise: an
+   * SVG loaded by `<img>` runs no script and fetches nothing, unlike the same
+   * bytes in a frame or a navigation.
+   */
   const openFile = useCallback(
     async (next: string) => {
       setLoading(true);
       setError(undefined);
       try {
-        setFile(await readWorkspaceFile(sessionId, next, root));
+        const result = await readWorkspaceFile(sessionId, next, root);
+        setFile(result);
+        setImage(undefined);
+        const mime = imageMimeForPath(result.path);
+        if (mime && isPreviewableImage(result)) {
+          // A text image (an SVG) already arrived in the read; only a binary
+          // one needs the bytes fetched.
+          const bytes =
+            result.content === undefined
+              ? await downloadWorkspaceFile(sessionId, result.path, root)
+              : result.content;
+          setImage({
+            path: result.path,
+            href: URL.createObjectURL(new Blob([bytes], { type: mime }))
+          });
+        }
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
@@ -77,6 +113,15 @@ export function FileBrowser({
     },
     [sessionId, root]
   );
+
+  // One live object URL at a time: the previous file's is released as soon as
+  // another is opened, and the last one when the panel closes.
+  useEffect(() => {
+    if (!image) {
+      return;
+    }
+    return () => URL.revokeObjectURL(image.href);
+  }, [image]);
 
   const downloadFile = useCallback(
     async (target: string) => {
@@ -252,7 +297,11 @@ export function FileBrowser({
             <span className="mono">{file.path.split('/').pop()}</span>
             <span className="muted">{formatBytes(file.size)}</span>
           </div>
-          {file.binary ? null : (
+          {image && image.path === file.path ? (
+            <div className="file-image">
+              <img src={image.href} alt={file.path} />
+            </div>
+          ) : file.binary ? null : (
             <pre className="file-content mono">{file.content}</pre>
           )}
           {file.binary || file.truncated ? (
@@ -260,6 +309,12 @@ export function FileBrowser({
               {file.truncated ? (
                 <span className="muted">
                   File is large; showing the first 256 KB.
+                </span>
+              ) : null}
+              {imageMimeForPath(file.path) && file.size > MAX_INLINE_IMAGE_BYTES ? (
+                <span className="muted">
+                  Image is larger than {formatBytes(MAX_INLINE_IMAGE_BYTES)};
+                  not previewed.
                 </span>
               ) : null}
               <button

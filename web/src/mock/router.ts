@@ -200,6 +200,9 @@ async function writeArtifact(
   parent.entries[name] = {
     type: 'file',
     size: bytes.byteLength,
+    // Kept whatever the kind, so a dropped image previews from the same
+    // download the real one reads.
+    bytes,
     ...(content === undefined ? { binary: true } : { content })
   };
   return json({ path }, 201);
@@ -219,14 +222,21 @@ function deleteArtifact(root: MockWorkspaceDir, path: string): Response {
   return json({ path });
 }
 
-/** Binary fixtures carry no bytes, so downloads answer with placeholder text. */
+/**
+ * A binary fixture with real `bytes` serves them — that is the image preview's
+ * source. One without carries nothing, so its download answers with
+ * placeholder text.
+ */
 function downloadFile(root: MockWorkspaceDir, path: string): Response {
   const node = resolveNode(root, path);
   if (!node || node.type === 'dir') {
     return notFound('No such file');
   }
   const name = path.split('/').pop() ?? 'file';
-  return new Response(node.content ?? `mock bytes of ${path}\n`, {
+  const body = node.bytes
+    ? (node.bytes.slice().buffer as ArrayBuffer)
+    : (node.content ?? `mock bytes of ${path}\n`);
+  return new Response(body, {
     headers: {
       'content-type': 'application/octet-stream',
       'content-disposition': `attachment; filename="${name}"`

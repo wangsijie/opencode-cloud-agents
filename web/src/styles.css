@@ -2706,6 +2706,35 @@ button.diff-file-header:hover .diff-file-path {
   font-size: 13px;
 }
 
+/* An image preview gets the same box the source viewer gets — panel height,
+   scrolls inside itself — because the panel is narrow and a tall screenshot is
+   the common case. The picture is fitted to the width and never blown up past
+   its own size, on the checkerboard that makes a transparent PNG readable. */
+.file-image {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  margin: 8px 0 0;
+  padding: 10px;
+  background:
+    repeating-conic-gradient(
+        var(--surface-sunken) 0% 25%,
+        var(--surface-raised) 0% 50%
+      )
+      50% / 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.file-image img {
+  max-width: 100%;
+  height: auto;
+}
+
 /* The download row: alone for a binary file, after the note for a capped one. */
 .file-download {
   display: flex;

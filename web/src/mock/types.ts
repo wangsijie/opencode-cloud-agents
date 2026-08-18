@@ -14,6 +14,12 @@ export interface MockWorkspaceFileNode {
   truncated?: boolean;
   /** Defaults to the content's byte length. */
   size?: number;
+  /**
+   * The real bytes, for a binary file the download route should serve for
+   * true — which is what the image preview reads, so an uploaded or fixture
+   * picture renders instead of turning into placeholder text.
+   */
+  bytes?: Uint8Array;
 }
 
 export interface MockWorkspaceDir {
