@@ -2574,6 +2574,44 @@ button.diff-file-header:hover .diff-file-path {
   white-space: pre;
 }
 
+/* A unified diff gets one line-number column, like an editor's: the new
+   file's number, and the old one only on deleted lines, which have no new
+   one. The library renders two half-width spans (old and new) in a
+   double-width cell, so the old span goes only where a new-number sibling
+   follows it, the spacer and empty placeholder spans go everywhere, and the
+   survivor takes the full gutter. The cell width is an inline style, so
+   halving it takes !important. Split view keeps both sides as they are. */
+.diff-tailwindcss-wrapper .unified-diff-view .diff-line-num,
+.diff-tailwindcss-wrapper .unified-diff-view .diff-line-hunk-action {
+  width: calc(var(--diff-aside-width--, 40px) + 5px) !important;
+  min-width: calc(var(--diff-aside-width--, 40px) + 5px) !important;
+  max-width: calc(var(--diff-aside-width--, 40px) + 5px) !important;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.diff-tailwindcss-wrapper .unified-diff-view .unified-diff-table-num-col {
+  width: calc(var(--diff-aside-width--, 40px) + 5px);
+}
+
+.diff-tailwindcss-wrapper
+  .unified-diff-view
+  .diff-line-num
+  > .flex
+  > span[data-line-old-num]:has(~ span[data-line-new-num]),
+.diff-tailwindcss-wrapper
+  .unified-diff-view
+  .diff-line-num
+  > .flex
+  > span:not([data-line-old-num]):not([data-line-new-num]) {
+  display: none;
+}
+
+.diff-tailwindcss-wrapper .unified-diff-view .diff-line-num > .flex > span[data-line-old-num],
+.diff-tailwindcss-wrapper .unified-diff-view .diff-line-num > .flex > span[data-line-new-num] {
+  width: 100%;
+}
+
 /* ---------- workspace panel ---------- */
 
 /* The directory listing has no natural length worth respecting: capped at a
