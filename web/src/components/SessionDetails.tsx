@@ -65,7 +65,8 @@ export function SessionDetails({
       style={{ '--aside-width': `${width}px` } as CSSProperties}
     >
       {/* Docked only above 1100px; below that the panel is an overlay sized
-          against the viewport, and the stylesheet hides this. */}
+          against the viewport — a side drawer, or a bottom sheet on a phone —
+          and the stylesheet hides this. */}
       <div
         className="resize-handle start"
         aria-label="Resize details"

@@ -719,8 +719,8 @@ export function SessionPage({
 
         {/*
           Mounted only while it is open, so a closed panel costs the container
-          nothing; on a phone it covers the conversation rather than squeezing
-          it, with a backdrop to dismiss.
+          nothing; on a phone it comes up as a sheet over the conversation
+          rather than squeezing it, with a backdrop to dismiss.
         */}
         {session && detailsOpen ? (
           <>

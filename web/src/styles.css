@@ -371,26 +371,65 @@ code {
 /* ---------- session details panel ---------- */
 
 /*
-  Narrow enough and there is no room to dock it beside the conversation without
-  making both unreadable, so it slides over the top instead. The breakpoint is
-  wider than the sidebar's: this panel needs a diff's worth of width, not a
-  list's.
+  The panel has three shapes, narrowest first.
+
+  On a phone it is a bottom sheet. A diff, a file tree and a path are all wider
+  than they are tall, so a panel that comes in from the side spends the one
+  dimension the screen has least of; coming up from the bottom it gets the full
+  width and pays in height, which is the axis it can afford. It is also the
+  gesture the platform already teaches.
+
+  From 768px there is width to spare for a right-edge drawer, and from 1100px
+  enough to dock it beside the conversation without making both unreadable —
+  a wider breakpoint than the sidebar's, because this panel needs a diff's
+  worth of width, not a list's.
 */
 .session-aside {
   position: fixed;
-  inset: 0 0 0 auto;
+  inset: auto 0 0 0;
   z-index: 30;
   display: flex;
   flex-direction: column;
   flex: none;
-  width: min(92vw, var(--aside-width));
   min-width: 0;
-  height: 100%;
+  /* Short of the top, so the conversation stays visible behind it and the sheet
+     reads as covering the page rather than replacing it. `dvh` keeps that true
+     while a mobile browser's toolbars come and go; the `vh` line is the
+     fallback for anything that does not know the unit. */
+  height: 88vh;
+  height: 88dvh;
   background: var(--bg-sidebar);
-  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   box-shadow: var(--shadow);
-  animation: aside-in 0.2s ease;
+  animation: aside-up 0.24s ease;
+}
+
+/* The grabber. It is decoration — the sheet is dismissed by the close button or
+   the backdrop — but without it a sheet does not read as one. */
+.session-aside::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  transform: translateX(-50%);
+}
+
+/* Room for the grabber above the tabs. */
+.session-aside .aside-header {
+  padding-top: 15px;
+}
+
+@keyframes aside-up {
+  from {
+    transform: translateY(100%);
+  }
 }
 
 @keyframes aside-in {
@@ -407,6 +446,27 @@ code {
   border: 0;
   padding: 0;
   background: rgb(0 0 0 / 0.4);
+}
+
+/* Wide enough for a side drawer: back to the right edge, full height. */
+@media (min-width: 768px) {
+  .session-aside {
+    inset: 0 0 0 auto;
+    width: min(92vw, var(--aside-width));
+    height: 100%;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+    border-radius: 0;
+    animation: aside-in 0.2s ease;
+  }
+
+  .session-aside::before {
+    display: none;
+  }
+
+  .session-aside .aside-header {
+    padding-top: 6px;
+  }
 }
 
 @media (min-width: 1100px) {
