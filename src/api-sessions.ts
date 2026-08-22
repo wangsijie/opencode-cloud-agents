@@ -935,10 +935,14 @@ async function wakeSession(env: Env, record: SessionRecord): Promise<Response> {
 }
 
 /**
- * Rename a session, or pin it to the top of the sidebar.
+ * Rename a session, pin it to the top of the sidebar, or set its unread mark.
  *
  * A registry edit: it does not touch the container, so it works whether the
  * session is awake, asleep, or has never started.
+ *
+ * `unread` is the hand-set version of the marker the agent's own stop events
+ * write — "come back to this one" — and it clears the same way as any other:
+ * the session page acknowledges it the moment it is being looked at.
  */
 async function patchSession(
   request: Request,
@@ -954,8 +958,12 @@ async function patchSession(
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HttpError(400, 'Request body must be a JSON object');
   }
-  const { title, pinned } = value as { title?: unknown; pinned?: unknown };
-  if (title === undefined && pinned === undefined) {
+  const { title, pinned, unread } = value as {
+    title?: unknown;
+    pinned?: unknown;
+    unread?: unknown;
+  };
+  if (title === undefined && pinned === undefined && unread === undefined) {
     throw new HttpError(400, 'Nothing to change');
   }
 
@@ -974,6 +982,16 @@ async function patchSession(
       throw new HttpError(400, 'pinned must be a boolean');
     }
     await hubStore.setSessionPinned(env, record.id, pinned);
+  }
+  if (unread !== undefined) {
+    if (typeof unread !== 'boolean') {
+      throw new HttpError(400, 'unread must be a boolean');
+    }
+    if (unread) {
+      await hubStore.markSessionUnread(env, record.id);
+    } else {
+      await hubStore.clearSessionUnread(env, record.id);
+    }
   }
   return json(await getSessionView(env, await requireSession(env, record.id)));
 }

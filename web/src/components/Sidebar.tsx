@@ -384,6 +384,25 @@ function Row({
           >
             {session.pinnedAt ? 'Unpin' : 'Pin to top'}
           </button>
+          {/* The same marker the agent's stop events set, by hand: a session
+              worth coming back to keeps its dot. Marking the session that is
+              open leaves the page, because having it open and visible is what
+              "read" means — the page would acknowledge the new marker on its
+              next poll and the dot would vanish under the cursor. */}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              void run(session.id, async () => {
+                await patchSession(session.id, { unread: !unread });
+                if (!unread && active) {
+                  navigate('/');
+                }
+              })
+            }
+          >
+            {unread ? 'Mark as read' : 'Mark as unread'}
+          </button>
           {canStop ? (
             <button
               type="button"

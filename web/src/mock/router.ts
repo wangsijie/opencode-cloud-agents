@@ -531,6 +531,13 @@ async function route(path: string, init?: RequestInit): Promise<Response> {
             delete view.pinnedAt;
           }
         }
+        if (typeof body.unread === 'boolean') {
+          if (body.unread) {
+            view.unreadAt = view.unreadAt ?? new Date().toISOString();
+          } else {
+            delete view.unreadAt;
+          }
+        }
         return json(view);
       }
       if (method === 'DELETE') {

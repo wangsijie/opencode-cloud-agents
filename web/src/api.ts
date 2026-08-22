@@ -448,10 +448,13 @@ export const listSessions = (limit?: number) =>
   );
 
 /**
- * Rename a session, or pin it to the top of the sidebar. Does not touch the
- * container.
+ * Rename a session, pin it to the top of the sidebar, or set its unread mark
+ * by hand. Does not touch the container.
  */
-export const patchSession = (id: string, input: { title?: string; pinned?: boolean }) =>
+export const patchSession = (
+  id: string,
+  input: { title?: string; pinned?: boolean; unread?: boolean }
+) =>
   call<SessionView>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(input)

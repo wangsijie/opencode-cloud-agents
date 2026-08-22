@@ -306,8 +306,8 @@ await step('a session is created, patched and deleted through Drizzle', async ()
     );
     // A session created a moment ago is the most recently touched one, so it
     // is at the top of an unpinned list — and on the first page.
-    const unpinned = list.body.filter((session) => !session.pinnedAt);
-    assert.equal(unpinned[0].id, id, 'a new session leads the list');
+    const withoutPins = list.body.filter((session) => !session.pinnedAt);
+    assert.equal(withoutPins[0].id, id, 'a new session leads the list');
     const firstPage = await api('/api/sessions?limit=1');
     assert.ok(
       firstPage.body.some((session) => session.id === id) ||
@@ -343,6 +343,27 @@ await step('a session is created, patched and deleted through Drizzle', async ()
     });
     assert.equal(unpinned.status, 200);
     assert.ok(!('pinnedAt' in unpinned.body));
+
+    // The unread marker, set by hand rather than by an agent stop, and cleared
+    // the same way. Like the pin, it is not activity.
+    const marked = await api(`/api/sessions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ unread: true })
+    });
+    assert.equal(marked.status, 200, JSON.stringify(marked.body));
+    assert.ok(marked.body.unreadAt, 'marking unread must record when');
+    assert.equal(
+      marked.body.updatedAt,
+      before.updatedAt,
+      'marking unread must not bump updated_at'
+    );
+
+    const cleared = await api(`/api/sessions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ unread: false })
+    });
+    assert.equal(cleared.status, 200);
+    assert.ok(!('unreadAt' in cleared.body));
   } finally {
     // The fenced delete claim, and the row is gone afterwards.
     const deleted = await api(`/api/sessions/${id}`, { method: 'DELETE' });
